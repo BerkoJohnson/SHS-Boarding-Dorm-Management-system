@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Pass {{ exeat.exeat_number }} | SHS Management System{% endblock %}
+{% block page_title %}Official Exeat Pass Slip{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-4">
+
+    <!-- Top Command Actions -->
+    <div class="flex items-center justify-between pb-2 border-b border-slate-200/80">
+        <div class="flex items-center gap-2 text-2xs text-slate-400">
+            <a href="{% url 'core:dashboard' %}" class="hover:text-slate-600 transition">Dashboard</a>
+            <span>/</span>
+            <a href="{% url 'core:exeat_list' %}" class="hover:text-slate-600 transition">Exeat Register</a>
+            <span>/</span>
+            <span class="text-slate-600 font-medium font-mono">{{ exeat.exeat_number }}</span>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <button type="button" 
+                    onclick="window.print()" 
+                    class="px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition shadow-sm">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+                </svg>
+                <span>Print Pass Slip</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Official Printable Exeat Pass Slip -->
+    <div class="bg-white border border-slate-200/90 rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 print:border-none print:shadow-none">
+        
+        <!-- Header: Crest & Official Institution Title -->
+        <div class="text-center border-b border-slate-200/80 pb-5">
+            <div class="w-12 h-12 mx-auto rounded-xl bg-gradient-to-tr from-sky-600 to-brand-600 text-white flex items-center justify-center font-extrabold text-xl shadow-md mb-2">
+                SHS
+            </div>
+            <h1 class="text-base sm:text-lg font-extrabold text-slate-900 tracking-wide uppercase">
+                EDEN SENIOR HIGH SCHOOL
+            </h1>
+            <p class="text-2xs text-slate-500 font-medium uppercase tracking-wider">
+                Official Boarding Student Leave Authorization & Gate Movement Pass
+            </p>
+            <div class="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs font-mono font-bold text-slate-800">
+                <span>PASS NO:</span>
+                <span class="text-brand-700">{{ exeat.exeat_number }}</span>
+            </div>
+        </div>
+
+        <!-- Student Profile & Boarding Placement Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50/80 p-4 rounded-xl border border-slate-200/70">
+            <div>
+                <span class="text-2xs text-slate-400 font-semibold uppercase">Student Full Name</span>
+                <div class="text-sm font-bold text-slate-900 mt-0.5">{{ exeat.student.full_name }}</div>
+                <div class="text-2xs text-slate-500 mt-0.5">
+                    Admission No: <strong class="font-mono text-slate-800">{{ exeat.student.admission_no }}</strong>
+                    {% if exeat.student.class_group %}
+                        · Class: <strong>{{ exeat.student.class_group.name }}</strong>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div>
+                <span class="text-2xs text-slate-400 font-semibold uppercase">House & Dormitory</span>
+                <div class="text-sm font-bold text-slate-900 mt-0.5 flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full 
+                        {% if exeat.student.house.number == 1 %}bg-red-500
+                        {% elif exeat.student.house.number == 2 %}bg-blue-500
+                        {% elif exeat.student.house.number == 3 %}bg-amber-500
+                        {% elif exeat.student.house.number == 4 %}bg-emerald-500
+                        {% else %}bg-slate-400{% endif %}"></span>
+                    <span>{{ exeat.student.house.name|default:"Unassigned House" }}</span>
+                </div>
+                <div class="text-2xs text-slate-500 mt-0.5">
+                    Block: <strong>{{ exeat.student.dormitory.name|default:"Not Allocated" }}</strong>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leave Details Table -->
+        <div class="border border-slate-200 rounded-xl overflow-hidden text-xs">
+            <div class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-slate-200 bg-slate-50/50">
+                <div class="p-3">
+                    <div class="text-2xs text-slate-400 font-semibold uppercase">Leave Type</div>
+                    <div class="font-bold text-slate-800 mt-0.5">{{ exeat.get_exeat_type_display }}</div>
+                </div>
+                <div class="p-3">
+                    <div class="text-2xs text-slate-400 font-semibold uppercase">Status</div>
+                    <div class="font-bold mt-0.5
+                        {% if exeat.status == 'Approved' %}text-emerald-700
+                        {% elif exeat.status == 'Pending' %}text-amber-700
+                        {% elif exeat.status == 'Rejected' %}text-rose-700
+                        {% else %}text-slate-700{% endif %}">
+                        {{ exeat.get_status_display }}
+                    </div>
+                </div>
+                <div class="p-3">
+                    <div class="text-2xs text-slate-400 font-semibold uppercase">Expected Departure</div>
+                    <div class="font-bold text-slate-800 mt-0.5">{{ exeat.expected_departure|date:"d M Y, H:i" }}</div>
+                </div>
+                <div class="p-3">
+                    <div class="text-2xs text-slate-400 font-semibold uppercase">Expected Return</div>
+                    <div class="font-bold text-slate-800 mt-0.5">{{ exeat.expected_return|date:"d M Y, H:i" }}</div>
+                </div>
+            </div>
+
+            <div class="p-3.5 border-t border-slate-200 bg-white space-y-2">
+                <div>
+                    <span class="text-2xs text-slate-400 font-semibold uppercase">Destination Address:</span>
+                    <span class="text-slate-800 font-medium ml-1">{{ exeat.destination }}</span>
+                </div>
+                <div>
+                    <span class="text-2xs text-slate-400 font-semibold uppercase">Reason for Leave:</span>
+                    <span class="text-slate-800 ml-1">{{ exeat.reason }}</span>
+                </div>
+                {% if exeat.approval_remarks %}
+                <div>
+                    <span class="text-2xs text-slate-400 font-semibold uppercase">Conditions / Remarks:</span>
+                    <span class="text-amber-800 ml-1 font-medium">{{ exeat.approval_remarks }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Gate Movement & Verification Post Status -->
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+            <h3 class="font-bold text-xs text-slate-900 uppercase tracking-wide">Campus Gate Log (Security Post)</h3>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div class="p-2.5 bg-white rounded-lg border border-slate-200/80">
+                    <div class="text-2xs text-slate-400 font-semibold uppercase">Actual Departure From Gate</div>
+                    {% if exeat.movement and exeat.movement.actual_departure %}
+                        <div class="font-bold text-slate-900 mt-0.5">{{ exeat.movement.actual_departure|date:"d M Y, H:i" }}</div>
+                        <div class="text-2xs text-slate-500">Logged by: {{ exeat.movement.departure_recorded_by|default:"Gate Security" }}</div>
+                    {% else %}
+                        <div class="text-slate-400 italic mt-0.5">Pending Gate Departure</div>
+                    {% endif %}
+                </div>
+
+                <div class="p-2.5 bg-white rounded-lg border border-slate-200/80">
+                    <div class="text-2xs text-slate-400 font-semibold uppercase">Actual Return To Campus</div>
+                    {% if exeat.movement and exeat.movement.actual_return %}
+                        <div class="font-bold text-emerald-700 mt-0.5">{{ exeat.movement.actual_return|date:"d M Y, H:i" }}</div>
+                        <div class="text-2xs text-slate-500">Logged by: {{ exeat.movement.return_recorded_by|default:"Gate Security" }}</div>
+                    {% else %}
+                        <div class="text-slate-400 italic mt-0.5">Student has not checked back in</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Official Signatures & Stamps Footer -->
+        <div class="pt-6 border-t border-slate-200 grid grid-cols-2 gap-8 text-center text-xs">
+            <div>
+                <div class="h-10 border-b border-dashed border-slate-300 flex items-end justify-center pb-1">
+                    <span class="font-serif italic text-slate-800 font-bold">
+                        {{ exeat.approved_by.full_name|default:"Senior Housemaster" }}
+                    </span>
+                </div>
+                <div class="text-2xs text-slate-500 font-semibold mt-1">Authorizing Housemaster</div>
+            </div>
+
+            <div>
+                <div class="h-10 border-b border-dashed border-slate-300 flex items-end justify-center pb-1">
+                    <span class="text-2xs text-slate-400 italic">Gate Security Stamp / Signature</span>
+                </div>
+                <div class="text-2xs text-slate-500 font-semibold mt-1">Main Gate Security Officer</div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+{% endblock %}

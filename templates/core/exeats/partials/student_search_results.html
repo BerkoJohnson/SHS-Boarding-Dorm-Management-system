@@ -1,0 +1,51 @@
+{% load static %}
+{% if students %}
+<div class="mt-2 bg-white border border-slate-200 rounded-lg shadow-lg divide-y divide-slate-100 max-h-64 overflow-y-auto z-50">
+    {% for s in students %}
+    <div class="p-2.5 hover:bg-slate-50 flex items-center justify-between gap-3 transition">
+        <div class="flex items-center gap-2.5 overflow-hidden">
+            <!-- Avatar -->
+            <div class="w-8 h-8 rounded-full 
+                {% if s.gender == 'male' %}bg-blue-100 text-blue-700{% else %}bg-pink-100 text-pink-700{% endif %} 
+                flex items-center justify-center font-bold text-xs shrink-0">
+                {{ s.full_name|slice:":1" }}
+            </div>
+            
+            <div class="overflow-hidden">
+                <div class="font-semibold text-slate-900 text-xs truncate flex items-center gap-1.5">
+                    <span>{{ s.full_name }}</span>
+                    {% if s.residency == 'Boarding' %}
+                        <span class="inline-flex px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">Boarder</span>
+                    {% else %}
+                        <span class="inline-flex px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200">Day Student</span>
+                    {% endif %}
+                </div>
+                <div class="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5 truncate">
+                    <span>ID: {{ s.admission_no }}</span>
+                    <span>•</span>
+                    <span>{{ s.class_group.name|default:"No Class" }}</span>
+                    <span>•</span>
+                    <span>{{ s.house.name|default:"No House" }} ({{ s.dormitory.name|default:"No Dorm" }})</span>
+                </div>
+            </div>
+        </div>
+
+        <div>
+            {% if s.residency == 'Boarding' %}
+            <button type="button"
+                    @click="selectStudent('{{ s.id }}', '{{ s.full_name|escapejs }}', '{{ s.admission_no|escapejs }}', '{{ s.house.name|escapejs }}', '{{ s.dormitory.name|escapejs }}', '{{ s.class_group.name|escapejs }}', '{{ s.gender }}', '{{ s.guardian.full_name|default:''|escapejs }}', '{{ s.guardian.phone_number|default:''|escapejs }}')"
+                    class="px-2.5 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded text-2xs font-medium transition shadow-xs">
+                Select
+            </button>
+            {% else %}
+            <span class="text-[10px] text-slate-400 font-medium italic">Ineligible (Day)</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% elif query %}
+<div class="mt-2 p-3 bg-white border border-slate-200 rounded-lg text-center text-xs text-slate-500 shadow-sm">
+    No boarding students found matching "<strong class="text-slate-800">{{ query }}</strong>".
+</div>
+{% endif %}

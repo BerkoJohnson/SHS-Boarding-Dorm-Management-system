@@ -1,0 +1,134 @@
+<!-- FLOATING TOAST NOTIFICATION CONTAINER -->
+<div id="toast-container" 
+     class="fixed top-16 right-5 z-[100] flex flex-col gap-2.5 max-w-md w-full pointer-events-none px-4 sm:px-0"
+     aria-live="polite"
+     aria-atomic="true">
+
+    {% if messages %}
+        {% for message in messages %}
+        <div x-data="{
+                show: false,
+                paused: false,
+                progress: 100,
+                duration: 4500,
+                interval: null,
+                init() {
+                    // Slight delay for smooth enter transition
+                    this.$nextTick(() => { this.show = true; });
+                    const step = 50;
+                    this.interval = setInterval(() => {
+                        if (!this.paused && this.show) {
+                            this.progress -= (step / this.duration) * 100;
+                            if (this.progress <= 0) {
+                                this.dismiss();
+                            }
+                        }
+                    }, step);
+                },
+                dismiss() {
+                    this.show = false;
+                    clearInterval(this.interval);
+                    setTimeout(() => { this.$el.remove(); }, 300);
+                }
+             }"
+             x-show="show"
+             x-cloak
+             @mouseenter="paused = true"
+             @mouseleave="paused = false"
+             x-transition:enter="transform ease-out duration-300 transition"
+             x-transition:enter-start="translate-y-2 opacity-0 sm:translate-y-0 sm:translate-x-4 scale-95"
+             x-transition:enter-end="translate-y-0 opacity-100 sm:translate-x-0 scale-100"
+             x-transition:leave="transition ease-in duration-200"
+             x-transition:leave-start="opacity-100 scale-100"
+             x-transition:leave-end="opacity-0 scale-95 translate-x-2"
+             class="pointer-events-auto relative overflow-hidden w-full bg-white/95 backdrop-blur-md rounded-xl shadow-xl border 
+                    {% if message.tags == 'error' or 'error' in message.tags %}
+                        border-rose-200/90 shadow-rose-500/5
+                    {% elif message.tags == 'warning' or 'warning' in message.tags %}
+                        border-amber-200/90 shadow-amber-500/5
+                    {% elif message.tags == 'info' or 'info' in message.tags %}
+                        border-sky-200/90 shadow-sky-500/5
+                    {% else %}
+                        border-emerald-200/90 shadow-emerald-500/5
+                    {% endif %}
+                    p-3.5 transition-all">
+
+            <div class="flex items-start gap-3">
+                
+                <!-- Status Icon Badge -->
+                <div class="shrink-0 mt-0.5">
+                    {% if message.tags == 'error' or 'error' in message.tags %}
+                        <div class="w-7 h-7 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center border border-rose-200 shadow-2xs">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                            </svg>
+                        </div>
+                    {% elif message.tags == 'warning' or 'warning' in message.tags %}
+                        <div class="w-7 h-7 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200 shadow-2xs">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                    {% elif message.tags == 'info' or 'info' in message.tags %}
+                        <div class="w-7 h-7 rounded-lg bg-sky-100 text-sky-600 flex items-center justify-center border border-sky-200 shadow-2xs">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                    {% else %}
+                        <div class="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center border border-emerald-200 shadow-2xs">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+                            </svg>
+                        </div>
+                    {% endif %}
+                </div>
+
+                <!-- Message Body -->
+                <div class="flex-1 min-w-0 pr-1">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-[10px] font-bold uppercase tracking-wider
+                            {% if message.tags == 'error' or 'error' in message.tags %}text-rose-600
+                            {% elif message.tags == 'warning' or 'warning' in message.tags %}text-amber-600
+                            {% elif message.tags == 'info' or 'info' in message.tags %}text-sky-600
+                            {% else %}text-emerald-700{% endif %}">
+                            {% if message.tags == 'error' or 'error' in message.tags %}Attention
+                            {% elif message.tags == 'warning' or 'warning' in message.tags %}Notice
+                            {% elif message.tags == 'info' or 'info' in message.tags %}Update
+                            {% else %}Success{% endif %}
+                        </span>
+                    </div>
+                    <div class="text-xs font-medium text-slate-800 mt-0.5 leading-snug break-words">
+                        {{ message }}
+                    </div>
+                </div>
+
+                <!-- Close Button -->
+                <button type="button" 
+                        @click="dismiss()"
+                        class="shrink-0 p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer"
+                        title="Dismiss notification"
+                        aria-label="Dismiss">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+
+            </div>
+
+            <!-- Auto-dismiss Progress Bar -->
+            <div class="absolute bottom-0 left-0 right-0 h-0.5 bg-slate-100">
+                <div class="h-full transition-all duration-75 
+                    {% if message.tags == 'error' or 'error' in message.tags %}bg-rose-500
+                    {% elif message.tags == 'warning' or 'warning' in message.tags %}bg-amber-500
+                    {% elif message.tags == 'info' or 'info' in message.tags %}bg-sky-500
+                    {% else %}bg-emerald-500{% endif %}"
+                    :style="`width: ${progress}%`">
+                </div>
+            </div>
+
+        </div>
+        {% endfor %}
+    {% endif %}
+
+</div>

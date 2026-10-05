@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}Disciplinary Register | SHS Management System{% endblock %}
+{% block page_title %}Student Conduct & Disciplinary Register{% endblock %}
+
+{% block content %}
+
+<!-- TOP INCIDENT STATS STRIP -->
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    
+    <!-- Total Incidents -->
+    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
+        <div>
+            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Total Incidents</span>
+            <div class="text-xl font-bold text-slate-900 tracking-tight mt-0.5">{{ total_incidents }}</div>
+            <div class="text-2xs text-slate-400">All terms recorded</div>
+        </div>
+        <div class="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+        </div>
+    </div>
+
+    <!-- Critical Cases -->
+    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
+        <div>
+            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Critical Infractions</span>
+            <div class="text-xl font-bold text-rose-600 tracking-tight mt-0.5">{{ critical_count }}</div>
+            <div class="text-2xs text-rose-500 font-medium">Disciplinary Committee</div>
+        </div>
+        <div class="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200/60">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+        </div>
+    </div>
+
+    <!-- Major Offenses -->
+    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
+        <div>
+            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Major Offenses</span>
+            <div class="text-xl font-bold text-amber-600 tracking-tight mt-0.5">{{ major_count }}</div>
+            <div class="text-2xs text-amber-500 font-medium">Internal Sanctions</div>
+        </div>
+        <div class="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200/60">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+        </div>
+    </div>
+
+    <!-- Minor Offenses -->
+    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
+        <div>
+            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Minor Infractions</span>
+            <div class="text-xl font-bold text-sky-600 tracking-tight mt-0.5">{{ minor_count }}</div>
+            <div class="text-2xs text-sky-500 font-medium">Duty & Work Penalties</div>
+        </div>
+        <div class="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center shrink-0 border border-sky-200/60">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+        </div>
+    </div>
+
+</div>
+
+
+<!-- DISCIPLINARY REGISTER CARD -->
+<div class="bg-white border border-slate-200/90 rounded-xl shadow-2xs overflow-hidden" 
+     x-data="{ showFilters: {% if active_filters_count %}true{% else %}false{% endif %} }">
+
+    <!-- TOOLBAR HEADER -->
+    <div class="px-4 py-3.5 border-b border-slate-200/80 flex items-center justify-between">
+        <div>
+            <div class="flex items-center gap-2">
+                <h2 class="font-bold text-slate-900 text-sm tracking-tight">Disciplinary Register</h2>
+                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                    {{ total_matching|default:records|length }} Total
+                </span>
+            </div>
+            <p class="text-2xs text-slate-400 mt-0.5">
+                Audit trail of student conduct, sanctions, and housemaster disciplinary accountability
+            </p>
+        </div>
+
+        <a href="{% url 'core:incident_create' %}"
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white font-medium rounded-lg text-xs transition shadow-sm">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            <span>+ Record Incident</span>
+        </a>
+    </div>
+
+    <!-- SEARCH & FILTER CONTROLS BAR -->
+    <form id="conduct-filter-form"
+          hx-get="{% url 'core:conduct_list' %}"
+          hx-trigger="submit, change from:select, keyup changed delay:300ms from:input[name='q']"
+          hx-target="#conduct-table"
+          hx-push-url="true"
+          class="p-3 bg-slate-50/80 border-b border-slate-200/80 space-y-3">
+
+        <!-- Search Bar + Filter Toggle Button -->
+        <div class="flex items-center gap-2">
+            <div class="relative flex-1">
+                <input type="text"
+                       name="q"
+                       value="{{ query }}"
+                       placeholder="Search student, admission no, offense, action taken..."
+                       class="w-full pl-8 pr-3 py-1.5 bg-white text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500 shadow-2xs transition">
+                <svg class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2"
+                     fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+            </div>
+
+            <!-- Interactive Filters Toggle Button -->
+            <button type="button"
+                    @click="showFilters = !showFilters"
+                    :class="showFilters || {{ active_filters_count|default:0 }} > 0 ? 'bg-brand-50 border-brand-300 text-brand-700' : 'bg-white border-slate-200 text-slate-600'"
+                    class="px-3 py-1.5 border rounded-lg text-xs font-medium hover:bg-slate-50 transition shadow-2xs flex items-center gap-1.5 cursor-pointer">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                </svg>
+                <span>Filters</span>
+                {% if active_filters_count %}
+                <span class="w-4 h-4 rounded-full bg-brand-600 text-white font-bold text-[9px] flex items-center justify-center">
+                    {{ active_filters_count }}
+                </span>
+                {% endif %}
+            </button>
+        </div>
+
+        <!-- Collapsible Multi-Criteria Filter Drawer -->
+        <div x-show="showFilters" 
+             x-cloak 
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0 -translate-y-2"
+             x-transition:enter-end="opacity-100 translate-y-0"
+             class="pt-2 border-t border-slate-200/70 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            
+            <!-- Filter: Severity -->
+            <div>
+                <label class="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Severity Level</label>
+                <select name="severity" 
+                        class="w-full pl-2.5 pr-8 py-1.5 bg-white text-xs font-medium text-slate-700 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer shadow-2xs">
+                    <option value="">All Severity Levels</option>
+                    <option value="Minor" {% if selected_severity == 'Minor' %}selected{% endif %}>Minor Offenses</option>
+                    <option value="Major" {% if selected_severity == 'Major' %}selected{% endif %}>Major Offenses</option>
+                    <option value="Critical" {% if selected_severity == 'Critical' %}selected{% endif %}>Critical Infractions</option>
+                </select>
+            </div>
+
+            <!-- Filter: House -->
+            <div>
+                <label class="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">House</label>
+                <select name="house" 
+                        class="w-full pl-2.5 pr-8 py-1.5 bg-white text-xs font-medium text-slate-700 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer shadow-2xs">
+                    <option value="">All Houses</option>
+                    {% for h in houses %}
+                        <option value="{{ h.id }}" {% if selected_house == h.id|stringformat:"s" %}selected{% endif %}>
+                            {{ h.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Actions: Clear Filters -->
+            <div class="flex items-end">
+                <a href="{% url 'core:conduct_list' %}"
+                   class="w-full py-1.5 px-3 bg-slate-100 hover:bg-slate-200/80 text-slate-600 rounded-lg text-xs font-medium text-center transition shadow-2xs">
+                    Reset All Filters
+                </a>
+            </div>
+
+        </div>
+
+    </form>
+
+    <!-- TABLE -->
+    <div id="conduct-table">
+        {% include "core/conduct/partials/conduct_table.html" %}
+    </div>
+
+</div>
+
+{% endblock %}

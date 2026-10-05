@@ -1,0 +1,33 @@
+from django.urls import path
+from django.contrib.auth import views as auth_views
+from . import views
+
+app_name = 'core'
+
+urlpatterns = [
+    path('login/', auth_views.LoginView.as_view(
+        template_name='registration/login.html',
+        redirect_authenticated_user=True
+    ), name='login'),
+    path('', views.dashboard_view, name='dashboard'),
+    path('exeats/', views.exeat_list_view, name='exeat_list'),
+    path('exeats/new/', views.exeat_create_view, name='exeat_create'),
+    path('exeats/<uuid:pk>/', views.exeat_detail_view, name='exeat_detail'),
+    path('exeats/<uuid:pk>/action/<str:action>/', views.exeat_action_view, name='exeat_action'),
+    path('exeats/search-students/', views.student_search_view, name='student_search'),
+    path('houses/', views.house_list_view, name='house_list'),
+    path('conduct/', views.conduct_list_view, name='conduct_list'),
+    path('conduct/new/', views.incident_create_view, name='incident_create'),
+    path('operations/', views.roll_call_gate_hub_view, name='roll_call_gate_hub'),
+    path('operations/roll-call/new/', views.roll_call_create_session_view, name='roll_call_create'),
+    path('operations/roll-call/<uuid:session_pk>/complete/', views.roll_call_complete_session_view, name='roll_call_complete'),
+    path('operations/roll-call/<uuid:session_pk>/mark-all-present/', views.roll_call_mark_all_present_view, name='roll_call_mark_all_present'),
+    path('operations/roll-call/entry/<uuid:entry_pk>/', views.roll_call_update_entry_view, name='roll_call_update_entry'),
+    path('operations/gate/<uuid:exeat_pk>/<str:action>/', views.gate_terminal_action_view, name='gate_terminal_action'),
+    path('operations/gate/verify/', views.gate_verify_pass_view, name='gate_verify_pass'),
+    path('search/', views.global_search_view, name='global_search'),
+    path('reports/', views.reports_dashboard_view, name='reports'),
+    path('configuration/', views.configuration_hub_view, name='configuration'),
+    path('configuration/term/<uuid:term_id>/set-active/', views.set_active_term_view, name='set_active_term'),
+    path('logout/', views.logout_view, name='logout'),
+]

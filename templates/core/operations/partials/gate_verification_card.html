@@ -1,0 +1,132 @@
+<div id="gate-verification-result" class="p-4">
+  {% if exeat %}
+    <div class="rounded-xl border p-4 transition
+      {% if exeat.movement.is_overdue %}bg-rose-50/50 border-rose-200
+      {% elif exeat.status == 'Approved' %}bg-slate-50/70 border-slate-200
+      {% else %}bg-amber-50/50 border-amber-200{% endif %}">
+      
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0
+            {% if exeat.movement.is_overdue %}bg-rose-200 text-rose-800
+            {% elif exeat.status == 'Approved' %}bg-brand-100 text-brand-800
+            {% else %}bg-amber-200 text-amber-800{% endif %}">
+            {{ exeat.student.full_name|slice:":1" }}
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-slate-900 text-sm">{{ exeat.student.full_name }}</span>
+              <span class="font-mono text-xs text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                {{ exeat.student.admission_no }}
+              </span>
+              {% if exeat.status == 'Approved' %}
+                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  Approved Pass
+                </span>
+              {% else %}
+                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                  {{ exeat.status }}
+                </span>
+              {% endif %}
+            </div>
+            <p class="text-xs text-slate-500 mt-0.5">
+              <span>{{ exeat.student.house.name }}</span>
+              {% if exeat.student.dormitory %} · <span>{{ exeat.student.dormitory.name }}</span>{% endif %}
+              · Pass: <strong class="font-mono text-slate-700">{{ exeat.exeat_number }}</strong>
+            </p>
+          </div>
+        </div>
+
+        <!-- Overdue Warning Badge -->
+        {% if exeat.movement.is_overdue %}
+          <div class="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-600 text-white rounded-lg text-xs font-bold animate-pulse">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <span>OVERDUE RETURN</span>
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- Pass Trip Details Strip -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 pt-3 border-t border-slate-200/80 text-xs">
+        <div>
+          <span class="text-[10px] text-slate-400 uppercase font-semibold block">Leave Category</span>
+          <span class="font-medium text-slate-700">{{ exeat.get_exeat_type_display }}</span>
+        </div>
+        <div>
+          <span class="text-[10px] text-slate-400 uppercase font-semibold block">Destination</span>
+          <span class="font-medium text-slate-700 truncate block">{{ exeat.destination }}</span>
+        </div>
+        <div>
+          <span class="text-[10px] text-slate-400 uppercase font-semibold block">Scheduled Depart</span>
+          <span class="font-medium text-slate-700">{{ exeat.expected_departure|date:"M d, H:i" }}</span>
+        </div>
+        <div>
+          <span class="text-[10px] text-slate-400 uppercase font-semibold block">Expected Return</span>
+          <span class="font-medium text-slate-700">{{ exeat.expected_return|date:"M d, H:i" }}</span>
+        </div>
+      </div>
+
+      <!-- Gate Action Execution Section -->
+      <div class="mt-4 pt-3 border-t border-slate-200/80 flex items-center justify-between">
+        <div class="text-xs text-slate-500">
+          {% if exeat.movement.actual_departure and not exeat.movement.actual_return %}
+            <span>Exited campus at: <strong class="text-slate-800">{{ exeat.movement.actual_departure|date:"M d, H:i" }}</strong> (Recorded by {{ exeat.movement.departure_recorded_by|default:"Gate" }})</span>
+          {% elif exeat.movement.actual_return %}
+            <span>Returned to campus at: <strong class="text-emerald-700">{{ exeat.movement.actual_return|date:"M d, H:i" }}</strong> (Completed)</span>
+          {% else %}
+            <span>Pass issued. Student awaiting gate exit logging.</span>
+          {% endif %}
+        </div>
+
+        <div class="flex items-center gap-2">
+          {% if exeat.status == 'Approved' %}
+            {% if not exeat.movement.actual_departure %}
+              <!-- One Click Log Exit -->
+              <form method="post" action="{% url 'core:gate_terminal_action' exeat.id 'departure' %}">
+                {% csrf_token %}
+                <button type="submit" 
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg text-xs transition shadow-xs">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                  </svg>
+                  <span>Log Departure (Exit Gate)</span>
+                </button>
+              </form>
+            {% elif not exeat.movement.actual_return %}
+              <!-- One Click Log Return -->
+              <form method="post" action="{% url 'core:gate_terminal_action' exeat.id 'return' %}">
+                {% csrf_token %}
+                <button type="submit" 
+                        class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-xs transition shadow-xs">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"/>
+                  </svg>
+                  <span>Log Return (Enter Campus)</span>
+                </button>
+              </form>
+            {% else %}
+              <span class="px-2.5 py-1 bg-slate-100 text-slate-500 font-semibold rounded-lg text-xs">
+                Pass Expired / Returned
+              </span>
+            {% endif %}
+          {% else %}
+            <span class="text-xs text-rose-600 font-medium">
+              Cannot log movement: Pass is {{ exeat.status }}.
+            </span>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+  {% elif query %}
+    <div class="p-6 text-center text-slate-400 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+      <svg class="w-8 h-8 mx-auto mb-2 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      <p class="text-xs font-semibold text-slate-700">No matching exeat pass found</p>
+      <p class="text-[11px] text-slate-400 mt-0.5">Could not find an approved pass for "{{ query }}".</p>
+    </div>
+  {% endif %}
+</div>

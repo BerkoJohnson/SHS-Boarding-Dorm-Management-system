@@ -1,0 +1,282 @@
+<div class="overflow-x-auto min-h-[340px] pb-16">
+
+    <table class="w-full text-left">
+
+        <thead class="bg-slate-50 border-b border-slate-200">
+
+            <tr class="text-2xs uppercase tracking-wide text-slate-500">
+
+                <th class="px-3 py-2 font-semibold">Pass</th>
+                <th class="px-3 py-2 font-semibold">Student</th>
+                <th class="px-3 py-2 font-semibold">Type</th>
+                <th class="px-3 py-2 font-semibold">Departure</th>
+                <th class="px-3 py-2 font-semibold">Return</th>
+                <th class="px-3 py-2 font-semibold">State</th>
+                <th class="px-3 py-2"></th>
+
+            </tr>
+
+        </thead>
+
+        <tbody class="divide-y divide-slate-100">
+
+            {% for exeat in exeats %}
+
+            <tr class="hover:bg-slate-50">
+
+                <td class="px-3 py-2">
+
+                    <div class="font-medium text-slate-800">
+                        {{ exeat.exeat_number }}
+                    </div>
+
+                    <div class="text-2xs text-slate-400">
+                        {{ exeat.academic_term }}
+                    </div>
+
+                </td>
+
+
+                <td class="px-3 py-2">
+
+                    <div class="font-medium text-slate-800">
+                        {{ exeat.student.full_name }}
+                    </div>
+
+                    <div class="text-2xs text-slate-400">
+                        {{ exeat.student.admission_no }}
+                    </div>
+
+                </td>
+
+
+                <td class="px-3 py-2 text-slate-600">
+                    {{ exeat.get_exeat_type_display }}
+                </td>
+
+
+                <td class="px-3 py-2">
+
+                    <div class="text-slate-700">
+                        {{ exeat.expected_departure|date:"d M Y" }}
+                    </div>
+
+                    <div class="text-2xs text-slate-400">
+                        {{ exeat.expected_departure|date:"H:i" }}
+                    </div>
+
+                </td>
+
+
+                <td class="px-3 py-2">
+
+                    <div class="text-slate-700">
+                        {{ exeat.expected_return|date:"d M Y" }}
+                    </div>
+
+                    <div class="text-2xs text-slate-400">
+                        {{ exeat.expected_return|date:"H:i" }}
+                    </div>
+
+                </td>
+
+
+                <td class="px-3 py-2">
+
+                    {% if exeat.current_state == "OVERDUE (Student Out)" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded
+                                     bg-red-50 text-red-700
+                                     font-medium">
+                            Overdue
+                        </span>
+
+                    {% elif exeat.current_state == "Active (Student Out)" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded
+                                     bg-blue-50 text-blue-700
+                                     font-medium">
+                            Student Out
+                        </span>
+
+                    {% elif exeat.status == "Pending" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded
+                                     bg-amber-50 text-amber-700
+                                     font-medium">
+                            Pending
+                        </span>
+
+                    {% elif exeat.current_state == "Returned" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded
+                                     bg-emerald-50 text-emerald-700
+                                     font-medium">
+                            Returned
+                        </span>
+
+                    {% else %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded
+                                     bg-slate-100 text-slate-600
+                                     font-medium">
+                            {{ exeat.current_state }}
+                        </span>
+
+                    {% endif %}
+
+                </td>
+
+
+                <td class="px-3 py-2 text-right" x-data="{ menuOpen: false, dropUp: false }">
+                    <div class="inline-block relative text-left">
+                        <button @click="menuOpen = !menuOpen; if (menuOpen) { $nextTick(() => { const r = $el.getBoundingClientRect(); dropUp = (window.innerHeight - r.bottom < 240); }) }" 
+                                @click.outside="menuOpen = false" 
+                                type="button"
+                                class="p-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-100 transition focus:outline-none"
+                                title="Actions">
+                            •••
+                        </button>
+
+                        <!-- Dropdown Menu -->
+                        <div x-show="menuOpen" 
+                             x-cloak
+                             @click.outside="menuOpen = false"
+                             x-transition:enter="transition ease-out duration-100"
+                             x-transition:enter-start="transform opacity-0 scale-95"
+                             x-transition:enter-end="transform opacity-100 scale-100"
+                             x-transition:leave="transition ease-in duration-75"
+                             x-transition:leave-start="transform opacity-100 scale-100"
+                             x-transition:leave-end="transform opacity-0 scale-95"
+                             :class="dropUp ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
+                             class="absolute right-0 w-52 bg-white rounded-lg shadow-2xl border border-slate-200 py-1 z-50 text-left">
+                            
+                            <div class="px-3 py-1.5 border-b border-slate-100 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                                Pass {{ exeat.exeat_number }}
+                            </div>
+
+                            <!-- View / Print Pass Slip -->
+                            <a href="{% url 'core:exeat_detail' exeat.pk %}" 
+                               class="flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-brand-600 transition">
+                                <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                </svg>
+                                <span>View Pass Slip</span>
+                            </a>
+
+                            <!-- Gate Actions -->
+                            {% if can_access_gate and exeat.status == 'Approved' %}
+                                {% if not exeat.movement or not exeat.movement.actual_departure %}
+                                    <form method="post" action="{% url 'core:exeat_action' exeat.pk 'departure' %}">
+                                        {% csrf_token %}
+                                        <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-50 transition text-left">
+                                            <svg class="w-3.5 h-3.5 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                                            </svg>
+                                            <span>Log Gate Departure</span>
+                                        </button>
+                                    </form>
+                                {% elif not exeat.movement.actual_return %}
+                                    <form method="post" action="{% url 'core:exeat_action' exeat.pk 'return' %}">
+                                        {% csrf_token %}
+                                        <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 transition text-left font-medium">
+                                            <svg class="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                                            </svg>
+                                            <span>Log Gate Return</span>
+                                        </button>
+                                    </form>
+                                {% endif %}
+                            {% endif %}
+
+                            <!-- Housemaster Status Actions -->
+                            {% if can_approve_exeat and exeat.status == 'Pending' %}
+                                {% if request.user.is_superuser or is_senior_housemaster or user_assigned_house and user_assigned_house.id == exeat.student.house_id %}
+                                    <form method="post" action="{% url 'core:exeat_action' exeat.pk 'approve' %}">
+                                        {% csrf_token %}
+                                        <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 transition text-left font-medium">
+                                            <svg class="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                            </svg>
+                                            <span>Approve Pass</span>
+                                        </button>
+                                    </form>
+                                    <form method="post" action="{% url 'core:exeat_action' exeat.pk 'reject' %}">
+                                        {% csrf_token %}
+                                        <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 transition text-left">
+                                            <svg class="w-3.5 h-3.5 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                            </svg>
+                                            <span>Reject Request</span>
+                                        </button>
+                                    </form>
+                                {% else %}
+                                    <div class="px-3 py-1 text-[11px] text-slate-400 italic">
+                                        Sign-off: {{ exeat.student.house.name|default:"Housemaster" }}
+                                    </div>
+                                {% endif %}
+                            {% endif %}
+
+                            <div class="my-1 border-t border-slate-100"></div>
+
+                            <!-- Cancel Pass -->
+                            {% if can_approve_exeat and exeat.status != 'Cancelled' and not exeat.movement.actual_return %}
+                                <form method="post" action="{% url 'core:exeat_action' exeat.pk 'cancel' %}" 
+                                      onsubmit="return confirm('Are you sure you want to cancel this exeat pass?');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition text-left">
+                                        <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/>
+                                        </svg>
+                                        <span>Cancel Pass</span>
+                                    </button>
+                                </form>
+                            {% endif %}
+
+                        </div>
+                    </div>
+                </td>
+
+            </tr>
+
+            {% empty %}
+
+            <tr>
+                <td colspan="7" class="px-6 py-12 text-center text-slate-400">
+                    <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                    </div>
+                    <div class="font-medium text-slate-700 text-sm">No matching exeat records found</div>
+                    <p class="text-2xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        {% if query or selected_type or selected_status or selected_house %}
+                            No exeat records match the selected filters. Try clearing some criteria.
+                        {% else %}
+                            There are currently no exeat passes logged in this session.
+                        {% endif %}
+                    </p>
+                </td>
+            </tr>
+
+            {% endfor %}
+
+        </tbody>
+
+    </table>
+
+</div>
+
+<!-- Table Record Counter Footer -->
+<div class="px-4 py-2.5 bg-slate-50/75 border-t border-slate-200 flex items-center justify-between text-2xs text-slate-500">
+    <div class="flex items-center gap-2">
+        <span>Showing <strong>{{ exeats|length }}</strong> of <strong>{{ total_count|default:exeats|length }}</strong> records</span>
+    </div>
+    {% if active_filters_count %}
+    <div class="flex items-center gap-1.5">
+        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-medium">
+            <span>{{ active_filters_count }} active filter{{ active_filters_count|pluralize }}</span>
+        </span>
+    </div>
+    {% endif %}
+</div>

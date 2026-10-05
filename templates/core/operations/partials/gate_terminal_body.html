@@ -1,0 +1,271 @@
+<div id="gate-terminal-body" class="space-y-4">
+  
+  <!-- Fast Scanner / Pass Lookup Command Bar -->
+  <div class="bg-white rounded-xl border border-slate-200/90 p-4 shadow-xs">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+      <div>
+        <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+          <svg class="w-4 h-4 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+          </svg>
+          <span>Gate Security & Movement Terminal</span>
+        </h2>
+        <p class="text-xs text-slate-500 mt-0.5">Scan student pass code or type admission number to verify status and log campus movements.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          Gate Scanner Active
+        </span>
+      </div>
+    </div>
+
+    <!-- Scanner Input -->
+    <div class="relative max-w-xl">
+      <input type="text" 
+             name="q"
+             placeholder="Scan barcode, enter exeat number (EXT-...), or admission number..." 
+             autocomplete="off"
+             hx-get="{% url 'core:gate_verify_pass' %}"
+             hx-trigger="input changed delay:300ms, search"
+             hx-target="#gate-verification-result"
+             class="w-full pl-9 pr-24 py-2 bg-slate-50 text-xs text-slate-800 placeholder-slate-400 rounded-lg border border-slate-300 focus:outline-none focus:bg-white focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition shadow-xs">
+      <svg class="w-4 h-4 text-slate-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+      <div class="absolute right-3 top-2 flex items-center gap-1 text-[10px] text-slate-400 font-mono">
+        <kbd class="px-1 py-0.5 bg-slate-200 rounded">SCAN</kbd>
+      </div>
+    </div>
+
+    <!-- Live Search/Scan Verification Result -->
+    {% include "core/operations/partials/gate_verification_card.html" with exeat=None query="" %}
+  </div>
+
+  <!-- Operational Metrics Strip -->
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div class="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs">
+      <span class="text-[10px] uppercase font-semibold text-slate-400 block">Boarders in Campus</span>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-xl font-bold text-slate-800">{{ in_campus_count }}</span>
+        <span class="text-[10px] text-slate-400">/ {{ total_boarders }} total</span>
+      </div>
+    </div>
+
+    <div class="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs">
+      <span class="text-[10px] uppercase font-semibold text-sky-600 block">Currently Out</span>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-xl font-bold text-sky-700">{{ currently_out_count }}</span>
+        <span class="text-[10px] text-sky-500">active passes</span>
+      </div>
+    </div>
+
+    <div class="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs {% if overdue_count > 0 %}border-rose-300 bg-rose-50/20{% endif %}">
+      <span class="text-[10px] uppercase font-semibold {% if overdue_count > 0 %}text-rose-600 font-bold{% else %}text-slate-400{% endif %} block">
+        Overdue at Gate
+      </span>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-xl font-bold {% if overdue_count > 0 %}text-rose-700{% else %}text-slate-700{% endif %}">{{ overdue_count }}</span>
+        {% if overdue_count > 0 %}
+          <span class="text-[10px] text-rose-500 font-semibold animate-pulse">Action Required</span>
+        {% else %}
+          <span class="text-[10px] text-slate-400">All within time</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs">
+      <span class="text-[10px] uppercase font-semibold text-slate-400 block">Ready for Exit</span>
+      <div class="flex items-baseline gap-2 mt-1">
+        <span class="text-xl font-bold text-slate-800">{{ awaiting_departures|length }}</span>
+        <span class="text-[10px] text-slate-400">approved exeats</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    
+    <!-- Active Departures Table (Students Currently Out) -->
+    <div class="bg-white rounded-xl border border-slate-200/90 overflow-hidden shadow-xs flex flex-col">
+      <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
+          <h3 class="text-xs font-bold text-slate-800">Currently Departed ({{ active_departures.count }})</h3>
+        </div>
+        <span class="text-[10px] text-slate-400">Awaiting return to campus</span>
+      </div>
+
+      <div class="overflow-x-auto flex-1 max-h-[380px] overflow-y-auto">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="border-b border-slate-200 bg-slate-50/50 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              <th class="py-2 px-3">Student & Pass</th>
+              <th class="py-2 px-3">Departed At</th>
+              <th class="py-2 px-3">Expected Return</th>
+              <th class="py-2 px-3 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for movement in active_departures %}
+              <tr class="hover:bg-slate-50/80 transition {% if movement.is_overdue %}bg-rose-50/30{% endif %}">
+                <td class="py-2.5 px-3">
+                  <div class="truncate">
+                    <span class="font-bold text-slate-800 block truncate">{{ movement.exeat.student.full_name }}</span>
+                    <span class="font-mono text-[10px] text-slate-400">{{ movement.exeat.exeat_number }}</span>
+                  </div>
+                </td>
+                <td class="py-2.5 px-3 text-slate-600 whitespace-nowrap">
+                  {{ movement.actual_departure|date:"M d, H:i" }}
+                </td>
+                <td class="py-2.5 px-3 whitespace-nowrap">
+                  {% if movement.is_overdue %}
+                    <span class="font-bold text-rose-600 flex items-center gap-1">
+                      {{ movement.exeat.expected_return|date:"M d, H:i" }}
+                      <span class="px-1 py-0.2 rounded text-[9px] bg-rose-100 text-rose-800 font-bold uppercase">Overdue</span>
+                    </span>
+                  {% else %}
+                    <span class="text-slate-600">{{ movement.exeat.expected_return|date:"M d, H:i" }}</span>
+                  {% endif %}
+                </td>
+                <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                  <form method="post" action="{% url 'core:gate_terminal_action' movement.exeat.id 'return' %}">
+                    {% csrf_token %}
+                    <button type="submit" 
+                            class="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold rounded text-[11px] border border-blue-200 transition"
+                            title="Log Return for {{ movement.exeat.student.full_name }}">
+                      Check In
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="4" class="py-8 text-center text-slate-400">
+                  No students currently out of campus on exeat.
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Approved Passes Awaiting Gate Exit -->
+    <div class="bg-white rounded-xl border border-slate-200/90 overflow-hidden shadow-xs flex flex-col">
+      <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+          <h3 class="text-xs font-bold text-slate-800">Approved Passes Awaiting Exit ({{ awaiting_departures|length }})</h3>
+        </div>
+        <span class="text-[10px] text-slate-400">Ready for student departure</span>
+      </div>
+
+      <div class="overflow-x-auto flex-1 max-h-[380px] overflow-y-auto">
+        <table class="w-full text-left border-collapse text-xs">
+          <thead>
+            <tr class="border-b border-slate-200 bg-slate-50/50 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              <th class="py-2 px-3">Student & House</th>
+              <th class="py-2 px-3">Type & Dest</th>
+              <th class="py-2 px-3">Scheduled</th>
+              <th class="py-2 px-3 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for exeat in awaiting_departures %}
+              <tr class="hover:bg-slate-50/80 transition">
+                <td class="py-2.5 px-3">
+                  <div class="truncate">
+                    <span class="font-bold text-slate-800 block truncate">{{ exeat.student.full_name }}</span>
+                    <span class="text-[10px] text-slate-400">{{ exeat.student.house.name }}</span>
+                  </div>
+                </td>
+                <td class="py-2.5 px-3 text-slate-600 truncate max-w-[120px]">
+                  <span class="font-semibold block truncate">{{ exeat.get_exeat_type_display }}</span>
+                  <span class="text-[10px] text-slate-400 block truncate">{{ exeat.destination }}</span>
+                </td>
+                <td class="py-2.5 px-3 text-slate-600 whitespace-nowrap">
+                  {{ exeat.expected_departure|date:"M d, H:i" }}
+                </td>
+                <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                  <form method="post" action="{% url 'core:gate_terminal_action' exeat.id 'departure' %}">
+                    {% csrf_token %}
+                    <button type="submit" 
+                            class="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded text-[11px] border border-emerald-200 transition"
+                            title="Log Departure for {{ exeat.student.full_name }}">
+                      Check Out
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="4" class="py-8 text-center text-slate-400">
+                  No approved passes currently awaiting departure.
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Recent Movements Audit Log -->
+  <div class="bg-white rounded-xl border border-slate-200/90 overflow-hidden shadow-xs">
+    <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+      <h3 class="text-xs font-bold text-slate-800">Recent Gate Movement Logs</h3>
+      <span class="text-[10px] text-slate-400">Last 15 gate activity records</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left border-collapse text-xs">
+        <thead>
+          <tr class="border-b border-slate-200 bg-slate-50/50 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+            <th class="py-2 px-3">Student</th>
+            <th class="py-2 px-3">Exeat Number</th>
+            <th class="py-2 px-3">Departure Log</th>
+            <th class="py-2 px-3">Return Log</th>
+            <th class="py-2 px-3">Status</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for movement in recent_movements %}
+            <tr class="hover:bg-slate-50/70 transition">
+              <td class="py-2 px-3 font-medium text-slate-800">{{ movement.exeat.student.full_name }}</td>
+              <td class="py-2 px-3 font-mono text-slate-500">{{ movement.exeat.exeat_number }}</td>
+              <td class="py-2 px-3 text-slate-600">
+                {% if movement.actual_departure %}
+                  <span>{{ movement.actual_departure|date:"M d, H:i" }}</span>
+                  <span class="text-[10px] text-slate-400 block">By: {{ movement.departure_recorded_by|default:"Gate" }}</span>
+                {% else %}
+                  <span class="text-slate-400">—</span>
+                {% endif %}
+              </td>
+              <td class="py-2 px-3 text-slate-600">
+                {% if movement.actual_return %}
+                  <span>{{ movement.actual_return|date:"M d, H:i" }}</span>
+                  <span class="text-[10px] text-slate-400 block">By: {{ movement.return_recorded_by|default:"Gate" }}</span>
+                {% else %}
+                  <span class="text-amber-600 font-semibold">Still Out</span>
+                {% endif %}
+              </td>
+              <td class="py-2 px-3">
+                <span class="px-2 py-0.5 text-[10px] font-semibold rounded-full
+                  {% if movement.actual_return %}bg-emerald-50 text-emerald-700 border border-emerald-200
+                  {% elif movement.is_overdue %}bg-rose-50 text-rose-700 border border-rose-200
+                  {% else %}bg-sky-50 text-sky-700 border border-sky-200{% endif %}">
+                  {{ movement.state_display }}
+                </span>
+              </td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="5" class="py-6 text-center text-slate-400">No gate movements logged yet.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>

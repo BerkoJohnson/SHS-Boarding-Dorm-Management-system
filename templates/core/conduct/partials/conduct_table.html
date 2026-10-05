@@ -1,0 +1,188 @@
+{% load static %}
+<div class="overflow-x-auto min-h-[340px] pb-16">
+    <table class="w-full text-left border-collapse">
+        <thead>
+            <tr class="bg-slate-50/75 border-b border-slate-200 text-slate-500 font-semibold text-2xs uppercase tracking-wider select-none">
+                <th class="px-3 py-2.5">Student & Details</th>
+                <th class="px-3 py-2.5">House & Dorm</th>
+                <th class="px-3 py-2.5">Offense & Description</th>
+                <th class="px-3 py-2.5">Severity</th>
+                <th class="px-3 py-2.5">Action Taken / Sanction</th>
+                <th class="px-3 py-2.5">Logged By</th>
+                <th class="px-3 py-2.5">Date</th>
+                <th class="w-10 px-3 py-2.5 text-right"></th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 text-xs font-normal text-slate-700">
+            {% for record in records %}
+            <tr class="hover:bg-slate-50/80 transition-colors group">
+                
+                <!-- Student & Details -->
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                    <div class="font-medium text-slate-900 flex items-center gap-1.5">
+                        <span>{{ record.student.full_name }}</span>
+                        {% if record.student.gender == 'male' %}
+                            <span class="text-2xs text-blue-500 font-bold">M</span>
+                        {% else %}
+                            <span class="text-2xs text-pink-500 font-bold">F</span>
+                        {% endif %}
+                    </div>
+                    <div class="text-2xs text-slate-400 flex items-center gap-1.5 mt-0.5">
+                        <span class="font-mono">{{ record.student.admission_no }}</span>
+                        <span>•</span>
+                        <span>{{ record.student.class_group.name|default:"Unassigned" }}</span>
+                    </div>
+                </td>
+
+                <!-- House & Dorm -->
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                    <div class="text-slate-800 font-medium flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full 
+                            {% if record.student.house.number == 1 %}bg-red-500
+                            {% elif record.student.house.number == 2 %}bg-blue-500
+                            {% elif record.student.house.number == 3 %}bg-amber-500
+                            {% elif record.student.house.number == 4 %}bg-emerald-500
+                            {% else %}bg-slate-400{% endif %}"></span>
+                        <span>{{ record.student.house.name|default:"No House" }}</span>
+                    </div>
+                    <div class="text-2xs text-slate-400 truncate max-w-[130px]" title="{{ record.student.dormitory.name }}">
+                        {{ record.student.dormitory.name|default:"Day Student" }}
+                    </div>
+                </td>
+
+                <!-- Offense & Description -->
+                <td class="px-3 py-2.5">
+                    <div class="font-semibold text-slate-900">{{ record.offense }}</div>
+                    {% if record.description %}
+                    <div class="text-2xs text-slate-400 max-w-xs truncate mt-0.5" title="{{ record.description }}">
+                        {{ record.description }}
+                    </div>
+                    {% endif %}
+                </td>
+
+                <!-- Severity Badge -->
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                    {% if record.severity == 'Critical' %}
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                            <span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+                            Critical Infraction
+                        </span>
+                    {% elif record.severity == 'Major' %}
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                            <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                            Major Offense
+                        </span>
+                    {% else %}
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                            <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
+                            Minor Offense
+                        </span>
+                    {% endif %}
+                </td>
+
+                <!-- Action Taken -->
+                <td class="px-3 py-2.5">
+                    <div class="text-slate-800 font-medium">{{ record.action_taken }}</div>
+                </td>
+
+                <!-- Logged By -->
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                    <div class="text-slate-700 font-medium">{{ record.logged_by.full_name|default:"Housemaster" }}</div>
+                    <div class="text-2xs text-slate-400">{{ record.academic_term.get_term_display|default:"Active Term" }}</div>
+                </td>
+
+                <!-- Date -->
+                <td class="px-3 py-2.5 whitespace-nowrap">
+                    <div class="text-slate-800 font-medium">{{ record.created_at|date:"d M Y" }}</div>
+                    <div class="text-2xs text-slate-400">{{ record.created_at|date:"H:i" }}</div>
+                </td>
+
+                <!-- Context Menu -->
+                <td class="px-3 py-2.5 text-right whitespace-nowrap" x-data="{ menuOpen: false, dropUp: false }">
+                    <div class="inline-block relative text-left">
+                        <button @click="menuOpen = !menuOpen; if (menuOpen) { $nextTick(() => { const r = $el.getBoundingClientRect(); dropUp = (window.innerHeight - r.bottom < 200); }) }" 
+                                @click.outside="menuOpen = false" 
+                                type="button"
+                                class="p-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-100 transition focus:outline-none"
+                                title="Actions">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z"/>
+                            </svg>
+                        </button>
+
+                        <!-- Dropdown Menu -->
+                        <div x-show="menuOpen" 
+                             x-cloak
+                             @click.outside="menuOpen = false"
+                             x-transition:enter="transition ease-out duration-100"
+                             x-transition:enter-start="transform opacity-0 scale-95"
+                             x-transition:enter-end="transform opacity-100 scale-100"
+                             x-transition:leave="transition ease-in duration-75"
+                             x-transition:leave-start="transform opacity-100 scale-100"
+                             x-transition:leave-end="transform opacity-0 scale-95"
+                             :class="dropUp ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
+                             class="absolute right-0 w-48 bg-white rounded-lg shadow-2xl border border-slate-200 py-1 z-50 text-left">
+                            
+                            <div class="px-3 py-1.5 border-b border-slate-100 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                                Conduct Record
+                            </div>
+
+                            <!-- New Exeat for student -->
+                            <a href="{% url 'core:exeat_create' %}?student_id={{ record.student.id }}" 
+                               class="flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-brand-600 transition">
+                                <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                </svg>
+                                <span>Issue Exeat Pass</span>
+                            </a>
+
+                            <!-- Record Another Incident -->
+                            <a href="{% url 'core:incident_create' %}?student_id={{ record.student.id }}" 
+                               class="flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-amber-600 transition">
+                                <svg class="w-3.5 h-3.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                                </svg>
+                                <span>Add New Infraction</span>
+                            </a>
+
+                        </div>
+                    </div>
+                </td>
+
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="8" class="px-6 py-12 text-center text-slate-400">
+                    <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                        </svg>
+                    </div>
+                    <div class="font-medium text-slate-700 text-sm">No disciplinary records found</div>
+                    <p class="text-2xs text-slate-400 mt-1 max-w-sm mx-auto">
+                        {% if query or selected_severity or selected_house %}
+                            No incidents match the active search or filters. Try resetting criteria.
+                        {% else %}
+                            There are currently no conduct infractions or disciplinary records logged.
+                        {% endif %}
+                    </p>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Table Record Counter Footer -->
+<div class="px-4 py-2.5 bg-slate-50/75 border-t border-slate-200 flex items-center justify-between text-2xs text-slate-500">
+    <div class="flex items-center gap-2">
+        <span>Showing <strong>{{ records|length }}</strong> of <strong>{{ total_matching|default:records|length }}</strong> incident logs</span>
+    </div>
+    {% if active_filters_count %}
+    <div class="flex items-center gap-1.5">
+        <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-medium">
+            <span>{{ active_filters_count }} active filter{{ active_filters_count|pluralize }}</span>
+        </span>
+    </div>
+    {% endif %}
+</div>

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}System Configuration - Eden High School{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <div>
+    <h1 class="text-2xl font-bold text-slate-900">System Configuration</h1>
+    <p class="text-sm text-slate-500 mt-1">Manage academic terms, default settings, and system-wide lists.</p>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    
+    <!-- Active Academic Term Settings -->
+    <div class="lg:col-span-2 space-y-4">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-sm font-bold text-slate-800">Academic Terms Management</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Toggle the currently active semester or term.</p>
+        </div>
+        <div class="divide-y divide-slate-100">
+          {% for term in academic_terms %}
+            <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition">
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-slate-800">{{ term.academic_year.name }}</span>
+                  <span class="text-sm text-slate-600">- {{ term.get_term_display }}</span>
+                  {% if term.is_current %}
+                    <span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full">ACTIVE</span>
+                  {% endif %}
+                </div>
+                <div class="text-xs text-slate-500 mt-1">
+                  {{ term.start_date|date:"M d, Y" }} to {{ term.end_date|date:"M d, Y" }} · {{ term.get_level_display }}
+                </div>
+              </div>
+              
+              <div>
+                {% if not term.is_current %}
+                  <form method="post" action="{% url 'core:set_active_term' term.id %}" hx-post="{% url 'core:set_active_term' term.id %}" hx-swap="none">
+                    {% csrf_token %}
+                    <button type="submit" class="px-3 py-1.5 bg-white border border-slate-300 text-slate-700 text-xs font-semibold rounded-lg hover:bg-slate-50 transition shadow-xs">
+                      Set as Active
+                    </button>
+                  </form>
+                {% else %}
+                  <button disabled class="px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold rounded-lg opacity-50 cursor-not-allowed">
+                    Currently Active
+                  </button>
+                {% endif %}
+              </div>
+            </div>
+          {% empty %}
+            <div class="p-6 text-center text-slate-400 text-sm">
+              No academic terms configured. Add them via Django Admin.
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Admin Links -->
+    {% if request.user.is_superuser %}
+    <div class="space-y-4">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+          <h3 class="text-sm font-bold text-slate-800">Quick Links (Django Admin)</h3>
+          <p class="text-[11px] text-slate-500 mt-0.5">Deep links to full database management.</p>
+        </div>
+        <div class="p-2 space-y-1">
+          <a href="/admin/core/house/" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+            Manage Houses
+          </a>
+          <a href="/admin/core/dormitory/" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+            Manage Dormitories
+          </a>
+          <a href="/admin/core/student/" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+            Manage Students Registry
+          </a>
+          <a href="/admin/core/housemaster/" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2"></path></svg>
+            Manage Housemasters
+          </a>
+          <a href="/admin/core/academicterm/" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+            Manage Academic Calendar
+          </a>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

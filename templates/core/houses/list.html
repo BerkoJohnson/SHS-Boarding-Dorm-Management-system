@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+
+{% block title %}Houses & Dorms | SHS Housing System{% endblock %}
+{% block page_title %}Houses & Dormitories{% endblock %}
+
+{% block content %}
+
+<div class="space-y-3">
+
+{% for house in houses %}
+
+<section class="bg-white border border-slate-200 rounded-md">
+
+    <!-- HOUSE HEADER -->
+    <div class="px-3 py-2 border-b border-slate-200
+                flex items-center justify-between">
+
+        <div class="flex items-center gap-2">
+
+            <div class="w-7 h-7 rounded-md bg-slate-100
+                        flex items-center justify-center
+                        font-bold text-slate-600">
+                {{ house.number }}
+            </div>
+
+            <div>
+                <h2 class="font-semibold text-slate-900">
+                    {{ house.name }}
+                </h2>
+
+                <div class="text-2xs text-slate-400">
+                    {{ house.get_number_display }}
+                </div>
+            </div>
+
+        </div>
+
+        <div class="text-right">
+
+            <div class="font-semibold text-slate-800">
+                {{ house.total_students }}
+            </div>
+
+            <div class="text-2xs text-slate-400">
+                Students
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- HOUSE CONTENT -->
+    <div class="p-3">
+
+        <div class="grid grid-cols-3 gap-3">
+
+            <!-- MOTTO -->
+            <div class="border border-slate-200 rounded-md p-2.5">
+
+                <div class="text-2xs uppercase
+                            tracking-wide text-slate-400">
+                    Motto
+                </div>
+
+                <div class="mt-1 text-slate-700">
+                    {{ house.motto|default:"—" }}
+                </div>
+
+            </div>
+
+
+            <!-- HOUSEMASTERS -->
+            <div class="border border-slate-200 rounded-md p-2.5">
+
+                <div class="text-2xs uppercase
+                            tracking-wide text-slate-400">
+                    Housemasters
+                </div>
+
+                <div class="mt-1 space-y-1">
+
+                    {% for master in house.housemasters.all %}
+
+                    <div class="text-slate-700">
+                        {{ master.full_name }}
+                    </div>
+
+                    {% empty %}
+
+                    <div class="text-slate-400">
+                        No housemaster assigned
+                    </div>
+
+                    {% endfor %}
+
+                </div>
+
+            </div>
+
+
+            <!-- DORMITORIES -->
+            <div class="border border-slate-200 rounded-md p-2.5">
+
+                <div class="text-2xs uppercase
+                            tracking-wide text-slate-400">
+                    Dormitories
+                </div>
+
+                <div class="mt-1 space-y-1">
+
+                    {% for dorm in house.dormitories.all %}
+
+                    <div class="flex items-center justify-between">
+
+                        <span class="text-slate-700">
+                            {{ dorm.name }}
+                        </span>
+
+                        <span class="text-2xs text-slate-400">
+                            {{ dorm.capacity }}
+                        </span>
+
+                    </div>
+
+                    {% empty %}
+
+                    <div class="text-slate-400">
+                        No dormitories
+                    </div>
+
+                    {% endfor %}
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+{% empty %}
+
+<div class="bg-white border border-slate-200 rounded-md
+            p-10 text-center text-slate-400">
+    No houses have been configured.
+</div>
+
+{% endfor %}
+
+</div>
+
+{% endblock %}

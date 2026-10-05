@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Reports & Stats - Eden High School{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900">Reports & Analytics</h1>
+      <p class="text-sm text-slate-500 mt-1">High-level overview of boarding operations and metrics.</p>
+    </div>
+    {% if metrics.current_term %}
+      <div class="px-3 py-1.5 bg-brand-50 border border-brand-200 text-brand-700 text-xs font-semibold rounded-lg">
+        Active Term: {{ metrics.current_term.academic_year.name }} - {{ metrics.current_term.get_term_display }}
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Metric Cards -->
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- Total Boarders -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+      <div class="flex items-center gap-3 mb-2">
+        <div class="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-600">Total Boarders</h3>
+      </div>
+      <div class="text-3xl font-bold text-slate-900">{{ metrics.total_boarders }}</div>
+    </div>
+
+    <!-- Average Attendance -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+      <div class="flex items-center gap-3 mb-2">
+        <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-600">Avg. Attendance (7d)</h3>
+      </div>
+      <div class="text-3xl font-bold text-slate-900">{{ metrics.avg_attendance }}%</div>
+    </div>
+
+    <!-- Active Exeats -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-3">
+          <div class="p-2 bg-amber-50 text-amber-600 rounded-lg">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+          </div>
+          <h3 class="text-sm font-semibold text-slate-600">Active Exeats</h3>
+        </div>
+        {% if metrics.overdue_exeats > 0 %}
+          <span class="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded-full animate-pulse">{{ metrics.overdue_exeats }} Overdue</span>
+        {% endif %}
+      </div>
+      <div class="text-3xl font-bold text-slate-900">{{ metrics.active_exeats }}</div>
+    </div>
+
+    <!-- Term Infractions -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+      <div class="flex items-center gap-3 mb-2">
+        <div class="p-2 bg-rose-50 text-rose-600 rounded-lg">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-600">Term Infractions</h3>
+      </div>
+      <div class="text-3xl font-bold text-slate-900">{{ metrics.total_infractions }}</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Infractions by House -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+        <h3 class="text-sm font-bold text-slate-800">Infractions by House (This Term)</h3>
+      </div>
+      <div class="p-5">
+        {% if metrics.house_breakdown %}
+          <div class="space-y-4">
+            {% for house in metrics.house_breakdown %}
+              <div>
+                <div class="flex justify-between text-xs mb-1">
+                  <span class="font-medium text-slate-700">{{ house.name }}</span>
+                  <span class="text-slate-500">{{ house.infraction_count }}</span>
+                </div>
+                <div class="w-full bg-slate-100 rounded-full h-2">
+                  <!-- Calculate width dynamically based on the highest count using a simple trick or just fixed percentage for demo -->
+                  <div class="bg-rose-500 h-2 rounded-full" style="width: {% widthratio house.infraction_count metrics.house_breakdown.0.infraction_count 100 %}%"></div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="text-center text-slate-400 py-8 text-sm">No infractions recorded this term.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Recent Infractions List -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div class="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+        <h3 class="text-sm font-bold text-slate-800">Recent Disciplinary Incidents</h3>
+        <a href="{% url 'core:conduct_list' %}" class="text-xs text-brand-600 hover:text-brand-700 font-medium">View All</a>
+      </div>
+      <div class="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+        {% for infraction in recent_infractions %}
+          <div class="p-4 hover:bg-slate-50 transition">
+            <div class="flex justify-between items-start">
+              <div>
+                <h4 class="text-sm font-semibold text-slate-800">{{ infraction.student.full_name }}</h4>
+                <p class="text-xs text-slate-500">{{ infraction.student.house.name }} · {{ infraction.offense }}</p>
+              </div>
+              <span class="text-[10px] text-slate-400">{{ infraction.created_at|timesince }} ago</span>
+            </div>
+          </div>
+        {% empty %}
+          <div class="text-center text-slate-400 py-8 text-sm">No recent incidents.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

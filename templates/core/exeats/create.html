@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Issue Student Exeat | SHS Management System{% endblock %}
+{% block page_title %}Issue Student Exeat Pass{% endblock %}
+
+{% block content %}
+<div x-data="{
+    selectedStudent: {% if selected_student %}{
+        id: '{{ selected_student.id }}',
+        name: '{{ selected_student.full_name|escapejs }}',
+        admission_no: '{{ selected_student.admission_no }}',
+        house: '{{ selected_student.house.name|default:""|escapejs }}',
+        dorm: '{{ selected_student.dormitory.name|default:""|escapejs }}',
+        classGroup: '{{ selected_student.class_group.name|default:""|escapejs }}',
+        gender: '{{ selected_student.gender }}',
+        guardian: '{{ selected_student.guardian.full_name|default:""|escapejs }}',
+        phone: '{{ selected_student.guardian.phone_number|default:""|escapejs }}'
+    }{% else %}null{% endif %},
+    searchQuery: '',
+    selectStudent(id, name, admission_no, house, dorm, classGroup, gender, guardian, phone) {
+        this.selectedStudent = { id, name, admission_no, house, dorm, classGroup, gender, guardian, phone };
+        this.searchQuery = '';
+        const resultsEl = document.getElementById('student-search-results');
+        if (resultsEl) resultsEl.innerHTML = '';
+    },
+    clearStudent() {
+        this.selectedStudent = null;
+    }
+}" class="max-w-6xl mx-auto space-y-4">
+
+    <!-- Top Command Breadcrumb Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1 border-b border-slate-200/80">
+        <div>
+            <div class="flex items-center gap-2 text-2xs text-slate-400">
+                <a href="{% url 'core:dashboard' %}" class="hover:text-slate-600 transition">Dashboard</a>
+                <span>/</span>
+                <a href="{% url 'core:exeat_list' %}" class="hover:text-slate-600 transition">Exeats</a>
+                <span>/</span>
+                <span class="text-slate-600 font-medium">New Leave Pass</span>
+            </div>
+            <h1 class="text-lg font-bold text-slate-900 tracking-tight mt-0.5">Issue Official Exeat Pass</h1>
+            <p class="text-2xs text-slate-500">Authorize boarding student temporary leave from campus with automated gate control logging</p>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <a href="{% url 'core:dashboard' %}" 
+               class="px-3 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 rounded-lg text-xs font-medium transition shadow-2xs">
+                Cancel
+            </a>
+            <button type="submit" 
+                    form="exeat-form" 
+                    class="px-3.5 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition shadow-sm">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                <span>Save & Issue Pass</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Global Form Error Alert -->
+    {% if form.errors %}
+    <div class="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-3 shadow-2xs">
+        <svg class="w-5 h-5 text-rose-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <div>
+            <div class="font-bold text-rose-900">Please correct the following errors before issuing the pass:</div>
+            <ul class="list-disc list-inside mt-1 space-y-0.5 text-2xs text-rose-700">
+                {% for field in form %}
+                    {% for error in field.errors %}
+                        <li><strong>{{ field.label }}:</strong> {{ error }}</li>
+                    {% endfor %}
+                {% endfor %}
+                {% for error in form.non_field_errors %}
+                    <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Main Creation Form -->
+    <form id="exeat-form" method="post" action="{% url 'core:exeat_create' %}">
+        {% csrf_token %}
+        <input type="hidden" name="student" id="id_student" :value="selectedStudent ? selectedStudent.id : ''">
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+            <!-- LEFT 2 COLUMNS: Student & Leave Schedule Details -->
+            <div class="lg:col-span-2 space-y-4">
+
+                <!-- 1. Student Selection Card -->
+                <div class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
+                    <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+                        <div>
+                            <h2 class="font-bold text-slate-900 text-xs tracking-tight">1. Student Identification</h2>
+                            <p class="text-[11px] text-slate-400">Search and select the boarding student requesting leave</p>
+                        </div>
+                        <span class="text-[10px] font-semibold text-brand-600 bg-brand-50 px-2 py-0.5 rounded-full border border-brand-100">
+                            Boarding Only
+                        </span>
+                    </div>
+
+                    <div class="mt-3.5 space-y-3">
+                        
+                        <!-- Search Student (Hidden when student is selected) -->
+                        <div x-show="!selectedStudent" class="relative">
+                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                Search Student by Name or Admission No. <span class="text-rose-500">*</span>
+                            </label>
+                            <div class="relative">
+                                <input type="text" 
+                                       x-model="searchQuery"
+                                       name="q"
+                                       placeholder="Type student name (e.g. Kwame) or admission number..." 
+                                       hx-get="{% url 'core:student_search' %}"
+                                       hx-trigger="keyup changed delay:250ms"
+                                       hx-target="#student-search-results"
+                                       class="w-full pl-9 pr-4 py-2 bg-slate-50/80 text-xs rounded-lg border border-slate-200 focus:outline-none focus:bg-white focus:ring-1 focus:ring-brand-500 transition shadow-2xs">
+                                <svg class="w-4 h-4 text-slate-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                                </svg>
+                            </div>
+                            
+                            <!-- HTMX Results Dropdown Target -->
+                            <div id="student-search-results"></div>
+                        </div>
+
+                        <!-- Selected Student Snapshot Card -->
+                        <div x-show="selectedStudent" x-cloak class="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-3">
+                            <div class="flex items-center gap-3 overflow-hidden">
+                                <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-brand-600 to-indigo-600 text-white font-bold flex items-center justify-center text-sm shadow-xs shrink-0"
+                                     x-text="selectedStudent ? selectedStudent.name.charAt(0) : 'S'">
+                                </div>
+                                <div class="overflow-hidden">
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-bold text-slate-900 text-xs truncate" x-text="selectedStudent ? selectedStudent.name : ''"></span>
+                                        <span class="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800">Boarder</span>
+                                    </div>
+                                    <div class="text-2xs text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
+                                        <span class="font-mono" x-text="'No: ' + (selectedStudent ? selectedStudent.admission_no : '')"></span>
+                                        <span>•</span>
+                                        <span x-text="selectedStudent ? selectedStudent.classGroup : ''"></span>
+                                        <span>•</span>
+                                        <span class="text-slate-700 font-medium" x-text="selectedStudent ? selectedStudent.house + ' · ' + selectedStudent.dorm : ''"></span>
+                                    </div>
+                                    <div class="text-[10px] text-slate-400 mt-0.5" x-show="selectedStudent && selectedStudent.guardian">
+                                        Guardian: <span class="text-slate-600 font-medium" x-text="selectedStudent ? selectedStudent.guardian + ' (' + selectedStudent.phone + ')' : ''"></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button type="button" 
+                                    @click="clearStudent()" 
+                                    class="px-2.5 py-1 text-2xs font-medium text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded transition shrink-0">
+                                Change Student
+                            </button>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- 2. Exeat Specification & Schedule Card -->
+                <div class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
+                    <div class="pb-3 border-b border-slate-100">
+                        <h2 class="font-bold text-slate-900 text-xs tracking-tight">2. Leave Details & Timetable</h2>
+                        <p class="text-[11px] text-slate-400">Specify leave category, destinations, and scheduled travel timestamps</p>
+                    </div>
+
+                    <div class="mt-3.5 space-y-3.5">
+                        
+                        <!-- Exeat Type & Destination -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                    Exeat Category <span class="text-rose-500">*</span>
+                                </label>
+                                {{ form.exeat_type }}
+                            </div>
+
+                            <div>
+                                <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                    Destination / Address <span class="text-rose-500">*</span>
+                                </label>
+                                {{ form.destination }}
+                            </div>
+                        </div>
+
+                        <!-- Scheduled Departure & Expected Return -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                    Scheduled Departure <span class="text-rose-500">*</span>
+                                </label>
+                                {{ form.expected_departure }}
+                                <span class="text-[10px] text-slate-400 mt-0.5 block">When student exits through the school gate</span>
+                            </div>
+
+                            <div>
+                                <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                    Expected Return Deadline <span class="text-rose-500">*</span>
+                                </label>
+                                {{ form.expected_return }}
+                                <span class="text-[10px] text-slate-400 mt-0.5 block">Lateness past this time flags student as Overdue</span>
+                            </div>
+                        </div>
+
+                        <!-- Justification / Reason -->
+                        <div>
+                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                Detailed Reason / Clinic Endorsement <span class="text-rose-500">*</span>
+                            </label>
+                            {{ form.reason }}
+                        </div>
+
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- RIGHT 1 COLUMN: Housemaster Approval & Policy Info -->
+            <div class="space-y-4">
+
+                <!-- 3. Housemaster Authorization Card -->
+                <div class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
+                    <div class="pb-3 border-b border-slate-100">
+                        <h2 class="font-bold text-slate-900 text-xs tracking-tight">3. Housemaster Authorization</h2>
+                        <p class="text-[11px] text-slate-400">Official sign-off & issuance</p>
+                    </div>
+
+                    <div class="mt-3.5 space-y-3">
+                        <div>
+                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                Exeat Status <span class="text-rose-500">*</span>
+                            </label>
+                            {{ form.status }}
+                        </div>
+
+                        <div>
+                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                Authorizing Housemaster <span class="text-rose-500">*</span>
+                            </label>
+                            {{ form.approved_by }}
+                            <span class="text-[10px] text-slate-400 mt-0.5 block">Required when issuing an approved pass</span>
+                        </div>
+
+                        <div>
+                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
+                                Conditions / Special Remarks
+                            </label>
+                            {{ form.approval_remarks }}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Senior High School Boarding Regulations -->
+                <div class="bg-gradient-to-br from-slate-900 to-slate-800 text-slate-200 rounded-xl p-4 shadow-sm border border-slate-700/80">
+                    <div class="flex items-center gap-2 mb-2">
+                        <svg class="w-4 h-4 text-sky-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <h3 class="font-bold text-white text-xs">Gate Control Regulations</h3>
+                    </div>
+                    
+                    <ul class="space-y-1.5 text-2xs text-slate-300">
+                        <li class="flex items-start gap-1.5">
+                            <span class="text-sky-400 font-bold">•</span>
+                            <span><strong>Curfew:</strong> All students on town exeats must report by 17:30 GMT.</span>
+                        </li>
+                        <li class="flex items-start gap-1.5">
+                            <span class="text-sky-400 font-bold">•</span>
+                            <span><strong>Medical Leaves:</strong> Student must submit stamped clinic/hospital pass upon return.</span>
+                        </li>
+                        <li class="flex items-start gap-1.5">
+                            <span class="text-sky-400 font-bold">•</span>
+                            <span><strong>Gate Logging:</strong> Security officers log exact exit and arrival at the main security post.</span>
+                        </li>
+                    </ul>
+
+                    <div class="mt-4 pt-3 border-t border-slate-700 flex flex-col gap-2">
+                        <button type="submit" 
+                                class="w-full py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-xs font-semibold transition text-center shadow-xs">
+                            Confirm & Issue Pass
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </form>
+
+</div>
+{% endblock %}
