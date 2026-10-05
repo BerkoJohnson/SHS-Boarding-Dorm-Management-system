@@ -1,0 +1,18 @@
+warning: in the working copy of 'core/context_processors.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'core/forms.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'core/views.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/components/header_notifications.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/core/exeats/create.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/core/exeats/detail.html', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'templates/core/exeats/list.html', LF will be replaced by CRLF the next time Git touches it
+ core/context_processors.py                     |  14 [32m+[m[31m-[m
+ core/forms.py                                  | 158 [32m++++++++++++[m[31m---[m
+ core/models.py                                 | 197 [32m+++++++++++++++++[m[31m-[m
+ core/urls.py                                   |   1 [32m+[m
+ core/views.py                                  | 263 [32m++++++++++++++++++++++[m[31m---[m
+ static/css/output.css                          |   2 [32m+[m[31m-[m
+ templates/components/header_notifications.html |   7 [32m+[m[31m-[m
+ templates/core/exeats/create.html              | 126 [32m+++++++++[m[31m---[m
+ templates/core/exeats/detail.html              | 195 [32m++++++++++++++++++[m
+ templates/core/exeats/list.html                | 120 [32m+++++++++++[m
+ 10 files changed, 996 insertions(+), 87 deletions(-)

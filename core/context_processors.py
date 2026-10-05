@@ -4,7 +4,10 @@ Context processor supplying top command bar notifications and authenticated user
 from typing import Dict, Any, List
 from django.utils import timezone
 from django.db.models import Q
-from core.models import Exeat, ExeatMovement, DisciplinaryRecord, HouseMaster, StaffRole, get_user_profile
+from core.models import (
+    Exeat, ExeatMovement, DisciplinaryRecord, HouseMaster, StaffRole,
+    get_user_profile, get_approvable_pending_for_user,
+)
 from core.permissions import (
     ADMIN_ROLES,
     ROLL_CALL_ROLES,
@@ -82,11 +85,10 @@ def header_context(request) -> Dict[str, Any]:
 
     overdue_count = overdue_movements.count()
 
-    # 2. Pending Exeats requiring approval
-    pending_exeats = Exeat.objects.filter(
-        status=Exeat.Status.PENDING
-    ).select_related("student__house", "student").order_by("-created_at")
-
+    # 2. Pending Exeats requiring approval — SCOPED to user jurisdiction
+    #    Admins and Senior Housemasters see all pending requests; regular
+    #    Housemasters only see requests for students in their assigned House.
+    pending_exeats = get_approvable_pending_for_user(request.user)
     pending_count = pending_exeats.count()
 
     # 3. Critical Infractions

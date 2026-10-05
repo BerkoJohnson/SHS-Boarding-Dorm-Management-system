@@ -601,7 +601,16 @@ class Exeat(BaseModel):
         on_delete=models.SET_NULL, 
         null=True, 
         blank=True, 
-        related_name='approved_exeats'
+        related_name='approved_exeats',
+        help_text="Housemaster / Senior Housemaster who signed off this pass (Approved only)."
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='drafted_exeats',
+        help_text="Staff member who originally drafted / submitted this leave request (audit trail)."
     )
     approval_remarks = models.TextField(blank=True, null=True, help_text="Housemaster's notes or conditions.")
 
@@ -628,6 +637,24 @@ class Exeat(BaseModel):
         # 3. Require approval details when status is Approved
         if self.status == self.Status.APPROVED and not self.approved_by_id:
             raise ValidationError({'approved_by': "An approving Housemaster must be specified when issuing an exeat pass."})
+
+        # 4. Jurisdiction guard: the signatory Housemaster must actually have authority over this student's house
+        if self.status == self.Status.APPROVED and self.approved_by_id and self.student_id:
+            hm = self.approved_by
+            if not hm.is_senior_housemaster:
+                student_house_id = self.student.house_id if getattr(self.student, 'house_id', None) else None
+                if hm.house_id is None:
+                    # Non-senior Housemaster with no assigned house cannot approve anything
+                    raise ValidationError({
+                        'approved_by': f"{hm.full_name} is not assigned to a House and is not the Senior Housemaster. "
+                                        f"Only the student's Housemaster or the Senior Housemaster can approve this pass."
+                    })
+                if student_house_id is not None and hm.house_id != student_house_id:
+                    raise ValidationError({
+                        'approved_by': f"Jurisdiction error: {hm.full_name} is the Housemaster for {hm.house.name}, "
+                                        f"but this student belongs to {self.student.house.name if self.student.house else 'an unassigned House'}. "
+                                        f"Approval is restricted to the student's own Housemaster or the Senior Housemaster."
+                    })
 
     def save(self, *args, **kwargs):
         # 1. Auto-generate unique Exeat Pass Number on creation
@@ -947,3 +974,169 @@ def get_user_profile(user):
             profile.save(update_fields=['role'])
 
     return profile
+
+
+def get_approvable_pending_for_user(user):
+    """
+    Returns a QuerySet of PENDING exeat requests that the given user is
+    jurisdictionally authorized to approve or reject.
+
+    Single source of truth used by: context-processor notification badges,
+    the Pending Approvals hub, the Exeats list 'My Approvals' filter, and
+    any view that needs to scope the approval queue to the current user.
+
+    Approval rules (mirrors can_approve_exeat jurisdiction):
+      * Superusers / System Administrators -> ALL pending exeats
+      * Senior Housemaster -> ALL pending exeats (school-wide oversight)
+      * Regular Housemaster -> pending exeats for students in their assigned House only
+      * Tutors / Gate Officers / any other role -> empty QuerySet
+
+    Args:
+        user: A Django auth User instance (typically request.user).
+
+    Returns:
+        QuerySet[Exeat]: scoped, select_related for list rendering.
+    """
+    base_qs = Exeat.objects.filter(
+        status=Exeat.Status.PENDING
+    ).select_related(
+        'student', 'student__house', 'student__dormitory',
+        'academic_term', 'created_by'
+    ).order_by('-created_at')
+
+    if not user or not user.is_authenticated:
+        return base_qs.none()
+
+    # Superuser shortcut: full institutional authority
+    if user.is_superuser:
+        return base_qs
+
+    profile = get_user_profile(user)
+
+    # Role guard — only Admin / Senior HM / Housemaster can approve anything
+    if not profile:
+        return base_qs.none()
+    if profile.role not in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER, StaffRole.HOUSEMASTER):
+        return base_qs.none()
+
+    # ADMIN and SENIOR_HOUSEMASTER: school-wide
+    if profile.role in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER):
+        return base_qs
+
+    # HOUSEMASTER: only their own assigned house
+    # Prefer direct OneToOne on user; fall back to staff_id/username lookup for legacy rows
+    hm = getattr(user, 'housemaster', None)
+    if hm is None:
+        hm = HouseMaster.objects.filter(
+            models.Q(staff_id__iexact=user.username) | models.Q(full_name__icontains=user.username)
+        ).first()
+
+    if hm:
+        # Senior flag could be set on the HouseMaster row even if role on profile drifted
+        if hm.is_senior_housemaster:
+            return base_qs
+        if hm.house_id is not None:
+            return base_qs.filter(student__house_id=hm.house_id)
+
+    return base_qs.none()
+
+
+def get_exeat_queue_stats(scoped_pending_qs, user):
+    """
+    Quick aggregations for the dedicated Pending Approvals Hub header stat cards
+    and per-house queue chips.
+
+    Returns a dict with keys:
+      total_pending, oldest_pending_hours, avg_queue_age_hours,
+      approved_today, rejected_today, overdue_returns, per_house (list of dicts).
+
+    Args:
+        scoped_pending_qs: an already-jurisdiction-scoped PENDING Exeat queryset
+            (e.g. the output of get_approvable_pending_for_user(request.user)).
+        user: the currently-logged-in Django User instance (used to attribute
+            'Approved Today' to the current signatory, for SLA-awareness).
+    """
+    from django.db.models import Avg, Min, Count, Q as _Q, F
+    from django.utils import timezone
+
+    now = timezone.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    stats = {
+        'total_pending': scoped_pending_qs.count(),
+        'oldest_pending_hours': 0,
+        'avg_queue_age_hours': 0,
+        'approved_today': 0,
+        'rejected_today': 0,
+        'overdue_returns': 0,
+        'per_house': [],
+    }
+
+    # --- Oldest + average age (in hours) for the SLA gauges ---
+    agg = scoped_pending_qs.aggregate(
+        oldest_created=Min('created_at'),
+        avg_created=Avg('created_at'),
+    )
+    if agg['oldest_created']:
+        age_delta = now - agg['oldest_created']
+        stats['oldest_pending_hours'] = round(age_delta.total_seconds() / 3600, 1)
+    if agg['avg_created']:
+        avg_delta = now - agg['avg_created']
+        stats['avg_queue_age_hours'] = round(avg_delta.total_seconds() / 3600, 1)
+
+    # --- Today's throughput for the current approver (SLA context) ---
+    # Approved_today attributed to the currently-logged-in approver so each
+    # HM sees *their own* desk stats, not a system-wide pool.
+    today_by_me = Exeat.objects.filter(
+        updated_at__gte=today_start,
+        approved_by__in=list(
+            HouseMaster.objects.filter(
+                _Q(staff_id__iexact=user.username) | _Q(full_name__icontains=user.username)
+            ).values_list('id', flat=True)
+        ) if user.is_authenticated else _Q(pk__in=[]),
+    ) if user.is_authenticated else Exeat.objects.none()
+    if getattr(user, 'housemaster', None):
+        today_by_me = Exeat.objects.filter(
+            updated_at__gte=today_start,
+            approved_by_id=user.housemaster.id,
+        )
+    stats['approved_today'] = today_by_me.filter(status=Exeat.Status.APPROVED).count()
+    stats['rejected_today'] = today_by_me.filter(status=Exeat.Status.REJECTED).count()
+
+    # --- Overdue currently-out (cross queue context for approvers) ---
+    stats['overdue_returns'] = ExeatMovement.objects.filter(
+        actual_departure__isnull=False,
+        actual_return__isnull=True,
+        exeat__expected_return__lt=now,
+        # For regular Housemasters scope overdue to their own house, not global
+        exeat__student__house_id__in=list(
+            set(
+                e.student.house_id
+                for e in scoped_pending_qs.select_related('student__house')
+                if e.student and e.student.house_id
+            )
+        ) if not (user.is_superuser or (getattr(get_user_profile(user), 'role', None) in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)))
+        else _Q(pk__isnull=False)  # admin/senior: unrestricted
+    ).count()
+
+    # --- Per-house breakdown (for the queue-jump chip bar) ---
+    house_totals = list(
+        scoped_pending_qs
+        .values(house_id=F('student__house_id'), house_name=F('student__house__name'), house_number=F('student__house__number'))
+        .annotate(pending=Count('id'))
+        .order_by('house_number')
+    )
+    stats['per_house'] = [
+        {
+            'id': row['house_id'],
+            'name': row['house_name'] or 'Unassigned',
+            'number': row['house_number'],
+            'pending': row['pending'],
+        }
+        for row in house_totals if row['house_id'] is not None
+    ]
+    # Also carry an "All houses" chip with total count
+    if stats['per_house']:
+        stats['per_house'].insert(0, {'id': None, 'name': 'All Queues', 'number': 0, 'pending': stats['total_pending']})
+
+    return stats

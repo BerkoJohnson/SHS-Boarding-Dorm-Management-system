@@ -220,38 +220,110 @@
 
             </div>
 
-            <!-- RIGHT 1 COLUMN: Housemaster Approval & Policy Info -->
+            <!-- RIGHT 1 COLUMN: Request Routing Banner + Boarding Regulations (Two-Step Workflow Step 1: DRAFT) -->
             <div class="space-y-4">
 
-                <!-- 3. Housemaster Authorization Card -->
+                <!-- 3. REQUEST ROUTING & STATUS CARD (Replaces the old Housemaster Authorization dropdowns) -->
                 <div class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
-                    <div class="pb-3 border-b border-slate-100">
-                        <h2 class="font-bold text-slate-900 text-xs tracking-tight">3. Housemaster Authorization</h2>
-                        <p class="text-[11px] text-slate-400">Official sign-off & issuance</p>
+                    <div class="pb-3 border-b border-slate-100 flex items-center justify-between">
+                        <div>
+                            <h2 class="font-bold text-slate-900 text-xs tracking-tight">3. Request Routing & Status</h2>
+                            <p class="text-[11px] text-slate-400">Two-step workflow — Step 1 of 2</p>
+                        </div>
+                        <span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                            <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                            PENDING REVIEW
+                        </span>
                     </div>
 
-                    <div class="mt-3.5 space-y-3">
-                        <div>
-                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
-                                Exeat Status <span class="text-rose-500">*</span>
-                            </label>
-                            {{ form.status }}
+                    <!-- Hidden status field (backend-coerced to PENDING; disabled display kept for audit trail) -->
+                    <div class="mt-3">
+                        <label class="block text-2xs font-semibold text-slate-700 mb-1">Submission Status</label>
+                        {{ form.status }}
+                        <p class="text-[10px] text-slate-400 mt-1">
+                            System-forced to <strong>Pending</strong> — all new requests require Housemaster sign-off before a gate pass is issued.
+                        </p>
+                    </div>
+
+                    <!-- Drafter / Submitting User Row -->
+                    <div class="mt-4 flex items-center gap-3 p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
+                        <div class="w-9 h-9 shrink-0 rounded-full bg-gradient-to-br from-indigo-500 to-brand-600 text-white font-bold flex items-center justify-center text-xs shadow-xs">
+                            {{ user_initials }}
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-[11px] text-slate-400 font-semibold uppercase tracking-wide">Submitting As</div>
+                            <div class="text-xs font-bold text-slate-900 truncate">{{ request.user.get_full_name|default:request.user.username }}</div>
+                            <div class="text-[11px] text-slate-500 truncate">{{ user_role_display }} · {{ user_jurisdiction_scope }}</div>
+                        </div>
+                    </div>
+
+                    <!-- Routing Target: Whose Desk Does This Land On? -->
+                    <div class="mt-4 space-y-2">
+                        <div class="text-2xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                            <svg class="w-3 h-3 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/>
+                            </svg>
+                            Will be routed for approval to:
                         </div>
 
-                        <div>
-                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
-                                Authorizing Housemaster <span class="text-rose-500">*</span>
-                            </label>
-                            {{ form.approved_by }}
-                            <span class="text-[10px] text-slate-400 mt-0.5 block">Required when issuing an approved pass</span>
+                        <!-- Student's own Housemaster (if assigned) -->
+                        {% if routing_target and routing_target.house_housemaster %}
+                        <div class="flex items-center gap-2.5 p-2.5 rounded-lg border {% if selected_student and selected_student.house and selected_student.house.id == routing_target.house.id %}border-emerald-200 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
+                            <div class="w-8 h-8 shrink-0 rounded-full text-white font-bold flex items-center justify-center text-[10px] bg-gradient-to-br from-emerald-500 to-teal-600 shadow-xs">
+                                {{ routing_target.house_housemaster.full_name|make_list|first|upper }}
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-xs font-bold text-slate-900 truncate">{{ routing_target.house_housemaster.full_name }}</div>
+                                <div class="text-[11px] text-slate-500 truncate">
+                                    Housemaster · {{ routing_target.house.name|default:"Unassigned House" }}
+                                    {% if selected_student and selected_student.house and selected_student.house.id == routing_target.house.id %}
+                                        · <span class="text-emerald-600 font-semibold">Student's assigned Housemaster</span>
+                                    {% endif %}
+                                </div>
+                            </div>
                         </div>
+                        {% endif %}
 
-                        <div>
-                            <label class="block text-2xs font-semibold text-slate-700 mb-1">
-                                Conditions / Special Remarks
-                            </label>
-                            {{ form.approval_remarks }}
+                        <!-- Senior Housemaster (always in the loop) -->
+                        {% if routing_target and routing_target.senior_housemaster %}
+                        <div class="flex items-center gap-2.5 p-2.5 rounded-lg border border-indigo-200 bg-indigo-50">
+                            <div class="w-8 h-8 shrink-0 rounded-full text-white font-bold flex items-center justify-center text-[10px] bg-gradient-to-br from-indigo-500 to-purple-600 shadow-xs">
+                                {{ routing_target.senior_housemaster.full_name|make_list|first|upper }}
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-xs font-bold text-slate-900 truncate">{{ routing_target.senior_housemaster.full_name }}</div>
+                                <div class="text-[11px] text-indigo-700 truncate font-semibold">
+                                    Senior Housemaster · School-wide oversight (escalation path)
+                                </div>
+                            </div>
                         </div>
+                        {% endif %}
+
+                        <!-- Fallback if no routing data yet (student not selected) -->
+                        {% if not selected_student %}
+                        <div class="p-2.5 rounded-lg border border-dashed border-slate-300 bg-slate-50/60 text-[11px] text-slate-500 italic">
+                            👈 Select a boarding student (in Section 1) to preview the routing chain.
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Next-Steps Timeline -->
+                    <div class="mt-5 pt-3.5 border-t border-slate-100 space-y-2">
+                        <div class="text-2xs font-semibold text-slate-700 uppercase tracking-wide">What happens next</div>
+                        <ol class="space-y-2">
+                            <li class="flex items-start gap-2 text-[11px]">
+                                <span class="shrink-0 mt-0.5 w-4 h-4 rounded-full bg-amber-100 text-amber-700 font-bold text-[10px] flex items-center justify-center border border-amber-200">1</span>
+                                <span class="text-slate-600"><strong>Submit</strong> — request is saved with status <strong>PENDING</strong>. Notification badge appears on the Housemaster(s)' command bar.</span>
+                            </li>
+                            <li class="flex items-start gap-2 text-[11px]">
+                                <span class="shrink-0 mt-0.5 w-4 h-4 rounded-full bg-slate-100 text-slate-500 font-bold text-[10px] flex items-center justify-center border border-slate-200">2</span>
+                                <span class="text-slate-600"><strong>Review</strong> — assigned Housemaster or Senior Housemaster reviews your notes, then Approves / Rejects with remarks.</span>
+                            </li>
+                            <li class="flex items-start gap-2 text-[11px]">
+                                <span class="shrink-0 mt-0.5 w-4 h-4 rounded-full bg-slate-100 text-slate-500 font-bold text-[10px] flex items-center justify-center border border-slate-200">3</span>
+                                <span class="text-slate-600"><strong>Approved → Gate Log Created</strong> — an official pass number is activated and Security can log the student's departure.</span>
+                            </li>
+                        </ol>
                     </div>
                 </div>
 
@@ -281,9 +353,15 @@
 
                     <div class="mt-4 pt-3 border-t border-slate-700 flex flex-col gap-2">
                         <button type="submit" 
-                                class="w-full py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-xs font-semibold transition text-center shadow-xs">
-                            Confirm & Issue Pass
+                                class="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-white rounded-lg text-xs font-bold transition text-center shadow-xs inline-flex items-center justify-center gap-1.5 border border-amber-400/60">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                            </svg>
+                            Submit Request for Housemaster Review
                         </button>
+                        <p class="text-[10px] text-slate-400 text-center">
+                            By submitting, you confirm the information above is accurate. This request is not yet a valid gate pass.
+                        </p>
                     </div>
                 </div>
 

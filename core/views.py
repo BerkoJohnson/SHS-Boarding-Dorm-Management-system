@@ -20,10 +20,12 @@ from .models import (
     StaffRole,
     UserProfile,
     get_user_profile,
+    get_approvable_pending_for_user,
+    get_exeat_queue_stats,
     RollCallSession,
     RollCallEntry,
 )
-from .forms import ExeatCreateForm, DisciplinaryRecordForm
+from .forms import ExeatCreateForm, ExeatApprovalForm, DisciplinaryRecordForm
 from .permissions import (
     role_required,
     can_approve_exeat_check,
@@ -193,7 +195,8 @@ def exeat_list_view(request):
         'student__class_group',
         'academic_term',
         'movement',
-        'approved_by'
+        'approved_by',
+        'created_by',
     ).all().order_by('-created_at')
 
     # 1. Text Search Filter
@@ -214,7 +217,17 @@ def exeat_list_view(request):
         exeats = exeats.filter(student__house_id=house_id)
 
     # 4. Status & Real-time Movement Filter
-    if status_filter == 'active_out':
+    if status_filter == 'approvals':
+        # Two-step Step 2 view: PENDING requests *I* am authorised to review & approve.
+        # Helper returns already-scoped PENDING qs; add select_related for card display.
+        exeats = get_approvable_pending_for_user(request.user).select_related(
+            'student', 'student__house', 'student__dormitory', 'student__class_group',
+            'academic_term', 'movement', 'approved_by', 'created_by'
+        ).order_by('-created_at')
+    elif status_filter == 'mine':
+        # Two-step Step 1 view: Requests *I* drafted / submitted.
+        exeats = exeats.filter(created_by=request.user)
+    elif status_filter == 'active_out':
         exeats = exeats.filter(
             movement__actual_departure__isnull=False,
             movement__actual_return__isnull=True
@@ -233,6 +246,20 @@ def exeat_list_view(request):
     houses = House.objects.all().order_by('number')
     active_filters_count = sum(1 for v in [exeat_type, status_filter, house_id] if v)
 
+    # Quick chip counts (two-step workflow chips in list header). Uses base counts
+    # (before text/type/house filters apply) so chips always reflect stable totals.
+    base_qs = Exeat.objects.all()
+    count_pending_approvals = get_approvable_pending_for_user(request.user).count()
+    count_my_drafts = base_qs.filter(created_by=request.user).count() if request.user.is_authenticated else 0
+    count_pending_global = base_qs.filter(status=Exeat.Status.PENDING).count()
+    count_active_out = ExeatMovement.objects.filter(
+        actual_departure__isnull=False, actual_return__isnull=True
+    ).count()
+    count_overdue = ExeatMovement.objects.filter(
+        actual_departure__isnull=False, actual_return__isnull=True,
+        exeat__expected_return__lt=now
+    ).count()
+
     context = {
         'exeats': exeats[:100],
         'total_count': exeats.count(),
@@ -242,6 +269,11 @@ def exeat_list_view(request):
         'selected_house': house_id,
         'active_filters_count': active_filters_count,
         'query': query,
+        'count_pending_approvals': count_pending_approvals,
+        'count_my_drafts': count_my_drafts,
+        'count_pending_global': count_pending_global,
+        'count_active_out': count_active_out,
+        'count_overdue': count_overdue,
     }
 
     # Return partial if request is from HTMX search / filter
@@ -249,6 +281,91 @@ def exeat_list_view(request):
         return render(request, 'core/exeats/partials/exeat_table.html', context)
     
     return render(request, 'core/exeats/list.html', context)
+
+
+@login_required
+@role_required(*EXEAT_APPROVAL_ROLES)
+def exeat_approvals_hub_view(request):
+    """
+    Phase 4.1: Dedicated PENDING APPROVALS HUB view (optimized workflow surface
+    for Housemasters/Senior HM doing desk sign-offs, NOT a generic list).
+
+    URL:   /exeats/pending-approvals/   (name: core:exeat_approvals)
+    Roles: Admin, Senior Housemaster, Housemaster only.
+
+    UX Differences from the generic list filter:
+      - Header stat cards (queue size, oldest pending, avg age, today's throughput,
+        overdue returns on the radar) — encourages SLA-aware desk work.
+      - Per-house queue chips to jump between houses (useful for Senior HM who
+        has school-wide authority but works one house at a time).
+      - Approval-OPTIMIZED card grid, not a table: each card shows the full
+        student profile inline + one-click Approve / Reject (with inline
+        remarks) / Cancel — all POST, no detail-page navigation required for
+        routine desk work.
+      - Cards are SLA-sorted by oldest -> newest (opposite of the default
+        register sort) so the approver tackles overdue queue entries first.
+
+    Optional query params:
+      - q         : free text search across student/number/destination
+      - house_id  : scope view to one house (driven by per-house chip bar)
+    """
+    query = request.GET.get('q', '').strip()
+    house_id = request.GET.get('house', '').strip()
+
+    # Step 1: Start from jurisdiction-scoped PENDING queue (single source of truth)
+    exeats = get_approvable_pending_for_user(request.user).select_related(
+        'student', 'student__house', 'student__dormitory', 'student__class_group',
+        'student__guardian', 'academic_term', 'created_by'
+    )
+
+    # Step 2: Optional house chip filter (Senior HM often works one house at a time)
+    if house_id:
+        try:
+            exeats = exeats.filter(student__house_id=int(house_id))
+        except (ValueError, TypeError):
+            pass
+
+    # Step 3: Optional free-text search (mirrors the register)
+    if query and len(query) >= 2:
+        exeats = exeats.filter(
+            Q(student__full_name__icontains=query)
+            | Q(exeat_number__icontains=query)
+            | Q(student__admission_no__icontains=query)
+            | Q(student__index_number__icontains=query)
+            | Q(destination__icontains=query)
+        )
+
+    # Step 4: SLA-sort — OLDEST first (opposite of the register: approvers should
+    # tackle the longest-waiting queue items first.)
+    exeats = exeats.order_by('created_at')
+
+    # Step 5: Hub header stats (run aggregations against filtered queue so
+    # the KPI cards reflect the current subset the user is looking at)
+    stats = get_exeat_queue_stats(exeats, request.user)
+
+    # Also pass current user's HM record so the "Signing off as" banner is accurate
+    current_hm = getattr(request.user, 'housemaster', None)
+    if current_hm is None and request.user.is_authenticated:
+        current_hm = HouseMaster.objects.filter(
+            Q(staff_id__iexact=request.user.username)
+            | Q(full_name__icontains=request.user.username)
+        ).first()
+
+    active_filters_count = sum(1 for v in [query, house_id] if v)
+
+    context = {
+        'exeats': exeats,
+        'total_count': exeats.count(),
+        'query': query,
+        'selected_house': house_id,
+        'active_filters_count': active_filters_count,
+        'stats': stats,
+        'current_hm': current_hm,
+        # Breadcrumb context
+        'page_subtitle': 'Step 2 desk sign-offs for requests in your jurisdiction.',
+    }
+    return render(request, 'core/exeats/approvals_hub.html', context)
+
 
 @login_required
 @role_required(*HOUSE_ROLES)
@@ -439,19 +556,43 @@ def exeat_create_view(request):
         form = ExeatCreateForm(request.POST)
         if form.is_valid():
             exeat = form.save(commit=False)
+            # Audit trail (Phase 1): record WHO drafted / submitted this leave request.
+            exeat.created_by = request.user
             exeat.save()
 
-            # Automatically create a Gate Movement log for approved exeats
-            if exeat.status == Exeat.Status.APPROVED:
-                ExeatMovement.objects.get_or_create(exeat=exeat)
+            # INTENTIONALLY NOT creating ExeatMovement HERE.
+            # Movement is created ONLY during Step 2 (PENDING -> APPROVED transition),
+            # handled inside exeat_action_view. No gate log = no valid departure.
+
+            # Build a transparent routing note for the success flash.
+            house_hm_name = None
+            senior_hm_name = None
+            if exeat.student and exeat.student.house_id:
+                house_hm = HouseMaster.objects.filter(
+                    house_id=exeat.student.house_id
+                ).order_by('-is_senior_housemaster').first()
+                house_hm_name = house_hm.full_name if house_hm else None
+            senior_hm = HouseMaster.objects.filter(is_senior_housemaster=True).first()
+            senior_hm_name = senior_hm.full_name if senior_hm else None
+            routing_bits = []
+            if exeat.student and exeat.student.house and house_hm_name:
+                routing_bits.append(f"{exeat.student.house.name} Housemaster ({house_hm_name})")
+            if senior_hm_name:
+                routing_bits.append(f"Senior Housemaster ({senior_hm_name})")
+            if routing_bits:
+                routing_note = f" Routed to: {'; '.join(routing_bits)}. Status: PENDING. No gate log until approved."
+            else:
+                routing_note = " Status: PENDING Housemaster review."
 
             messages.success(
                 request,
-                f"Exeat Pass {exeat.exeat_number} successfully issued for {exeat.student.full_name}."
+                f"Exeat Request {exeat.exeat_number} submitted for {exeat.student.full_name}.{routing_note}"
             )
-            return redirect('core:dashboard')
+            # Redirect to list so submitter sees their freshly-submitted PENDING entry,
+            # alongside the rest of the register (not the dashboard).
+            return redirect('core:exeat_list')
         else:
-            messages.error(request, "Please correct the errors in the exeat form below.")
+            messages.error(request, "Please correct the errors in the exeat request form below.")
     else:
         initial_data = {}
         if selected_student:
@@ -462,11 +603,28 @@ def exeat_create_view(request):
     housemasters = HouseMaster.objects.select_related('house').all()
     active_terms = AcademicTerm.objects.filter(is_current=True)
 
+    # Step-1 routing preview (used by right-column banner 'Will be routed to …')
+    routing_target = None
+    if selected_student is not None and selected_student.house_id is not None:
+        house_housemaster = (
+            HouseMaster.objects.filter(house_id=selected_student.house_id)
+            .order_by('-is_senior_housemaster', 'full_name').first()
+        )
+        senior_housemaster = HouseMaster.objects.filter(is_senior_housemaster=True).first()
+        if house_housemaster or senior_housemaster:
+            routing_target = {
+                'house': selected_student.house,
+                'house_housemaster': house_housemaster,
+                'senior_housemaster': senior_housemaster,
+            }
+
     context = {
         'form': form,
         'selected_student': selected_student,
         'housemasters': housemasters,
         'active_terms': active_terms,
+        'workflow_mode': 'request',
+        'routing_target': routing_target,
     }
     return render(request, 'core/exeats/create.html', context)
 
@@ -485,11 +643,175 @@ def exeat_detail_view(request, pk):
             'student__guardian',
             'academic_term',
             'movement',
-            'approved_by'
+            'approved_by',
+            'created_by',
         ),
         pk=pk
     )
-    return render(request, 'core/exeats/detail.html', {'exeat': exeat})
+    can_approve_exeat = can_approve_exeat_check(request.user, exeat)
+
+    return render(request, 'core/exeats/detail.html', {
+        'exeat': exeat,
+        'can_approve_exeat': can_approve_exeat,
+    })
+
+
+@login_required
+@role_required(*EXEAT_APPROVAL_ROLES)
+def exeat_approval_review_view(request, pk):
+    """
+    Phase 4.2: Dedicated Step-2 REVIEW PAGE.
+
+    URL:  /exeats/<uuid:pk>/review/   (name: core:exeat_review)
+
+    This is the long-form, form-based counterpart to the quick POST-only
+    approve/reject/cancel actions. Where the 3-dot menu + detail ribbon +
+    hub cards only let you "fire and forget" a decision, this page surfaces
+    the full ExeatApprovalForm so complex cases can have:
+
+      * Explicit Approve vs Reject dropdown (choice is sticky on save errors)
+      * Scoped `approved_by` dropdown (student's own HM + Senior HM only)
+        — auto-prefilled to current user if they are a HM record with jurisdiction
+      * `approval_remarks` (conditions if Approving, REQUIRED if Rejecting)
+      * Full READ-ONLY request + student summary above the form so the
+        approver has the full context on the same page (no tab switching)
+
+    Access rules:
+      * Only EXEAT_APPROVAL_ROLES (Admin, Senior HM, Housemaster)
+      * User must pass `can_approve_exeat_check` (belongs to student's house
+        OR Senior HM OR Admin)  — hard 403 if violated, regardless of decorator
+      * Exeat MUST currently be status = PENDING — if already approved or
+        rejected we redirect to detail with a friendly info flash.
+    """
+    exeat = get_object_or_404(
+        Exeat.objects.select_related(
+            'student',
+            'student__house',
+            'student__dormitory',
+            'student__class_group',
+            'student__guardian',
+            'academic_term',
+            'created_by',
+        ),
+        pk=pk
+    )
+
+    # 1. Double-gate jurisdiction — decorator narrows role; this guard narrows SCOPE.
+    if not can_approve_exeat_check(request.user, exeat):
+        house_label = (
+            exeat.student.house.name
+            if (exeat.student and exeat.student.house)
+            else "this House"
+        )
+        messages.error(
+            request,
+            f"Review access denied. Only the Housemaster for {house_label} "
+            f"or the Senior Housemaster can review this pending request."
+        )
+        return redirect('core:exeat_detail', pk=pk)
+
+    # 2. State-machine guard: only PENDING requests can enter Step-2 review.
+    if exeat.status != Exeat.Status.PENDING:
+        messages.info(
+            request,
+            f"Exeat {exeat.exeat_number} is already '{exeat.get_status_display()}'; "
+            f"review page is only available for PENDING requests."
+        )
+        return redirect('core:exeat_detail', pk=pk)
+
+    # 3. Bind / instantiate the Step-2 form.
+    if request.method == 'POST':
+        form = ExeatApprovalForm(
+            request.POST,
+            instance=exeat,
+            student=exeat.student,
+            reviewing_user=request.user,
+        )
+        if form.is_valid():
+            reviewed = form.save(commit=False)
+
+            # Safety net: regardless of the dropdown values submitted, if
+            # the current user is a HM with jurisdiction and no authorizer
+            # was explicitly chosen, stamp them as the signatory.
+            if reviewed.status == Exeat.Status.APPROVED and not reviewed.approved_by_id:
+                hm = getattr(request.user, 'housemaster', None)
+                if hm is None:
+                    hm = HouseMaster.objects.filter(
+                        Q(staff_id__iexact=request.user.username)
+                        | Q(full_name__icontains=request.user.username)
+                    ).first()
+                if hm is not None and (
+                    hm.is_senior_housemaster
+                    or (
+                        exeat.student.house_id is not None
+                        and hm.house_id == exeat.student.house_id
+                    )
+                ):
+                    reviewed.approved_by = hm
+
+            reviewed.save()
+
+            # Step-2 transition: create gate movement log ONLY on APPROVAL.
+            movement_created = False
+            if reviewed.status == Exeat.Status.APPROVED:
+                _mv, movement_created = ExeatMovement.objects.get_or_create(exeat=reviewed)
+
+            # Human-friendly success flash with different text per decision.
+            signatory = reviewed.approved_by.full_name if reviewed.approved_by else "Senior Housemaster"
+            if reviewed.status == Exeat.Status.APPROVED:
+                movement_msg = (
+                    " Gate movement log entry created — student may now depart through the main gate."
+                    if movement_created else " Gate movement log entry confirmed."
+                )
+                messages.success(
+                    request,
+                    f"Exeat {reviewed.exeat_number} APPROVED — signed off by {signatory}.{movement_msg}"
+                )
+            elif reviewed.status == Exeat.Status.REJECTED:
+                reason_note = " (with reason recorded)" if reviewed.approval_remarks else ""
+                messages.success(
+                    request,
+                    f"Exeat {reviewed.exeat_number} REJECTED{reason_note}. Request closed and logged."
+                )
+
+            # Redirect to detail page so the approver can review the
+            # decision-stamped pass (and print if Approved).
+            return redirect('core:exeat_detail', pk=pk)
+        else:
+            # Form-level validation errors (e.g. required remarks on Reject).
+            messages.error(request, "Please correct the review-form errors below before submitting.")
+    else:
+        form = ExeatApprovalForm(
+            instance=exeat,
+            student=exeat.student,
+            reviewing_user=request.user,
+        )
+
+    # --- Context prep -------------------------------------------------------
+    now = timezone.now()
+    queue_age_hours = None
+    if exeat.created_at:
+        queue_age_hours = round((now - exeat.created_at).total_seconds() / 3600, 1)
+
+    # Identify current user's HM record so "Signing off as" banner is clear.
+    current_hm = getattr(request.user, 'housemaster', None)
+    if current_hm is None and request.user.is_authenticated:
+        current_hm = HouseMaster.objects.filter(
+            Q(staff_id__iexact=request.user.username)
+            | Q(full_name__icontains=request.user.username)
+        ).first()
+
+    context = {
+        'exeat': exeat,
+        'form': form,
+        'current_hm': current_hm,
+        'queue_age_hours': queue_age_hours,
+        'page_subtitle': (
+            'Step 2 — Review pending request. Approve (creates gate log) or '
+            'Reject (reason required). All context shown above the form.'
+        ),
+    }
+    return render(request, 'core/exeats/review.html', context)
 
 
 @login_required
@@ -535,6 +857,8 @@ def exeat_action_view(request, pk, action):
 
         # 2. Authorization workflow (approve / reject / cancel)
         elif action in ('approve', 'reject', 'cancel'):
+            # Role guard (belt + suspenders — permission decorator already gates view,
+            # but we additionally narrow to EXEAT_APPROVAL_ROLES for these three actions).
             if not can_approve_exeat_check(request.user, exeat):
                 house_label = exeat.student.house.name if (exeat.student and exeat.student.house) else "this House"
                 messages.error(
@@ -542,26 +866,77 @@ def exeat_action_view(request, pk, action):
                     f"Permission denied: Only the Housemaster for {house_label} "
                     f"or the Senior Housemaster can {action} this exeat."
                 )
-            elif action == 'approve':
-                exeat.status = Exeat.Status.APPROVED
-                if not exeat.approved_by:
-                    # Link to actual authenticated Housemaster if available
-                    if hasattr(request.user, 'housemaster') and request.user.housemaster:
-                        exeat.approved_by = request.user.housemaster
-                    else:
-                        housemaster = HouseMaster.objects.filter(house=exeat.student.house).first() or HouseMaster.objects.first()
-                        exeat.approved_by = housemaster
-                exeat.save()
-                ExeatMovement.objects.get_or_create(exeat=exeat)
-                messages.success(request, f"Exeat pass {exeat.exeat_number} marked as Approved.")
+
+            # STATE-MACHINE GUARD — two-step rule: Approve/Reject may only be run on PENDING requests.
+            # Already-approved/rejected passes can only be Cancelled (or edited by Admin separately).
+            elif action in ('approve', 'reject') and exeat.status != Exeat.Status.PENDING:
+                messages.error(
+                    request,
+                    f"Cannot {action} exeat {exeat.exeat_number}: its status is '{exeat.get_status_display()}'. "
+                    f"Approve and Reject actions are only allowed on requests currently marked as PENDING. "
+                    f"Use Cancel to withdraw an Approved pass instead."
+                )
+
+            # REJECT — capture a one-off rejection reason from POST if provided, store in approval_remarks
             elif action == 'reject':
+                rejection_reason = (request.POST.get('approval_remarks') or '').strip()
+                if not rejection_reason and not exeat.approval_remarks:
+                    messages.warning(
+                        request,
+                        f"Exeat {exeat.exeat_number} was REJECTED. Note: no rejection reason was captured. "
+                        f"Consider adding a reason in approval remarks for the student's records and audit trail."
+                    )
+                if rejection_reason:
+                    exeat.approval_remarks = rejection_reason
                 exeat.status = Exeat.Status.REJECTED
                 exeat.save()
                 messages.info(request, f"Exeat request {exeat.exeat_number} was rejected.")
+
+            elif action == 'approve':
+                # --- Approved-by attribution ---
+                # Auto-link to the currently-authenticated user when: (a) user has a
+                # HouseMaster profile AND (b) that profile is actually the student's own
+                # Housemaster OR the Senior Housemaster. Otherwise keep the existing one.
+                if not exeat.approved_by or not (
+                    exeat.approved_by.house_id == (exeat.student.house_id if exeat.student else None)
+                    or exeat.approved_by.is_senior_housemaster
+                ):
+                    current_hm = getattr(request.user, 'housemaster', None)
+                    if current_hm is None:
+                        current_hm = HouseMaster.objects.filter(
+                            models.Q(staff_id__iexact=request.user.username)
+                            | models.Q(full_name__icontains=request.user.username)
+                        ).first()
+
+                    student_house_id = exeat.student.house_id if exeat.student else None
+                    if current_hm is not None and (
+                        current_hm.is_senior_housemaster or current_hm.house_id == student_house_id
+                    ):
+                        # Jurisdiction OK — stamp current user as the signatory
+                        exeat.approved_by = current_hm
+
+                exeat.status = Exeat.Status.APPROVED
+                # Note: Exeat.clean() + Exeat.save() both run full_clean so
+                # approved_by-is-set and jurisdiction rules from Phase 1 are enforced here.
+                exeat.save()
+
+                # Step 2 transition: gate movement placeholder is ONLY created when the
+                # request moves from PENDING -> APPROVED during Housemaster review.
+                # (Previously this happened at creation time; it now happens on approval.)
+                ExeatMovement.objects.get_or_create(exeat=exeat)
+
+                messages.success(
+                    request,
+                    f"Exeat pass {exeat.exeat_number} marked as Approved. "
+                    f"Gate movement log entry created — student may now depart through the main gate."
+                )
+
             elif action == 'cancel':
+                # Cancel is allowed from any non-final state (Pending / Approved / Rejected).
+                # Admins / Senior HMs often need to pull back passes that were issued incorrectly.
                 exeat.status = Exeat.Status.CANCELLED
                 exeat.save()
-                messages.info(request, f"Exeat pass {exeat.exeat_number} was cancelled.")
+                messages.info(request, f"Exeat pass {exeat.exeat_number} was cancelled and voided.")
 
     referer = request.META.get('HTTP_REFERER')
     if referer:
