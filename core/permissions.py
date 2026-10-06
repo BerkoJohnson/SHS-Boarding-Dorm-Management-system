@@ -27,23 +27,11 @@ ROLL_CALL_ROLES = (
     StaffRole.ADMIN,
     StaffRole.SENIOR_HOUSEMASTER,
     StaffRole.HOUSEMASTER,
-    StaffRole.HOUSE_TUTOR,
 )
 
 # Gate Operations: Logging departures/returns at the security checkpoint
 GATE_ROLES = (
     StaffRole.ADMIN,
-    StaffRole.SENIOR_HOUSEMASTER,
-    StaffRole.HOUSEMASTER,
-    StaffRole.GATE_OFFICER,
-)
-
-# Operations Hub: Any role that needs either Roll Call OR Gate tab
-OPERATIONS_ROLES = (
-    StaffRole.ADMIN,
-    StaffRole.SENIOR_HOUSEMASTER,
-    StaffRole.HOUSEMASTER,
-    StaffRole.HOUSE_TUTOR,
     StaffRole.GATE_OFFICER,
 )
 
@@ -86,6 +74,41 @@ HOUSE_ROLES = (
     StaffRole.HOUSEMASTER,
     StaffRole.HOUSE_TUTOR,
 )
+
+# Reports are available to staff with operational responsibility, but their
+# report data is restricted to the user's assigned house unless privileged.
+REPORT_ROLES = (
+    StaffRole.ADMIN,
+    StaffRole.SENIOR_HOUSEMASTER,
+    StaffRole.HOUSEMASTER,
+    StaffRole.HOUSE_TUTOR,
+    StaffRole.GATE_OFFICER,
+)
+
+
+def get_house_scope(user):
+    """Return the user's house, or None for school-wide administrators."""
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("An authenticated staff account is required.")
+
+    profile = get_user_profile(user)
+    if user.is_superuser or (profile and profile.role in ADMIN_ROLES):
+        return None
+
+    housemaster = getattr(user, "housemaster", None)
+    if not housemaster or not housemaster.house_id:
+        raise PermissionDenied(
+            "This account must be assigned to a house before accessing house operations."
+        )
+    return housemaster.house
+
+
+def filter_queryset_by_house(user, queryset, house_lookup):
+    """Restrict a queryset by its house relation for non-privileged staff."""
+    house = get_house_scope(user)
+    if house is None:
+        return queryset
+    return queryset.filter(**{house_lookup: house.pk})
 
 
 def role_required(*allowed_roles):
@@ -135,6 +158,17 @@ def can_approve_exeat_check(user, exeat) -> bool:
     profile = get_user_profile(user)
     if not profile:
         return False
+    if profile.role not in EXEAT_APPROVAL_ROLES:
+        return False
+    if profile.role == StaffRole.HOUSEMASTER:
+        housemaster = getattr(user, "housemaster", None)
+        if (
+            not housemaster
+            or not housemaster.house_id
+            or not exeat.student_id
+            or exeat.student.house_id != housemaster.house_id
+        ):
+            return False
     return profile.can_approve_exeat(exeat)
 
 

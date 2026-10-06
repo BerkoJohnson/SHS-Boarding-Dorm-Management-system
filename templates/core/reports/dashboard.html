@@ -7,7 +7,13 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-bold text-slate-900">Reports & Analytics</h1>
-      <p class="text-sm text-slate-500 mt-1">High-level overview of boarding operations and metrics.</p>
+      <p class="text-sm text-slate-500 mt-1">
+        {% if user_house_scope %}
+          House-scoped boarding operations and metrics for {{ user_house_scope.name }}.
+        {% else %}
+          High-level overview of boarding operations and metrics across the school.
+        {% endif %}
+      </p>
     </div>
     {% if metrics.current_term %}
       <div class="px-3 py-1.5 bg-brand-50 border border-brand-200 text-brand-700 text-xs font-semibold rounded-lg">
@@ -72,7 +78,9 @@
     <!-- Infractions by House -->
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
-        <h3 class="text-sm font-bold text-slate-800">Infractions by House (This Term)</h3>
+        <h3 class="text-sm font-bold text-slate-800">
+          {% if user_house_scope %}Infractions in {{ user_house_scope.name }} (This Term){% else %}Infractions by House (This Term){% endif %}
+        </h3>
       </div>
       <div class="p-5">
         {% if metrics.house_breakdown %}

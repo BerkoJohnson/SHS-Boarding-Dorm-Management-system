@@ -6,66 +6,103 @@
 
 {% block content %}
 
-<!-- Dashboard metrics grouped by student population, movement, and follow-up -->
-<section class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-    <article class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
-        <h2 class="text-sm font-semibold text-slate-600">Student Population</h2>
-        <p class="mt-2 text-2xl font-bold tracking-tight text-slate-900">{{ total_students }}</p>
-        <p class="text-xs text-slate-500">Total students</p>
-        <div class="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-3">
-            <div>
-                <p class="text-lg font-semibold text-slate-800">{{ total_boarders }}</p>
-                <p class="text-xs text-slate-500">Boarding</p>
+<!-- Compact dashboard summaries -->
+<section class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
+    <article class="rounded-xl border border-slate-200/90 bg-white p-3 shadow-2xs">
+        <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2m16-13a4 4 0 010 8m4 5v-2a4 4 0 00-3-3.87M9 11a4 4 0 100-8 4 4 0 000 8z"/>
+                    </svg>
+                </span>
+                <h2 class="text-xs font-semibold text-slate-700">Student Population</h2>
             </div>
+            <span class="text-[10px] font-medium text-slate-400">Total</span>
+        </div>
+        <div class="mt-2 flex items-end justify-between gap-3">
+            <p class="text-2xl font-bold leading-none tracking-tight text-slate-900">{{ total_students }}</p>
+            <p class="pb-0.5 text-[11px] text-slate-500">students enrolled</p>
+        </div>
+        <div class="mt-2.5 grid grid-cols-2 border-t border-slate-100 pt-2">
             <div>
-                <p class="text-lg font-semibold text-slate-800">{{ day_students_count }}</p>
-                <p class="text-xs text-slate-500">Day students</p>
+                <p class="text-sm font-semibold leading-none text-slate-800">{{ total_boarders }}</p>
+                <p class="mt-1 text-[10px] text-slate-500">Boarding</p>
+            </div>
+            <div class="border-l border-slate-100 pl-3">
+                <p class="text-sm font-semibold leading-none text-slate-800">{{ day_students_count }}</p>
+                <p class="mt-1 text-[10px] text-slate-500">Day students</p>
             </div>
         </div>
     </article>
 
-    <article class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
-        <h2 class="text-sm font-semibold text-slate-600">Dorm Occupancy</h2>
-        <p class="mt-2 text-2xl font-bold tracking-tight text-slate-900">{{ occupancy_rate }}%</p>
-        <p class="mt-1 text-xs text-slate-500">{{ total_boarders }} of {{ total_capacity }} beds occupied</p>
-    </article>
-
-    <article class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
-        <h2 class="text-sm font-semibold text-slate-600">Student Movement & Exeats</h2>
-        <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
-            <div>
-                <p class="text-xl font-bold text-slate-900">{{ active_out }}</p>
-                <p class="text-xs text-slate-500">Currently out</p>
+    <article class="rounded-xl border border-slate-200/90 bg-white p-3 shadow-2xs">
+        <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 21h18M5 21V7l8-4v18m0-10h6v10M8 9h1m-1 4h1m-1 4h1"/>
+                    </svg>
+                </span>
+                <h2 class="text-xs font-semibold text-slate-700">Dorm Occupancy</h2>
             </div>
-            <div>
-                <p class="text-xl font-bold text-slate-900">{{ pending_exeats }}</p>
-                <p class="text-xs text-slate-500">Pending approval</p>
-            </div>
-            <div>
-                <p class="text-xl font-bold {% if overdue_count %}text-rose-600{% else %}text-slate-900{% endif %}">{{ overdue_count }}</p>
-                <p class="text-xs text-slate-500">Overdue returns</p>
-            </div>
-            <div>
-                <p class="text-xl font-bold text-slate-900">{{ town_exeats_count }}</p>
-                <p class="text-xs text-slate-500">Town / day passes</p>
-            </div>
-            <div>
-                <p class="text-xl font-bold text-slate-900">{{ weekend_exeats_count }}</p>
-                <p class="text-xs text-slate-500">Weekend passes</p>
-            </div>
+            <span class="text-lg font-bold leading-none text-violet-700">{{ occupancy_rate }}%</span>
+        </div>
+        <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100" role="progressbar" aria-label="Dorm bed occupancy" aria-valuenow="{% if occupancy_rate > 100 %}100{% else %}{{ occupancy_rate }}{% endif %}" aria-valuemin="0" aria-valuemax="100">
+            <div class="h-full rounded-full bg-violet-500" style="width: {{ occupancy_rate }}%; max-width: 100%;"></div>
+        </div>
+        <div class="mt-2 flex items-center justify-between gap-2 text-[10px]">
+            <span class="font-medium text-slate-600">{{ total_boarders }} of {{ total_capacity }} beds occupied</span>
+            <span class="text-slate-400">Bed capacity</span>
         </div>
     </article>
 
-    <article class="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs">
-        <h2 class="text-sm font-semibold text-slate-600">Care & Discipline</h2>
-        <div class="mt-3 grid grid-cols-2 gap-4">
+    <article class="rounded-xl border border-slate-200/90 bg-white p-3 shadow-2xs">
+        <div class="flex items-center gap-2">
+            <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M13 5l7 7-7 7M20 12H4"/>
+                </svg>
+            </span>
+            <h2 class="text-xs font-semibold text-slate-700">Student Movement & Exeats</h2>
+        </div>
+        <div class="mt-2.5 grid grid-cols-3 gap-2">
             <div>
-                <p class="text-xl font-bold text-slate-900">{{ medical_exeats_count }}</p>
-                <p class="text-xs text-slate-500">Medical leaves</p>
+                <p class="text-lg font-bold leading-none text-sky-700">{{ active_out }}</p>
+                <p class="mt-1 text-[10px] leading-tight text-slate-500">Currently out</p>
             </div>
             <div>
-                <p class="text-xl font-bold text-slate-900">{{ active_disciplinary_count }}</p>
-                <p class="text-xs text-slate-500">Conduct records</p>
+                <p class="text-lg font-bold leading-none {% if pending_exeats %}text-amber-600{% else %}text-slate-800{% endif %}">{{ pending_exeats }}</p>
+                <p class="mt-1 text-[10px] leading-tight text-slate-500">Pending approval</p>
+            </div>
+            <div>
+                <p class="text-lg font-bold leading-none {% if overdue_count %}text-rose-600{% else %}text-slate-800{% endif %}">{{ overdue_count }}</p>
+                <p class="mt-1 text-[10px] leading-tight text-slate-500">Overdue returns</p>
+            </div>
+        </div>
+        <div class="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 border-t border-slate-100 pt-2 text-[10px] text-slate-500">
+            <span>Town/day <strong class="text-slate-700">{{ town_exeats_count }}</strong></span>
+            <span>Weekend <strong class="text-slate-700">{{ weekend_exeats_count }}</strong></span>
+        </div>
+    </article>
+
+    <article class="rounded-xl border border-slate-200/90 bg-white p-3 shadow-2xs">
+        <div class="flex items-center gap-2">
+            <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-50 text-rose-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+            </span>
+            <h2 class="text-xs font-semibold text-slate-700">Care & Discipline</h2>
+        </div>
+        <div class="mt-3 grid grid-cols-2 gap-2">
+            <div class="flex items-center gap-2">
+                <p class="text-lg font-bold leading-none text-rose-600">{{ medical_exeats_count }}</p>
+                <p class="text-[10px] leading-tight text-slate-500">Medical leaves</p>
+            </div>
+            <div class="flex items-center gap-2 border-l border-slate-100 pl-3">
+                <p class="text-lg font-bold leading-none text-amber-600">{{ active_disciplinary_count }}</p>
+                <p class="text-[10px] leading-tight text-slate-500">Conduct records</p>
             </div>
         </div>
     </article>
@@ -82,7 +119,7 @@
         <div>
             <div class="flex items-center gap-2">
                 <h2 class="font-bold text-slate-900 text-sm tracking-tight">Student Exeat & Gate Register</h2>
-                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                <span id="dashboard-exeat-total-count" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
                     {{ total_matching_exeats }} Total
                 </span>
             </div>
@@ -110,7 +147,7 @@
                 </svg>
             </div>
 
-            <!-- Live Tracking Only Toggle (Matching 'Allow stated' in image) -->
+            {% comment %} <!-- Live Tracking Only Toggle (Matching 'Allow stated' in image) -->
             <div class="flex items-center gap-1.5 pl-1 select-none">
                 <span class="text-2xs text-slate-500 font-medium">Live Active Only</span>
                 <button type="button" 
@@ -122,7 +159,7 @@
                           class="pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
                           :class="liveOnly ? 'translate-x-4' : 'translate-x-0'"></span>
                 </button>
-            </div>
+            </div> {% endcomment %}
 
             <!-- Status Dropdown Filter (Matching 'Showed issues' in image) -->
             <div class="relative">
@@ -136,9 +173,23 @@
                     <option value="active" {% if current_status_filter == 'active' %}selected{% endif %}>Show: Active (Out)</option>
                     <option value="pending" {% if current_status_filter == 'pending' %}selected{% endif %}>Show: Pending Approval</option>
                     <option value="overdue" {% if current_status_filter == 'overdue' %}selected{% endif %}>Show: Overdue</option>
+                    <option value="unresolved" {% if current_status_filter == 'unresolved' %}selected{% endif %}>Show: Pass Unresolved</option>
                     <option value="returned" {% if current_status_filter == 'returned' %}selected{% endif %}>Show: Returned</option>
                 </select>
             </div>
+
+            <button type="button"
+                    hx-get="{% url 'core:dashboard' %}?table_only=1"
+                    hx-trigger="click"
+                    hx-target="#dashboard-table-container"
+                    hx-include="[name='q'], [name='status']"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-2xs transition hover:bg-slate-50 hover:text-slate-800"
+                    title="Refresh exeat statuses">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7v5h-5M4 17v-5h5m-4.5-3a8 8 0 0113.2-3L20 12M4 12l2.3 2.5A8 8 0 0019.5 14"/>
+                </svg>
+                <span>Refresh</span>
+            </button>
 
         </div>
 

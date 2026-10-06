@@ -1,66 +1,27 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Roll Call & Gate Control - Eden High School{% endblock %}
+{% block title %}Roll Call Sessions - Eden High School{% endblock %}
 
 {% block content %}
-<div class="space-y-4" 
-     x-data="{ 
-         currentTab: '{{ active_tab|default:'roll_call' }}',
-         isNewSessionOpen: false 
-     }">
+<div class="space-y-4" x-data="{ isNewSessionOpen: false }">
 
-  <!-- TOP HUB BANNER & NAVIGATION BAR -->
+  <!-- ROLL CALL HEADER -->
   <div class="bg-white rounded-xl border border-slate-200/90 p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
     <div>
       <div class="flex items-center gap-2">
-        <h1 class="text-base font-bold text-slate-900">Operations Control</h1>
+        <h1 class="text-base font-bold text-slate-900">Roll Call Sessions</h1>
         <span class="px-2 py-0.5 text-[10px] font-semibold bg-slate-100 text-slate-700 rounded-md">
-          Live Roster & Gate System
+          House Attendance
         </span>
       </div>
       <p class="text-xs text-slate-500 mt-0.5">
-        Dormitory roll call inspection register and real-time campus gate departure/return monitoring.
+        Manage roll-call sessions and attendance for boarders in your authorized house scope.
       </p>
     </div>
 
-    <!-- Tab Navigation Controls -->
     <div class="flex items-center gap-2">
-      {% if can_access_roll_call and can_access_gate %}
-      <!-- Tabs Switcher (Only shown if user has access to both workspaces) -->
-      <div class="inline-flex p-1 bg-slate-100 rounded-lg text-xs font-semibold">
-        <button type="button"
-                @click="currentTab = 'roll_call'"
-                :class="currentTab === 'roll_call' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'"
-                class="flex items-center gap-1.5 px-3 py-1.5 rounded-md transition">
-          <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
-          </svg>
-          <span>Roll Call Sessions</span>
-        </button>
-
-        <button type="button"
-                @click="currentTab = 'gate'"
-                :class="currentTab === 'gate' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'"
-                class="flex items-center gap-1.5 px-3 py-1.5 rounded-md transition relative">
-          <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
-          </svg>
-          <span>Gate Security Terminal</span>
-          {% if overdue_count > 0 %}
-            <span class="w-2 h-2 rounded-full bg-rose-500 absolute -top-0.5 -right-0.5 animate-ping"></span>
-            <span class="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-rose-500 text-white">
-              {{ overdue_count }}
-            </span>
-          {% endif %}
-        </button>
-      </div>
-      {% endif %}
-
-      <!-- Start New Roll Call Action Button -->
-      {% if can_access_roll_call %}
       <button type="button"
-              x-show="currentTab === 'roll_call'"
               @click="isNewSessionOpen = true"
               class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white font-medium rounded-lg text-xs transition shadow-xs">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -68,13 +29,10 @@
         </svg>
         <span>New Roll Call</span>
       </button>
-      {% endif %}
     </div>
   </div>
 
-  <!-- TAB 1: ROLL CALL WORKSPACE -->
-  {% if can_access_roll_call %}
-  <div x-show="currentTab === 'roll_call'" x-cloak class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+  <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
     
     <!-- Left Session History & Selector Column -->
     <div class="lg:col-span-1 space-y-3">
@@ -85,12 +43,14 @@
         </div>
 
         <!-- Filter bar -->
-        <form method="get" action="{% url 'core:roll_call_gate_hub' %}" class="p-2 border-b border-slate-100 bg-slate-50/40">
-          <input type="hidden" name="tab" value="roll_call">
+        <form method="get" action="{% url 'core:roll_call_sessions' %}" class="p-2 border-b border-slate-100 bg-slate-50/40">
           <select name="house" 
+                  {% if not can_view_all_houses %}disabled{% endif %}
                   onchange="this.form.submit()" 
                   class="w-full text-xs py-1 px-2 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-brand-500">
-            <option value="">All Houses</option>
+            {% if can_view_all_houses %}
+              <option value="">All Houses</option>
+            {% endif %}
             {% for house in houses %}
               <option value="{{ house.id }}" {% if selected_house == house.id|stringformat:"s" %}selected{% endif %}>
                 {{ house.name }}
@@ -102,7 +62,7 @@
         <!-- Sessions List -->
         <div class="divide-y divide-slate-100 max-h-[540px] overflow-y-auto">
           {% for session in recent_sessions %}
-            <a href="?tab=roll_call&session_id={{ session.id }}{% if selected_house %}&house={{ selected_house }}{% endif %}" 
+            <a href="?session_id={{ session.id }}{% if selected_house %}&house={{ selected_house }}{% endif %}"
                class="block p-3 hover:bg-slate-50 transition group {% if current_session and current_session.id == session.id %}bg-slate-100/70 border-l-4 border-brand-600{% endif %}">
               <div class="flex items-center justify-between">
                 <span class="font-bold text-xs text-slate-800 group-hover:text-brand-600 truncate">
@@ -147,14 +107,6 @@
     </div>
 
   </div>
-  {% endif %}
-
-  <!-- TAB 2: GATE SECURITY TERMINAL -->
-  {% if can_access_gate %}
-  <div x-show="currentTab === 'gate'" x-cloak>
-    {% include "core/operations/partials/gate_terminal_body.html" %}
-  </div>
-  {% endif %}
 
   <!-- MODAL: START NEW ROLL CALL -->
   {% if can_access_roll_call %}

@@ -1,3 +1,9 @@
+{% if request.htmx and not dashboard_preview %}
+<span id="exeat-total-count" hx-swap-oob="true" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+    {{ total_count }} Total
+</span>
+{% endif %}
+
 <div class="overflow-x-auto min-h-[340px] pb-16">
 
     <table class="w-full text-left">
@@ -83,12 +89,18 @@
 
                 <td class="px-3 py-2">
 
-                    {% if exeat.current_state == "OVERDUE (Student Out)" %}
+                    {% if exeat.movement.actual_departure and not exeat.movement.actual_return and exeat.expected_return <= current_time %}
 
                         <span class="inline-flex px-1.5 py-0.5 rounded
                                      bg-red-50 text-red-700
                                      font-medium">
                             Overdue
+                        </span>
+
+                    {% elif exeat.current_state == "OVERDUE (Reconciled)" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-medium">
+                            Overdue (Reconciled)
                         </span>
 
                     {% elif exeat.current_state == "Active (Student Out)" %}
@@ -97,6 +109,24 @@
                                      bg-blue-50 text-blue-700
                                      font-medium">
                             Student Out
+                        </span>
+
+                    {% elif exeat.current_state == "Student Out (Reconciled)" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">
+                            Student Out (Reconciled)
+                        </span>
+
+                    {% elif exeat.current_state == "Pass Unresolved" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded bg-orange-50 text-orange-800 font-medium">
+                            Pass Unresolved
+                        </span>
+
+                    {% elif exeat.current_state == "Departure Not Recorded" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 font-medium">
+                            Departure Not Recorded
                         </span>
 
                     {% elif exeat.status == "Pending" %}
@@ -115,6 +145,18 @@
                             Returned
                         </span>
 
+                    {% elif exeat.current_state == "Returned (Reconciled)" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-medium">
+                            Returned (Reconciled)
+                        </span>
+
+                    {% elif exeat.current_state == "Pass Unused" %}
+
+                        <span class="inline-flex px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
+                            Pass Unused
+                        </span>
+
                     {% else %}
 
                         <span class="inline-flex px-1.5 py-0.5 rounded
@@ -128,7 +170,7 @@
                 </td>
 
 
-                <td class="px-3 py-2 text-right" x-data="{ menuOpen: false, dropUp: false }">
+                <td class="px-3 py-2 text-right relative" x-data="{ menuOpen: false, dropUp: false }" :class="menuOpen ? 'z-50' : ''">
                     <div class="inline-block relative text-left">
                         <button @click="menuOpen = !menuOpen; if (menuOpen) { $nextTick(() => { const r = $el.getBoundingClientRect(); dropUp = (window.innerHeight - r.bottom < 240); }) }" 
                                 @click.outside="menuOpen = false" 
@@ -166,7 +208,15 @@
 
                             <!-- Gate Actions -->
                             {% if can_access_gate and exeat.status == 'Approved' %}
-                                {% if not exeat.movement or not exeat.movement.actual_departure %}
+                                {% if exeat.reconciliation.outcome == 'student_out' and not exeat.reconciliation.actual_return %}
+                                    <form method="post" action="{% url 'core:exeat_action' exeat.pk 'return' %}">
+                                        {% csrf_token %}
+                                        <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 transition text-left font-medium">
+                                            <span>Log Gate Return</span>
+                                        </button>
+                                    </form>
+                                {% elif not exeat.reconciliation and not exeat.movement.actual_departure %}
+                                    {% if exeat.expected_departure <= current_time %}
                                     <form method="post" action="{% url 'core:exeat_action' exeat.pk 'departure' %}">
                                         {% csrf_token %}
                                         <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-50 transition text-left">
@@ -176,6 +226,11 @@
                                             <span>Log Gate Departure</span>
                                         </button>
                                     </form>
+                                    {% else %}
+                                    <div class="px-3 py-1.5 text-xs text-slate-400">
+                                        Departure available {{ exeat.expected_departure|date:"d M, H:i" }}
+                                    </div>
+                                    {% endif %}
                                 {% elif not exeat.movement.actual_return %}
                                     <form method="post" action="{% url 'core:exeat_action' exeat.pk 'return' %}">
                                         {% csrf_token %}
@@ -187,6 +242,12 @@
                                         </button>
                                     </form>
                                 {% endif %}
+                            {% endif %}
+
+                            {% if can_approve_exeat and exeat.status == 'Approved' and exeat.expected_departure <= current_time and not exeat.movement.actual_departure and not exeat.reconciliation %}
+                                <a href="{% url 'core:exeat_reconcile' exeat.pk %}" class="flex items-center gap-2 px-3 py-1.5 text-xs text-orange-700 hover:bg-orange-50 transition">
+                                    <span>Reconcile Missing Movement</span>
+                                </a>
                             {% endif %}
 
                             <!-- Housemaster Status Actions -->
@@ -220,7 +281,8 @@
                             <div class="my-1 border-t border-slate-100"></div>
 
                             <!-- Cancel Pass -->
-                            {% if can_approve_exeat and exeat.status != 'Cancelled' and not exeat.movement.actual_return %}
+                            {% if can_approve_exeat and exeat.status == 'Pending' or can_approve_exeat and exeat.status == 'Approved' %}
+                                {% if not exeat.movement.actual_departure and not exeat.movement.actual_return and not exeat.reconciliation %}
                                 <form method="post" action="{% url 'core:exeat_action' exeat.pk 'cancel' %}" 
                                       onsubmit="return confirm('Are you sure you want to cancel this exeat pass?');">
                                     {% csrf_token %}
@@ -231,6 +293,7 @@
                                         <span>Cancel Pass</span>
                                     </button>
                                 </form>
+                                {% endif %}
                             {% endif %}
 
                         </div>
@@ -267,12 +330,24 @@
 
 </div>
 
+{% if not dashboard_preview %}
+{% include "core/partials/pagination_controls.html" with pagination_page=exeats_page pagination_query=pagination_query pagination_parameter="page" pagination_target="#exeat-table" %}
+{% endif %}
+
 <!-- Table Record Counter Footer -->
 <div class="px-4 py-2.5 bg-slate-50/75 border-t border-slate-200 flex items-center justify-between text-2xs text-slate-500">
     <div class="flex items-center gap-2">
-        <span>Showing <strong>{{ exeats|length }}</strong> of <strong>{{ total_count|default:exeats|length }}</strong> records</span>
+        {% if dashboard_preview %}
+        <span>Showing the latest <strong>{{ exeats|length }}</strong> of <strong>{{ total_count }}</strong> matching records</span>
+        {% else %}
+        <span>Showing <strong>{{ exeats|length }}</strong> of <strong>{{ total_count }}</strong> records</span>
+        {% endif %}
     </div>
-    {% if active_filters_count %}
+    {% if dashboard_preview %}
+    <a href="{% url 'core:exeat_list' %}" class="font-medium text-brand-600 hover:text-brand-700 hover:underline">
+        View Complete Exeat Register →
+    </a>
+    {% elif active_filters_count %}
     <div class="flex items-center gap-1.5">
         <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-brand-50 text-brand-700 font-medium">
             <span>{{ active_filters_count }} active filter{{ active_filters_count|pluralize }}</span>

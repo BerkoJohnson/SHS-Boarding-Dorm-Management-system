@@ -2,7 +2,14 @@ from django import forms
 from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-from .models import Exeat, Student, HouseMaster, AcademicTerm, DisciplinaryRecord
+from .models import (
+    Exeat,
+    ExeatReconciliation,
+    Student,
+    HouseMaster,
+    AcademicTerm,
+    DisciplinaryRecord,
+)
 
 
 class ExeatRequestForm(forms.ModelForm):
@@ -95,6 +102,53 @@ class ExeatRequestForm(forms.ModelForm):
         # 3. Backend coercion: status MUST end up PENDING regardless of any POST tampering.
         cleaned_data['status'] = Exeat.Status.PENDING
 
+        return cleaned_data
+
+
+class ExeatReconciliationForm(forms.ModelForm):
+    class Meta:
+        model = ExeatReconciliation
+        fields = ("outcome", "actual_departure", "actual_return", "reason")
+        widgets = {
+            "outcome": forms.Select(attrs={"class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"}),
+            "actual_departure": forms.DateTimeInput(
+                attrs={"type": "datetime-local", "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"}
+            ),
+            "actual_return": forms.DateTimeInput(
+                attrs={"type": "datetime-local", "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"}
+            ),
+            "reason": forms.Textarea(
+                attrs={
+                    "rows": 4,
+                    "placeholder": "Record what was confirmed and how it was verified.",
+                    "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm",
+                }
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["reason"].label = "Reconciliation notes / evidence"
+        self.fields["reason"].required = True
+        self.fields["actual_departure"].required = False
+        self.fields["actual_return"].required = False
+
+    def clean(self):
+        cleaned_data = super().clean()
+        outcome = cleaned_data.get("outcome")
+        departure = cleaned_data.get("actual_departure")
+        returned = cleaned_data.get("actual_return")
+
+        if outcome in (ExeatReconciliation.Outcome.STUDENT_OUT, ExeatReconciliation.Outcome.RETURNED) and not departure:
+            self.add_error("actual_departure", "Enter the confirmed or best-known departure time.")
+        if outcome == ExeatReconciliation.Outcome.RETURNED and not returned:
+            self.add_error("actual_return", "Enter the confirmed or best-known return time.")
+        if outcome == ExeatReconciliation.Outcome.UNUSED and (departure or returned):
+            self.add_error("actual_departure", "An unused pass cannot have travel timestamps.")
+        if outcome != ExeatReconciliation.Outcome.RETURNED and returned:
+            self.add_error("actual_return", "A return time is only valid when the student has returned.")
+        if departure and returned and returned <= departure:
+            self.add_error("actual_return", "Return time must be after departure time.")
         return cleaned_data
 
 
@@ -223,7 +277,6 @@ class DisciplinaryRecordForm(forms.ModelForm):
             'severity',
             'action_taken',
             'description',
-            'logged_by',
         ]
         widgets = {
             'student': forms.HiddenInput(),
@@ -243,15 +296,7 @@ class DisciplinaryRecordForm(forms.ModelForm):
                 'placeholder': 'Provide specific details regarding the incident, time/location observed, and any witness statements...',
                 'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition'
             }),
-            'logged_by': forms.Select(attrs={
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition'
-            }),
         }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['logged_by'].queryset = HouseMaster.objects.select_related('house').all()
-        self.fields['logged_by'].required = False
 
     def clean(self):
         cleaned_data = super().clean()
@@ -265,4 +310,3 @@ class DisciplinaryRecordForm(forms.ModelForm):
             raise ValidationError({'offense': "Please state the offense or infraction title."})
 
         return cleaned_data
-

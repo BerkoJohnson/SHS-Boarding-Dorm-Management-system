@@ -301,9 +301,9 @@ class UserProfile(BaseModel):
 
     def can_log_gate_movement(self) -> bool:
         """
-        Gate officers, housemasters, and admins can log departure and return at the security gate.
+        Only system administrators and assigned Gate Officers can log gate movements.
         """
-        return self.is_admin or self.is_senior_housemaster or self.is_gate_officer or self.is_housemaster
+        return self.is_admin or self.role == StaffRole.GATE_OFFICER
 
 
 class HouseMaster(BaseModel):
@@ -379,7 +379,7 @@ class HouseMaster(BaseModel):
         if self.user:
             profile, _ = UserProfile.objects.get_or_create(user=self.user)
             target_role = StaffRole.SENIOR_HOUSEMASTER if self.is_senior_housemaster else StaffRole.HOUSEMASTER
-            if profile.role != target_role:
+            if profile.role not in (StaffRole.GATE_OFFICER, StaffRole.HOUSE_TUTOR) and profile.role != target_role:
                 profile.role = target_role
                 profile.save(update_fields=['role'])
 
@@ -686,12 +686,22 @@ class Exeat(BaseModel):
         """Dynamic helper combining request status and gate movement state safely."""
         if self.status != self.Status.APPROVED:
             return self.get_status_display()
-        if not self.pk:
-            return "Pass Issued (Awaiting Departure)"
+        try:
+            return self.reconciliation.state_display
+        except ObjectDoesNotExist:
+            pass
         try:
             return self.movement.state_display
         except ObjectDoesNotExist:
-            return "Pass Issued (Awaiting Departure)"
+            return self._scheduled_movement_state()
+
+    def _scheduled_movement_state(self, now=None):
+        now = now or timezone.now()
+        if now >= self.expected_return:
+            return "Pass Unresolved"
+        if now >= self.expected_departure:
+            return "Departure Not Recorded"
+        return "Awaiting Departure"
 
     def __str__(self):
         return f"{self.exeat_number} - {self.student.full_name} ({self.get_exeat_type_display()})"
@@ -742,7 +752,7 @@ class ExeatMovement(BaseModel):
     def is_overdue(self):
         """Returns True if student is currently out past their expected return datetime."""
         if self.is_currently_out and self.exeat.expected_return:
-            return timezone.now() > self.exeat.expected_return
+            return timezone.now() >= self.exeat.expected_return
         return False
 
     @property
@@ -754,10 +764,92 @@ class ExeatMovement(BaseModel):
             return "OVERDUE (Student Out)"
         if self.is_currently_out:
             return "Active (Student Out)"
+        if self.exeat.status == Exeat.Status.APPROVED:
+            return self.exeat._scheduled_movement_state()
         return "Pending Departure"
 
     def __str__(self):
         return f"Gate Log: {self.exeat.exeat_number} - {self.state_display}"
+
+
+class ExeatReconciliation(BaseModel):
+    """Audited staff resolution for an approved pass with missing gate records."""
+
+    class Outcome(models.TextChoices):
+        UNUSED = "unused", "Pass not used"
+        STUDENT_OUT = "student_out", "Student travelled and is still out"
+        RETURNED = "returned", "Student travelled and has returned"
+
+    exeat = models.OneToOneField(
+        Exeat,
+        on_delete=models.CASCADE,
+        related_name="reconciliation",
+    )
+    outcome = models.CharField(max_length=20, choices=Outcome.choices)
+    actual_departure = models.DateTimeField(null=True, blank=True)
+    actual_return = models.DateTimeField(null=True, blank=True)
+    reason = models.TextField(help_text="Evidence or explanation for reconciling missing gate records.")
+    reconciled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reconciled_exeats",
+    )
+    return_recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reconciled_exeat_returns",
+    )
+
+    class Meta:
+        verbose_name = "Exeat Movement Reconciliation"
+        verbose_name_plural = "Exeat Movement Reconciliations"
+
+    def clean(self):
+        super().clean()
+        if self.exeat_id and self.exeat.status != Exeat.Status.APPROVED:
+            raise ValidationError({"exeat": "Only approved exeats can be reconciled."})
+
+        movement = ExeatMovement.objects.filter(exeat_id=self.exeat_id).first() if self.exeat_id else None
+        if movement and (movement.actual_departure or movement.actual_return):
+            raise ValidationError({"exeat": "A pass with recorded gate movement cannot be reconciled."})
+
+        if self.outcome == self.Outcome.UNUSED:
+            if self.actual_departure or self.actual_return:
+                raise ValidationError({"outcome": "An unused pass cannot have travel timestamps."})
+        elif self.outcome == self.Outcome.STUDENT_OUT:
+            if not self.actual_departure:
+                raise ValidationError({"actual_departure": "Record the confirmed or best-known departure time."})
+            if self.actual_return:
+                raise ValidationError({"actual_return": "A student still out cannot have a return time."})
+        elif self.outcome == self.Outcome.RETURNED:
+            if not self.actual_departure:
+                raise ValidationError({"actual_departure": "Record the confirmed or best-known departure time."})
+            if not self.actual_return:
+                raise ValidationError({"actual_return": "Record the confirmed or best-known return time."})
+
+        if self.actual_departure and self.actual_return and self.actual_return <= self.actual_departure:
+            raise ValidationError({"actual_return": "Actual return must be after actual departure."})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @property
+    def state_display(self):
+        if self.outcome == self.Outcome.UNUSED:
+            return "Pass Unused"
+        if self.outcome == self.Outcome.RETURNED:
+            return "Returned (Reconciled)"
+        if timezone.now() >= self.exeat.expected_return:
+            return "OVERDUE (Reconciled)"
+        return "Student Out (Reconciled)"
+
+    def __str__(self):
+        return f"Reconciliation: {self.exeat.exeat_number} ({self.get_outcome_display()})"
 
 
 class DisciplinaryRecord(BaseModel):
@@ -969,7 +1061,7 @@ def get_user_profile(user):
     hm = getattr(user, 'housemaster', None)
     if hm:
         target_role = StaffRole.SENIOR_HOUSEMASTER if hm.is_senior_housemaster else StaffRole.HOUSEMASTER
-        if profile.role != target_role:
+        if profile.role not in (StaffRole.GATE_OFFICER, StaffRole.HOUSE_TUTOR) and profile.role != target_role:
             profile.role = target_role
             profile.save(update_fields=['role'])
 
@@ -1023,13 +1115,8 @@ def get_approvable_pending_for_user(user):
     if profile.role in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER):
         return base_qs
 
-    # HOUSEMASTER: only their own assigned house
-    # Prefer direct OneToOne on user; fall back to staff_id/username lookup for legacy rows
+    # HOUSEMASTER: only their directly assigned house
     hm = getattr(user, 'housemaster', None)
-    if hm is None:
-        hm = HouseMaster.objects.filter(
-            models.Q(staff_id__iexact=user.username) | models.Q(full_name__icontains=user.username)
-        ).first()
 
     if hm:
         # Senior flag could be set on the HouseMaster row even if role on profile drifted
@@ -1104,12 +1191,18 @@ def get_exeat_queue_stats(scoped_pending_qs, user):
     stats['rejected_today'] = today_by_me.filter(status=Exeat.Status.REJECTED).count()
 
     # --- Overdue currently-out (cross queue context for approvers) ---
-    stats['overdue_returns'] = ExeatMovement.objects.filter(
-        actual_departure__isnull=False,
-        actual_return__isnull=True,
-        exeat__expected_return__lt=now,
+    stats['overdue_returns'] = Exeat.objects.filter(
+        status=Exeat.Status.APPROVED,
+        expected_return__lte=now,
+    ).filter(
+        _Q(movement__actual_departure__isnull=False, movement__actual_return__isnull=True)
+        | _Q(
+            reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+            reconciliation__actual_return__isnull=True,
+        )
+    ).filter(
         # For regular Housemasters scope overdue to their own house, not global
-        exeat__student__house_id__in=list(
+        student__house_id__in=list(
             set(
                 e.student.house_id
                 for e in scoped_pending_qs.select_related('student__house')

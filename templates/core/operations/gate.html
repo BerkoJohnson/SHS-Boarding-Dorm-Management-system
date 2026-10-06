@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}Gate Security - Eden High School{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <div class="bg-white rounded-xl border border-slate-200/90 p-4 shadow-xs">
+    <div class="flex items-center gap-2">
+      <h1 class="text-base font-bold text-slate-900">Gate Security</h1>
+      <span class="px-2 py-0.5 text-[10px] font-semibold bg-slate-100 text-slate-700 rounded-md">
+        Exeat Pass Verification
+      </span>
+    </div>
+    <p class="text-xs text-slate-500 mt-0.5">
+      Verify authorized exeat passes and record departures and returns at the gate.
+    </p>
+  </div>
+
+  {% include "core/operations/partials/gate_terminal_body.html" %}
+</div>
+{% endblock %}

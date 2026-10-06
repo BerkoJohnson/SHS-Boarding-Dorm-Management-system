@@ -19,6 +19,11 @@
 
         <div class="flex items-center gap-2">
             {% if exeat.status == 'Approved' %}
+            {% if can_approve_exeat and current_time >= exeat.expected_departure and not exeat.movement.actual_departure and not exeat.reconciliation %}
+            <a href="{% url 'core:exeat_reconcile' exeat.pk %}" class="px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-800 rounded-lg text-xs font-semibold border border-orange-200">
+                Reconcile Missing Movement
+            </a>
+            {% endif %}
             <button type="button" 
                     onclick="window.print()" 
                     class="px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition shadow-sm">
@@ -307,6 +312,32 @@
             </div>
         </div>
 
+        {% if exeat.reconciliation %}
+        <div class="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-2 text-xs">
+            <h3 class="font-bold text-xs text-orange-900 uppercase tracking-wide">Movement Reconciliation</h3>
+            <p class="font-semibold text-orange-900">{{ exeat.reconciliation.get_outcome_display }}</p>
+            {% if exeat.reconciliation.actual_departure %}
+            <p>Best-known departure: {{ exeat.reconciliation.actual_departure|date:"d M Y, H:i" }}</p>
+            {% endif %}
+            {% if exeat.reconciliation.actual_return %}
+            <p>Best-known return: {{ exeat.reconciliation.actual_return|date:"d M Y, H:i" }}</p>
+            {% endif %}
+            <p class="whitespace-pre-line">{{ exeat.reconciliation.reason }}</p>
+            <p class="text-orange-800">
+                Reconciled by
+                {% if exeat.reconciliation.reconciled_by %}
+                    {{ exeat.reconciliation.reconciled_by.get_full_name|default:exeat.reconciliation.reconciled_by.username }}
+                {% else %}
+                    Unknown
+                {% endif %}
+                at {{ exeat.reconciliation.created_at|date:"d M Y, H:i" }}.
+                {% if exeat.reconciliation.return_recorded_by %}
+                Return logged by {{ exeat.reconciliation.return_recorded_by.get_full_name|default:exeat.reconciliation.return_recorded_by.username }}.
+                {% endif %}
+            </p>
+        </div>
+        {% endif %}
+
         <!-- Official Signatures & Stamps Footer -->
         <div class="pt-6 border-t border-slate-200 grid grid-cols-2 gap-8 text-center text-xs">
             <div>
@@ -340,7 +371,11 @@
             <div>
                 <div class="text-slate-400 uppercase tracking-wider font-semibold text-[10px] mb-0.5">Requested By</div>
                 <div class="font-bold text-slate-800">
-                    {{ exeat.created_by.get_full_name|default:exeat.created_by.username|default:"Unknown" }}
+                    {% if exeat.created_by %}
+                        {{ exeat.created_by.get_full_name|default:exeat.created_by.username }}
+                    {% else %}
+                        Unknown
+                    {% endif %}
                 </div>
                 <div class="text-slate-500">Submitted {{ exeat.created_at|date:"d M Y, H:i" }}</div>
             </div>

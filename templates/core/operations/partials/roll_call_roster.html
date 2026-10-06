@@ -88,7 +88,7 @@
     <!-- Student Attendance Roster Table -->
     <div class="bg-white rounded-xl border border-slate-200/90 overflow-hidden shadow-xs">
       <div class="px-4 py-2.5 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between">
-        <span class="text-xs font-semibold text-slate-700">Dormitory Roster ({{ session_entries|length }} Students)</span>
+        <span class="text-xs font-semibold text-slate-700">Dormitory Roster ({{ session_entries.paginator.count }} Students)</span>
         {% if current_session.status == 'In Progress' %}
           <span class="text-[11px] text-slate-400">Click any status button to update instantly via HTMX</span>
         {% else %}
@@ -116,6 +116,7 @@
         </div>
       </div>
     </div>
+    {% include "core/partials/pagination_controls.html" with pagination_page=session_entries_page pagination_query=pagination_query pagination_parameter=pagination_parameter pagination_target="#roll-call-roster" %}
   {% else %}
     <!-- Empty State: No active session selected -->
     <div class="bg-white rounded-xl border border-slate-200/90 p-12 text-center shadow-xs">

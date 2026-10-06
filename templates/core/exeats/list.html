@@ -13,8 +13,8 @@
         <div>
             <div class="flex items-center gap-2">
                 <h2 class="font-bold text-slate-900 text-sm tracking-tight">Exeat Register</h2>
-                <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-                    {{ total_count|default:exeats|length }} Total
+                <span id="exeat-total-count" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+                    {{ total_count }} Total
                 </span>
             </div>
             <p class="text-2xs text-slate-400 mt-0.5">
@@ -56,6 +56,15 @@
                 </svg>
             </div>
 
+            <a href="{% url 'core:exeat_list' %}{% if request.GET %}?{{ request.GET.urlencode }}{% endif %}"
+               class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-2xs transition hover:bg-slate-50 hover:text-slate-800"
+               title="Refresh exeat statuses">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7v5h-5M4 17v-5h5m-4.5-3a8 8 0 0113.2-3L20 12M4 12l2.3 2.5A8 8 0 0019.5 14"/>
+                </svg>
+                <span>Refresh statuses</span>
+            </a>
+
             <!-- Interactive Filters Toggle Button -->
             <button type="button"
                     @click="showFilters = !showFilters"
@@ -76,7 +85,7 @@
         <!-- ====================================================== -->
         <!-- TWO-STEP WORKFLOW QUICK-FILTER CHIPS (Step 1 / Step 2) -->
         <!-- ====================================================== -->
-        <div class="flex items-center gap-1.5 pt-2 overflow-x-auto text-[10px] pb-0.5">
+        {% comment %} <div class="flex items-center gap-1.5 pt-2 overflow-x-auto text-[10px] pb-0.5">
             {% if can_approve_exeat %}
             <a href="{% url 'core:exeat_list' %}?status=approvals"
                hx-get="{% url 'core:exeat_list' %}?status=approvals"
@@ -191,7 +200,7 @@
                 </svg>
                 Show All
             </a>
-        </div>
+        </div> {% endcomment %}
 
         <!-- Collapsible Multi-Criteria Filter Drawer -->
         <div x-show="showFilters" 
@@ -223,6 +232,7 @@
                     <option value="">All States</option>
                     <option value="active_out" {% if selected_status == 'active_out' %}selected{% endif %}>Active (Student Out)</option>
                     <option value="overdue" {% if selected_status == 'overdue' %}selected{% endif %}>Overdue Returns</option>
+                    <option value="unresolved" {% if selected_status == 'unresolved' %}selected{% endif %}>Pass Unresolved (No Movement Record) — {{ count_unresolved }}</option>
                     <option value="returned" {% if selected_status == 'returned' %}selected{% endif %}>Returned</option>
                     <option value="Pending" {% if selected_status == 'Pending' %}selected{% endif %}>Pending Approval</option>
                     <option value="Approved" {% if selected_status == 'Approved' %}selected{% endif %}>Approved (Pass Issued)</option>

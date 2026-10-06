@@ -100,6 +100,7 @@
       {% endif %}
 
       <!-- Exeats & Movement -->
+      {% if can_view_exeats %}
       <a href="{% url 'core:exeat_list' %}" 
          class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name == 'exeat_list' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
         {% if request.resolver_match.url_name == 'exeat_list' %}
@@ -110,6 +111,7 @@
         </svg>
         <span x-show="!sidebarCollapsed" class="truncate">Exeats & Movement</span>
       </a>
+      {% endif %}
 
       <!-- Conduct & Discipline -->
       {% if can_view_conduct %}
@@ -132,36 +134,46 @@
       </div>
       {% endif %}
 
-      <!-- Operations Hub / Gate Terminal / Roll Call -->
+      <!-- Roll Call and Gate Security -->
       {% if can_access_roll_call and can_access_gate %}
-        <a href="{% url 'core:roll_call_gate_hub' %}" 
-           class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'roll_call_gate_hub roll_call_create roll_call_detail' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
-          {% if request.resolver_match.url_name in 'roll_call_gate_hub roll_call_create roll_call_detail' %}
+        <a href="{% url 'core:roll_call_sessions' %}"
+           class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'roll_call_sessions roll_call_create roll_call_complete roll_call_mark_all_present roll_call_update_entry' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
+          {% if request.resolver_match.url_name in 'roll_call_sessions roll_call_create roll_call_complete roll_call_mark_all_present roll_call_update_entry' %}
             <span class="absolute left-0 top-1.5 bottom-1.5 w-1 bg-brand-500 rounded-r"></span>
           {% endif %}
-          <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'roll_call_gate_hub roll_call_create roll_call_detail' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'roll_call_sessions roll_call_create roll_call_complete roll_call_mark_all_present roll_call_update_entry' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
           </svg>
-          <span x-show="!sidebarCollapsed" class="truncate">Roll Call & Gate</span>
+          <span x-show="!sidebarCollapsed" class="truncate">Roll Call Sessions</span>
         </a>
-      {% elif can_access_gate %}
-        <a href="{% url 'core:roll_call_gate_hub' %}?tab=gate" 
-           class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'roll_call_gate_hub' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
-          {% if request.resolver_match.url_name in 'roll_call_gate_hub' %}
+        <a href="{% url 'core:gate_security' %}"
+           class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'gate_security gate_terminal_action gate_verify_pass' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
+          {% if request.resolver_match.url_name in 'gate_security gate_terminal_action gate_verify_pass' %}
             <span class="absolute left-0 top-1.5 bottom-1.5 w-1 bg-brand-500 rounded-r"></span>
           {% endif %}
-          <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'roll_call_gate_hub' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'gate_security gate_terminal_action gate_verify_pass' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
           </svg>
-          <span x-show="!sidebarCollapsed" class="truncate">Gate Terminal</span>
+          <span x-show="!sidebarCollapsed" class="truncate">Gate Security</span>
         </a>
-      {% elif can_access_roll_call %}
-        <a href="{% url 'core:roll_call_gate_hub' %}?tab=roll_call" 
-           class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'roll_call_gate_hub roll_call_create roll_call_detail' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
-          {% if request.resolver_match.url_name in 'roll_call_gate_hub roll_call_create roll_call_detail' %}
+      {% elif can_access_gate %}
+        <a href="{% url 'core:gate_security' %}"
+           class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'gate_security gate_terminal_action gate_verify_pass' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
+          {% if request.resolver_match.url_name in 'gate_security gate_terminal_action gate_verify_pass' %}
             <span class="absolute left-0 top-1.5 bottom-1.5 w-1 bg-brand-500 rounded-r"></span>
           {% endif %}
-          <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'roll_call_gate_hub roll_call_create roll_call_detail' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'gate_security gate_terminal_action gate_verify_pass' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+          </svg>
+          <span x-show="!sidebarCollapsed" class="truncate">Gate Security</span>
+        </a>
+      {% elif can_access_roll_call %}
+        <a href="{% url 'core:roll_call_sessions' %}"
+           class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'roll_call_sessions roll_call_create roll_call_complete roll_call_mark_all_present roll_call_update_entry' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
+          {% if request.resolver_match.url_name in 'roll_call_sessions roll_call_create roll_call_complete roll_call_mark_all_present roll_call_update_entry' %}
+            <span class="absolute left-0 top-1.5 bottom-1.5 w-1 bg-brand-500 rounded-r"></span>
+          {% endif %}
+          <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'roll_call_sessions roll_call_create roll_call_complete roll_call_mark_all_present roll_call_update_entry' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
           </svg>
           <span x-show="!sidebarCollapsed" class="truncate">Roll Call Sessions</span>
@@ -306,7 +318,9 @@
           {% else %}
           <span class="text-slate-400">Eden High School</span>
           {% endif %}
+          {% if can_view_houses %}
           <a href="{% url 'core:house_list' %}" class="text-slate-500 hover:text-slate-800">Campus Oversight</a>
+          {% endif %}
         </div>
 
       </div>
@@ -350,7 +364,7 @@
 
         <!-- Gate Check Action (Secondary Button matching Image) -->
         {% if can_access_gate %}
-        <a href="{% url 'core:roll_call_gate_hub' %}?tab=gate" 
+        <a href="{% url 'core:gate_security' %}"
            class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#1e293b] hover:bg-slate-700 text-slate-100 font-medium rounded-lg text-xs transition shadow-sm">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
@@ -404,4 +418,3 @@
   {% block extra_scripts %}{% endblock %}
 </body>
 </html>
-

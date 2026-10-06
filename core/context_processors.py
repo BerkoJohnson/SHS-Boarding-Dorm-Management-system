@@ -5,19 +5,19 @@ from typing import Dict, Any, List
 from django.utils import timezone
 from django.db.models import Q
 from core.models import (
-    Exeat, ExeatMovement, DisciplinaryRecord, HouseMaster, StaffRole,
+    Exeat, ExeatReconciliation, DisciplinaryRecord, StaffRole,
     get_user_profile, get_approvable_pending_for_user,
 )
 from core.permissions import (
     ADMIN_ROLES,
     ROLL_CALL_ROLES,
     GATE_ROLES,
-    OPERATIONS_ROLES,
     EXEAT_ROLES,
     EXEAT_APPROVAL_ROLES,
     EXEAT_CREATE_ROLES,
     CONDUCT_ROLES,
     HOUSE_ROLES,
+    REPORT_ROLES,
 )
 
 
@@ -65,6 +65,7 @@ def header_context(request) -> Dict[str, Any]:
             "user_assigned_house": None,
             "can_view_houses": False,
             "can_view_conduct": False,
+            "can_view_exeats": False,
             "can_view_reports": False,
             "can_view_config": False,
             "can_create_exeat": False,
@@ -75,15 +76,50 @@ def header_context(request) -> Dict[str, Any]:
 
     now = timezone.now()
     user = request.user
+    profile = get_user_profile(user)
+    role = profile.role if profile else None
+    housemaster = getattr(user, 'housemaster', None)
+    is_school_wide = user.is_superuser or role in ADMIN_ROLES
+    assigned_house = housemaster.house if housemaster else None
+    house_scope_id = (
+        None if is_school_wide else housemaster.house_id if housemaster else None
+    )
+    has_house_scope = is_school_wide or house_scope_id is not None
 
     # 1. Overdue Exeats (Students departed through gate but past expected return)
-    overdue_movements = ExeatMovement.objects.filter(
-        actual_departure__isnull=False,
-        actual_return__isnull=True,
-        exeat__expected_return__lt=now,
-    ).select_related("exeat__student__house", "exeat__student").order_by("exeat__expected_return")
+    overdue_exeats = Exeat.objects.filter(
+        status=Exeat.Status.APPROVED,
+        expected_return__lte=now,
+    ).filter(
+        Q(movement__actual_departure__isnull=False, movement__actual_return__isnull=True)
+        | Q(
+            reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+            reconciliation__actual_return__isnull=True,
+        )
+    ).select_related("student__house", "student").order_by("expected_return")
+    if not is_school_wide:
+        overdue_exeats = (
+            overdue_exeats.filter(student__house_id=house_scope_id)
+            if house_scope_id is not None
+            else overdue_exeats.none()
+        )
 
-    overdue_count = overdue_movements.count()
+    overdue_count = overdue_exeats.count()
+
+    unresolved_exeats = Exeat.objects.filter(
+        status=Exeat.Status.APPROVED,
+        expected_return__lte=now,
+        movement__actual_departure__isnull=True,
+        movement__actual_return__isnull=True,
+        reconciliation__isnull=True,
+    ).select_related("student__house", "student").order_by("expected_return")
+    if not is_school_wide:
+        unresolved_exeats = (
+            unresolved_exeats.filter(student__house_id=house_scope_id)
+            if house_scope_id is not None
+            else unresolved_exeats.none()
+        )
+    unresolved_count = unresolved_exeats.count()
 
     # 2. Pending Exeats requiring approval — SCOPED to user jurisdiction
     #    Admins and Senior Housemasters see all pending requests; regular
@@ -95,17 +131,25 @@ def header_context(request) -> Dict[str, Any]:
     critical_records = DisciplinaryRecord.objects.filter(
         severity=DisciplinaryRecord.Severity.CRITICAL
     ).select_related("student", "student__house").order_by("-created_at")
+    if role not in CONDUCT_ROLES and role not in ADMIN_ROLES:
+        critical_records = critical_records.none()
+    if not is_school_wide:
+        critical_records = (
+            critical_records.filter(student__house_id=house_scope_id)
+            if house_scope_id is not None
+            else critical_records.none()
+        )
 
     critical_count = critical_records.count()
 
     # Build structured list of notification items for dropdown presentation
     notifications: List[Dict[str, Any]] = []
 
-    for movement in overdue_movements[:4]:
-        student = movement.exeat.student
+    for exeat in overdue_exeats[:4]:
+        student = exeat.student
         hours_overdue = 1
-        if movement.exeat.expected_return:
-            diff = now - movement.exeat.expected_return
+        if exeat.expected_return:
+            diff = now - exeat.expected_return
             hours_overdue = max(1, int(diff.total_seconds() // 3600))
 
         house_name = student.house.name if student.house else "Boarding House"
@@ -115,8 +159,22 @@ def header_context(request) -> Dict[str, Any]:
             "title": f"{student.full_name} is Overdue",
             "subtitle": f"{hours_overdue}h overdue • {house_name}",
             "time_ago": f"{hours_overdue}h late",
-            "url": f"/exeats/{movement.exeat_id}/",
+            "url": f"/exeats/{exeat.id}/",
             "badge_color": "rose",
+            "icon": "alert-triangle",
+        })
+
+    for exeat in unresolved_exeats[:3]:
+        student = exeat.student
+        house_name = student.house.name if student.house else "Boarding House"
+        notifications.append({
+            "category": "unresolved",
+            "category_label": "Pass Movement Follow-up",
+            "title": f"{student.full_name}: pass unresolved",
+            "subtitle": f"No movement record • {house_name}",
+            "time_ago": "Needs follow-up",
+            "url": f"/exeats/{exeat.id}/",
+            "badge_color": "amber",
             "icon": "alert-triangle",
         })
 
@@ -148,69 +206,56 @@ def header_context(request) -> Dict[str, Any]:
             "icon": "shield-alert",
         })
 
-    total_notifications = overdue_count + pending_count + critical_count
+    total_notifications = overdue_count + unresolved_count + pending_count + critical_count
 
     # 4. User identity and Housemaster profile resolution
     user_initials = get_user_initials(user)
-    profile = get_user_profile(user)
-
-    # First check direct OneToOne relationship on user
-    housemaster = getattr(user, 'housemaster', None)
-    if not housemaster:
-        # Fallback to staff_id or name lookup for backwards compatibility
-        housemaster = HouseMaster.objects.filter(
-            Q(staff_id__iexact=user.username) | Q(full_name__icontains=user.username)
-        ).select_related("house").first()
-
-    if housemaster:
-        if housemaster.is_senior_housemaster:
-            role_display = "Senior Housemaster"
-        else:
-            role_display = f"Housemaster ({housemaster.house.name if housemaster.house else 'General'})"
-        assigned_house = housemaster.house
-    elif user.is_superuser or (profile and profile.role == StaffRole.ADMIN):
+    if user.is_superuser or role == StaffRole.ADMIN:
         role_display = "System Administrator"
-        assigned_house = None
-    elif profile and profile.role == StaffRole.GATE_OFFICER:
+    elif role == StaffRole.SENIOR_HOUSEMASTER:
+        role_display = "Senior Housemaster"
+    elif role == StaffRole.GATE_OFFICER:
         role_display = "Security / Gate Officer"
-        assigned_house = None
-    elif profile and profile.role == StaffRole.HOUSE_TUTOR:
+    elif role == StaffRole.HOUSE_TUTOR:
         role_display = "House Tutor"
-        assigned_house = None
+    elif housemaster:
+        role_display = (
+            f"Housemaster ({assigned_house.name})"
+            if assigned_house
+            else "Housemaster"
+        )
     elif user.is_staff:
         role_display = "Staff Officer"
-        assigned_house = None
     else:
         role_display = "House Tutor"
-        assigned_house = None
 
     staff_id = housemaster.staff_id if housemaster else getattr(user, 'username', '')
     assigned_dormitory = housemaster.assigned_dormitory if housemaster else None
     phone_number = housemaster.phone_number if housemaster else (profile.phone_number if profile else '')
 
-    if user.is_superuser or (profile and profile.role == StaffRole.ADMIN):
+    if is_school_wide:
         jurisdiction_scope = "Full Institutional Authority"
-    elif housemaster and housemaster.is_senior_housemaster:
+    elif role == StaffRole.SENIOR_HOUSEMASTER:
         jurisdiction_scope = "School-Wide Boarding Oversight"
     elif assigned_house:
         jurisdiction_scope = f"{assigned_house.name} Oversight"
-    elif profile and profile.role == StaffRole.GATE_OFFICER:
-        jurisdiction_scope = "Security Checkpoint Operations"
-    elif profile and profile.role == StaffRole.HOUSE_TUTOR:
+    elif role == StaffRole.GATE_OFFICER:
+        jurisdiction_scope = "House-Scoped Gate Operations"
+    elif role == StaffRole.HOUSE_TUTOR:
         jurisdiction_scope = "House Tutorial & Incident Logging"
     else:
         jurisdiction_scope = "Standard Staff Jurisdiction"
 
-    role = profile.role if profile else None
     is_super = user.is_superuser
-    can_view_houses = is_super or role in HOUSE_ROLES
-    can_view_conduct = is_super or role in CONDUCT_ROLES
-    can_view_reports = is_super or role in ADMIN_ROLES
+    can_view_houses = is_super or (has_house_scope and role in HOUSE_ROLES)
+    can_view_conduct = is_super or (has_house_scope and role in CONDUCT_ROLES)
+    can_view_exeats = is_super or (has_house_scope and role in EXEAT_ROLES)
+    can_view_reports = is_super or (has_house_scope and role in REPORT_ROLES)
     can_view_config = is_super or role in ADMIN_ROLES
-    can_create_exeat = is_super or role in EXEAT_CREATE_ROLES
-    can_approve_exeat = is_super or role in EXEAT_APPROVAL_ROLES
-    can_access_gate = is_super or role in GATE_ROLES
-    can_access_roll_call = is_super or role in ROLL_CALL_ROLES
+    can_create_exeat = is_super or (has_house_scope and role in EXEAT_CREATE_ROLES)
+    can_approve_exeat = is_super or (has_house_scope and role in EXEAT_APPROVAL_ROLES)
+    can_access_gate = is_super or (has_house_scope and role in GATE_ROLES)
+    can_access_roll_call = is_super or (has_house_scope and role in ROLL_CALL_ROLES)
 
     return {
         "notifications": notifications,
@@ -221,6 +266,7 @@ def header_context(request) -> Dict[str, Any]:
         "user_initials": user_initials,
         "user_role_display": role_display,
         "user_assigned_house": assigned_house,
+        "has_house_scope": has_house_scope,
         "user_assigned_dormitory": assigned_dormitory,
         "user_staff_id": staff_id,
         "user_phone": phone_number,
@@ -231,6 +277,7 @@ def header_context(request) -> Dict[str, Any]:
         "is_gate_officer": bool(profile and profile.is_gate_officer),
         "can_view_houses": can_view_houses,
         "can_view_conduct": can_view_conduct,
+        "can_view_exeats": can_view_exeats,
         "can_view_reports": can_view_reports,
         "can_view_config": can_view_config,
         "can_create_exeat": can_create_exeat,

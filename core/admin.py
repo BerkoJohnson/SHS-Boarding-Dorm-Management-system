@@ -10,6 +10,7 @@ from .models import (
     AcademicTerm,
     Exeat,
     ExeatMovement,
+    ExeatReconciliation,
     HouseMaster,
     DisciplinaryRecord,
     UserProfile,
@@ -49,6 +50,14 @@ class ExeatAdmin(admin.ModelAdmin):
 @admin.register(ExeatMovement)
 class ExeatMovementAdmin(admin.ModelAdmin):
     list_display = ('exeat', 'actual_departure', 'actual_return', 'departure_recorded_by', 'return_recorded_by')
+
+
+@admin.register(ExeatReconciliation)
+class ExeatReconciliationAdmin(admin.ModelAdmin):
+    list_display = ('exeat', 'outcome', 'actual_departure', 'actual_return', 'reconciled_by', 'created_at')
+    list_filter = ('outcome', 'created_at')
+    search_fields = ('exeat__exeat_number', 'exeat__student__full_name', 'reason')
+    readonly_fields = ('created_at', 'updated_at')
 
 
 @admin.register(DisciplinaryRecord)

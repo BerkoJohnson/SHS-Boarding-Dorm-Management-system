@@ -8,6 +8,7 @@ from core.models import (
     Dormitory,
     Exeat,
     ExeatMovement,
+    ExeatReconciliation,
     DisciplinaryRecord,
     AcademicYear,
     AcademicTerm,
@@ -32,7 +33,10 @@ class DashboardViewTests(TestCase):
     """Integration and unit tests for the enhanced executive dashboard and workspace grid."""
 
     def setUp(self):
-        self.user = User.objects.create_user(username='test_housemaster', password='password123')
+        self.user = User.objects.create_superuser(
+            username='test_housemaster',
+            password='password123',
+        )
         
         # Setup academic year & term
         self.year = AcademicYear.objects.create(
@@ -106,7 +110,125 @@ class DashboardViewTests(TestCase):
         self.client.force_login(self.user)
         response = self.client.get('/?table_only=1&q=Kwame&status=all', HTTP_HX_REQUEST='true')
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Student & Details', response.content)
+        self.assertIn(b'Pass</th>', response.content)
+
+    def test_dashboard_exeat_table_shows_latest_five(self):
+        """Dashboard uses the shared exeat table and limits it to the latest five records."""
+        self.client.force_login(self.user)
+        now = timezone.now()
+        created_exeats = [
+            Exeat.objects.create(
+                exeat_number=f'DASHBOARD-{index:02d}',
+                student=self.boarder,
+                exeat_type=Exeat.ExeatType.TOWN,
+                expected_departure=now + timezone.timedelta(hours=1),
+                expected_return=now + timezone.timedelta(hours=3),
+                destination='Town',
+                reason='Errand',
+                status=Exeat.Status.PENDING,
+            )
+            for index in range(6)
+        ]
+
+        response = self.client.get('/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context['recent_exeats']), 5)
+        self.assertEqual(response.context['total_matching_exeats'], 6)
+        self.assertNotIn(created_exeats[0].exeat_number.encode(), response.content)
+        self.assertIn(created_exeats[-1].exeat_number.encode(), response.content)
+        self.assertIn(b'Pass</th>', response.content)
+        self.assertIn(b'View Complete Exeat Register', response.content)
+        self.assertIn(b'<strong>5</strong> of <strong>6</strong> matching records', response.content)
+        partial_response = self.client.get(
+            '/?table_only=1&q=DASHBOARD',
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertContains(
+            partial_response,
+            'id="dashboard-exeat-total-count" hx-swap-oob="true"',
+        )
+        self.assertContains(
+            partial_response,
+            '<strong>5</strong> of <strong>6</strong> matching records',
+        )
+
+
+class HouseOperationsViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='housing_admin',
+            password='password123',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.force_login(self.user)
+        self.programme = Programme.objects.create(name='Agriculture', code='AGRIC')
+        self.house = House.objects.create(
+            name='Red House',
+            number=House.HouseNumber.ONE,
+        )
+        self.dormitory = Dormitory.objects.create(
+            house=self.house,
+            name='Block A',
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=2,
+        )
+        self.housemaster = HouseMaster.objects.create(
+            full_name='Master Mensah',
+            staff_id='HOUSING-001',
+            phone_number='+233200000001',
+            house=self.house,
+        )
+
+    def create_boarder(self, suffix):
+        return Student.objects.create(
+            admission_no=f'HOUSING-{suffix}',
+            index_number=f'IDX-HOUSING-{suffix}',
+            full_name=f'Boarder {suffix}',
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=self.house,
+            dormitory=self.dormitory,
+            residency=Student.ResidencyStatus.BOARDING,
+        )
+
+    def test_house_operations_shows_occupancy_and_staff_coverage(self):
+        self.create_boarder('001')
+
+        response = self.client.get('/houses/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['total_boarders'], 1)
+        self.assertEqual(response.context['total_capacity'], 2)
+        self.assertEqual(response.context['overall_occupancy_rate'], 50)
+        house = response.context['houses'][0]
+        self.assertEqual(house.boarder_count, 1)
+        self.assertEqual(house.occupancy_rate, 50)
+        self.assertTrue(house.has_housemaster)
+        self.assertEqual(house.health_label, 'Healthy')
+        self.assertContains(response, 'House health')
+        self.assertContains(response, 'Inspect dormitories and staff')
+
+    def test_house_operations_flags_over_capacity_and_missing_placements(self):
+        self.create_boarder('002')
+        self.create_boarder('003')
+        self.create_boarder('004')
+        self.create_boarder('005')
+        Student.objects.filter(admission_no='HOUSING-005').update(dormitory=None)
+
+        response = self.client.get('/houses/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['unassigned_boarders'], 1)
+        house = response.context['houses'][0]
+        dormitory = house.dormitories.all()[0]
+        self.assertEqual(dormitory.over_capacity_count, 1)
+        self.assertEqual(house.unplaced_boarders, 1)
+        self.assertEqual(house.health_label, 'Critical')
+        self.assertIn('Over capacity: Block A', house.attention_items)
+        self.assertContains(response, 'Placement gaps')
+        self.assertContains(response, 'over capacity')
 
 
 class ExeatCreateViewTests(TestCase):
@@ -139,6 +261,7 @@ class ExeatCreateViewTests(TestCase):
             capacity=100
         )
         self.housemaster = HouseMaster.objects.create(
+            user=self.user,
             full_name='Mr. J. Mensah',
             staff_id='STAFF-001',
             phone_number='+233200000001',
@@ -178,7 +301,7 @@ class ExeatCreateViewTests(TestCase):
         self.assertIn(b'Boarder', response.content)
 
     def test_exeat_create_post_success(self):
-        """POST /exeats/new/ with valid boarding student data creates Exeat & Movement."""
+        """A valid exeat request is submitted pending review without creating gate movement."""
         now = timezone.now()
         data = {
             'student': str(self.boarder.id),
@@ -193,13 +316,13 @@ class ExeatCreateViewTests(TestCase):
         }
         response = self.client.post('/exeats/new/', data)
         self.assertEqual(response.status_code, 302)
-        self.assertRedirects(response, '/')
+        self.assertRedirects(response, '/exeats/')
 
         # Verify record in database
         exeat = Exeat.objects.get(student=self.boarder)
         self.assertEqual(exeat.exeat_type, Exeat.ExeatType.MEDICAL)
-        self.assertEqual(exeat.status, Exeat.Status.APPROVED)
-        self.assertIsNotNone(exeat.movement)
+        self.assertEqual(exeat.status, Exeat.Status.PENDING)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
 
     def test_exeat_create_day_student_rejected(self):
         """POST /exeats/new/ for a Day student must fail validation."""
@@ -235,6 +358,7 @@ class ExeatCreateViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Official Boarding Student Leave Authorization', response.content)
         self.assertIn(exeat.exeat_number.encode(), response.content)
+        self.assertIn(b'Unknown', response.content)
 
     def test_exeat_quick_actions(self):
         """POST /exeats/<pk>/action/<action>/ correctly transitions gate movement and status."""
@@ -257,12 +381,226 @@ class ExeatCreateViewTests(TestCase):
         self.assertIsNotNone(exeat.movement.actual_departure)
         self.assertIsNone(exeat.movement.actual_return)
 
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        cancel_resp = self.client.post(f'/exeats/{exeat.pk}/action/cancel/')
+        self.assertEqual(cancel_resp.status_code, 302)
+        exeat.refresh_from_db()
+        self.assertEqual(exeat.status, Exeat.Status.APPROVED)
+        self.assertIsNone(exeat.movement.actual_return)
+        list_resp = self.client.get('/exeats/')
+        self.assertNotIn(b'<span>Cancel Pass</span>', list_resp.content)
+
         # 2. Log Gate Return
         ret_resp = self.client.post(f'/exeats/{exeat.pk}/action/return/')
         self.assertEqual(ret_resp.status_code, 302)
         exeat.refresh_from_db()
         self.assertIsNotNone(exeat.movement.actual_return)
         self.assertEqual(exeat.movement.state_display, "Returned")
+
+    def test_gate_departure_is_blocked_until_scheduled_time(self):
+        """Gate departure is unavailable before its scheduled time, then succeeds."""
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now + timezone.timedelta(hours=1),
+            expected_return=now + timezone.timedelta(hours=3),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.housemaster,
+        )
+
+        response = self.client.get('/exeats/')
+        self.assertNotIn(b'Log Gate Departure', response.content)
+        self.assertIn(b'Departure available', response.content)
+
+        early_response = self.client.post(f'/exeats/{exeat.pk}/action/departure/')
+
+        self.assertEqual(early_response.status_code, 302)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
+
+        exeat.expected_departure = now - timezone.timedelta(minutes=1)
+        exeat.save(update_fields=['expected_departure'])
+        departure_response = self.client.post(f'/exeats/{exeat.pk}/action/departure/')
+
+        self.assertEqual(departure_response.status_code, 302)
+        movement = ExeatMovement.objects.get(exeat=exeat)
+        self.assertIsNotNone(movement.actual_departure)
+
+    def test_exeat_tables_recalculate_overdue_status_on_each_request(self):
+        """Overdue status and table filters use the current time on every request."""
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now,
+            expected_return=now + timezone.timedelta(minutes=30),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.housemaster,
+        )
+        ExeatMovement.objects.create(exeat=exeat, actual_departure=now)
+
+        dashboard_before = self.client.get('/?table_only=1&status=overdue', HTTP_HX_REQUEST='true')
+        list_before = self.client.get('/exeats/?status=overdue', HTTP_HX_REQUEST='true')
+        self.assertNotIn(exeat.exeat_number.encode(), dashboard_before.content)
+        self.assertNotIn(exeat.exeat_number.encode(), list_before.content)
+
+        exeat.expected_departure = now - timezone.timedelta(hours=1)
+        exeat.expected_return = now - timezone.timedelta(minutes=15)
+        exeat.save(update_fields=['expected_departure', 'expected_return'])
+        dashboard_after = self.client.get('/?table_only=1&status=overdue', HTTP_HX_REQUEST='true')
+        list_after = self.client.get('/exeats/?status=overdue', HTTP_HX_REQUEST='true')
+        self.assertIn(exeat.exeat_number.encode(), dashboard_after.content)
+        self.assertIn(exeat.exeat_number.encode(), list_after.content)
+        self.assertIn(b'Overdue', dashboard_after.content)
+        self.assertIn(b'Overdue', list_after.content)
+
+        dashboard_all = self.client.get('/?table_only=1&status=all', HTTP_HX_REQUEST='true')
+        list_all = self.client.get('/exeats/')
+        self.assertIn(exeat.exeat_number.encode(), dashboard_all.content)
+        self.assertIn(exeat.exeat_number.encode(), list_all.content)
+        self.assertIn(b'Overdue', dashboard_all.content)
+        self.assertIn(b'Overdue', list_all.content)
+
+    def test_pass_past_return_without_departure_is_unresolved_not_overdue(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=3),
+            expected_return=now - timezone.timedelta(hours=1),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.housemaster,
+        )
+
+        register = self.client.get('/exeats/?status=unresolved')
+        self.assertContains(register, exeat.exeat_number)
+        self.assertContains(register, 'Pass Unresolved')
+        self.assertEqual(exeat.current_state, 'Pass Unresolved')
+        self.assertContains(register, 'Reconcile Missing Movement')
+
+    def test_reconciliation_records_unused_pass_without_gate_events(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=3),
+            expected_return=now - timezone.timedelta(hours=1),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.housemaster,
+        )
+
+        response = self.client.post(
+            f'/exeats/{exeat.pk}/reconcile/',
+            {'outcome': 'unused', 'reason': 'Student confirmed they did not leave campus.'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        reconciliation = ExeatReconciliation.objects.get(exeat=exeat)
+        self.assertEqual(reconciliation.reconciled_by, self.user)
+        self.assertEqual(exeat.current_state, 'Pass Unused')
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat, actual_departure__isnull=False).exists())
+        detail = self.client.get(f'/exeats/{exeat.pk}/')
+        self.assertContains(detail, 'Movement Reconciliation')
+        self.assertContains(detail, 'Student confirmed they did not leave campus.')
+
+    def test_reconciled_student_out_can_be_logged_back_in_without_fake_departure(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=3),
+            expected_return=now - timezone.timedelta(hours=1),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.housemaster,
+        )
+        response = self.client.post(
+            f'/exeats/{exeat.pk}/reconcile/',
+            {
+                'outcome': 'student_out',
+                'actual_departure': (now - timezone.timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M'),
+                'reason': 'Housemaster confirmed the student is still away by telephone.',
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        reconciliation = ExeatReconciliation.objects.get(exeat=exeat)
+        self.assertEqual(exeat.current_state, 'OVERDUE (Reconciled)')
+        overdue_list = self.client.get('/exeats/?status=overdue')
+        self.assertContains(overdue_list, exeat.exeat_number)
+        gate_terminal = self.client.get('/operations/gate/')
+        self.assertContains(gate_terminal, 'Staff-reported')
+
+        returned = self.client.post(f'/exeats/{exeat.pk}/action/return/')
+
+        self.assertEqual(returned.status_code, 302)
+        reconciliation.refresh_from_db()
+        self.assertEqual(reconciliation.outcome, ExeatReconciliation.Outcome.RETURNED)
+        self.assertEqual(reconciliation.return_recorded_by, self.user)
+        self.assertIsNotNone(reconciliation.actual_return)
+        exeat.refresh_from_db()
+        self.assertEqual(exeat.current_state, 'Returned (Reconciled)')
+        returned_list = self.client.get('/exeats/?status=returned')
+        self.assertContains(returned_list, exeat.exeat_number)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat, actual_departure__isnull=False).exists())
+
+    def test_return_cannot_infer_a_missing_departure(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=1),
+            expected_return=now + timezone.timedelta(hours=2),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.housemaster,
+        )
+
+        response = self.client.post(f'/exeats/{exeat.pk}/action/return/')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
+
+    def test_rejected_exeat_cannot_be_cancelled(self):
+        """Rejected passes have no cancel action and cannot be cancelled directly."""
+        self.user.is_superuser = True
+        self.user.save(update_fields=['is_superuser'])
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=timezone.now(),
+            expected_return=timezone.now() + timezone.timedelta(hours=2),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.REJECTED,
+        )
+
+        list_response = self.client.get('/exeats/?status=Rejected')
+        self.assertNotIn(b'<span>Cancel Pass</span>', list_response.content)
+
+        cancel_response = self.client.post(f'/exeats/{exeat.pk}/action/cancel/')
+
+        self.assertEqual(cancel_response.status_code, 302)
+        exeat.refresh_from_db()
+        self.assertEqual(exeat.status, Exeat.Status.REJECTED)
 
     def test_exeat_list_filtering(self):
         """GET /exeats/ filters properly by type and status."""
@@ -292,12 +630,59 @@ class ExeatCreateViewTests(TestCase):
         self.assertEqual(resp_med.status_code, 200)
         self.assertIn(medical_exeat.exeat_number.encode(), resp_med.content)
         self.assertNotIn(town_exeat.exeat_number.encode(), resp_med.content)
+        self.assertContains(resp_med, 'Showing <strong>1</strong> of <strong>1</strong> records')
 
         # Filter by status=Pending
         resp_pending = self.client.get('/exeats/?status=Pending')
         self.assertEqual(resp_pending.status_code, 200)
         self.assertIn(town_exeat.exeat_number.encode(), resp_pending.content)
         self.assertNotIn(medical_exeat.exeat_number.encode(), resp_pending.content)
+        self.assertContains(resp_pending, 'Showing <strong>1</strong> of <strong>1</strong> records')
+
+        resp_htmx = self.client.get('/exeats/?type=Medical', HTTP_HX_REQUEST='true')
+        self.assertContains(resp_htmx, 'id="exeat-total-count" hx-swap-oob="true"')
+        self.assertContains(resp_htmx, 'Showing <strong>1</strong> of <strong>1</strong> records')
+
+    def test_exeat_register_paginates_all_matching_records(self):
+        """Exeat Register paginates the full matching queryset and keeps accurate totals."""
+        now = timezone.now()
+        for index in range(101):
+            Exeat.objects.create(
+                exeat_number=f'REGISTER-{index:03d}',
+                student=self.boarder,
+                exeat_type=Exeat.ExeatType.TOWN,
+                expected_departure=now + timezone.timedelta(hours=1),
+                expected_return=now + timezone.timedelta(hours=3),
+                destination='Town',
+                reason='Errand',
+                status=Exeat.Status.PENDING,
+            )
+
+        response = self.client.get('/exeats/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['exeats'].paginator.count, 101)
+        self.assertEqual(len(response.context['exeats']), 10)
+        self.assertContains(response, 'Showing <strong>10</strong> of <strong>101</strong> records')
+        self.assertContains(response, 'aria-label="Table pagination"')
+        self.assertContains(response, 'hx-get="?page=2"')
+        self.assertContains(response, 'hx-target="#exeat-table"')
+
+        last_page = self.client.get('/exeats/?page=11')
+        self.assertEqual(last_page.status_code, 200)
+        self.assertEqual(len(last_page.context['exeats']), 1)
+        self.assertContains(last_page, 'Showing <strong>1</strong> of <strong>101</strong> records')
+        self.assertIn(b'REGISTER-000', last_page.content)
+
+        htmx_page = self.client.get(
+            '/exeats/?type=Town&page=2',
+            HTTP_HX_REQUEST='true',
+            HTTP_HX_TARGET='exeat-table',
+        )
+        self.assertEqual(htmx_page.status_code, 200)
+        self.assertTemplateUsed(htmx_page, 'core/exeats/partials/exeat_table.html')
+        self.assertNotContains(htmx_page, '<!DOCTYPE html>')
+        self.assertContains(htmx_page, 'hx-get="?type=Town&page=1"')
 
 
 class ConductViewTests(TestCase):
@@ -330,6 +715,7 @@ class ConductViewTests(TestCase):
             capacity=100
         )
         self.housemaster = HouseMaster.objects.create(
+            user=self.user,
             full_name='Mr. J. Mensah',
             staff_id='STAFF-001',
             phone_number='+233200000001',
@@ -362,6 +748,7 @@ class ConductViewTests(TestCase):
         self.assertEqual(response.context['total_incidents'], 1)
         self.assertEqual(response.context['major_count'], 1)
         self.assertEqual(response.context['critical_count'], 0)
+        self.assertContains(response, 'Showing <strong>1</strong> of <strong>1</strong> incident logs')
 
     def test_conduct_list_filtering_and_htmx(self):
         """GET /conduct/ filters correctly by severity and query, and supports HTMX partials."""
@@ -391,11 +778,35 @@ class ConductViewTests(TestCase):
         self.assertEqual(resp_q.status_code, 200)
         self.assertIn(b'Missing Roll Call', resp_q.content)
         self.assertNotIn(b'Sneaking Out of Compound', resp_q.content)
+        self.assertContains(resp_q, 'id="conduct-total-count" hx-swap-oob="true"')
+        self.assertContains(resp_q, 'Showing <strong>1</strong> of <strong>1</strong> incident logs')
 
         # HTMX search by student name
         resp_htmx = self.client.get('/conduct/?q=Kofi', HTTP_HX_REQUEST='true')
         self.assertEqual(resp_htmx.status_code, 200)
         self.assertIn(b'Kofi Badu', resp_htmx.content)
+
+    def test_conduct_register_paginates_filtered_records(self):
+        for index in range(16):
+            DisciplinaryRecord.objects.create(
+                student=self.student,
+                offense=f'Pagination incident {index:02d}',
+                severity=DisciplinaryRecord.Severity.MAJOR,
+                action_taken='Follow-up',
+                logged_by=self.housemaster,
+            )
+
+        first_page = self.client.get('/conduct/?severity=Major')
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.context['records'].paginator.count, 16)
+        self.assertEqual(len(first_page.context['records']), 10)
+        self.assertContains(first_page, 'Showing <strong>10</strong> of <strong>16</strong> incident logs')
+
+        second_page = self.client.get('/conduct/?severity=Major&page=2')
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(len(second_page.context['records']), 6)
+        self.assertContains(second_page, 'Pagination incident 00')
+        self.assertContains(second_page, 'severity=Major&page=1')
 
     def test_incident_create_view_get(self):
         """GET /conduct/new/ renders the incident recording form."""
@@ -403,6 +814,61 @@ class ConductViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Record Student Conduct Infraction', response.content)
         self.assertIn(b'Kofi Badu', response.content)
+        self.assertNotIn(b'Reporting Authority', response.content)
+        self.assertNotIn('logged_by', response.context['form'].fields)
+
+    def test_incident_create_view_hides_reporting_authority_for_house_tutor(self):
+        """House tutors do not see or choose the reporting Housemaster field."""
+        tutor = User.objects.create_user(username='conduct_tutor', password='password123')
+        UserProfile.objects.filter(user=tutor).update(role=StaffRole.HOUSE_TUTOR)
+        self.client.force_login(tutor)
+
+        response = self.client.get(f'/conduct/new/?student_id={self.student.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b'Reporting Authority', response.content)
+        self.assertNotIn(b'Logging Housemaster', response.content)
+
+    def test_incident_create_view_defaults_reporting_authority_for_senior_housemaster(self):
+        """Senior Housemasters also default the reporting authority to their own profile."""
+        senior_user = User.objects.create_user(username='senior_master', password='password123')
+        senior_housemaster = HouseMaster.objects.create(
+            user=senior_user,
+            full_name='Senior Housemaster',
+            staff_id='STAFF-SENIOR',
+            phone_number='+233200000002',
+            is_senior_housemaster=True,
+        )
+        self.client.force_login(senior_user)
+
+        response = self.client.get(f'/conduct/new/?student_id={self.student.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b'Reporting Authority', response.content)
+        self.assertNotIn('logged_by', response.context['form'].fields)
+
+    def test_incident_create_view_post_sets_logged_by_from_creator(self):
+        """The creator's Housemaster record is used regardless of submitted authority."""
+        other_housemaster = HouseMaster.objects.create(
+            full_name='Other Housemaster',
+            staff_id='STAFF-OTHER',
+            phone_number='+233200000003',
+            house=self.house,
+        )
+        data = {
+            'student': str(self.student.id),
+            'offense': 'Missing Roll Call',
+            'severity': DisciplinaryRecord.Severity.MINOR,
+            'action_taken': 'Warning',
+            'description': '',
+            'logged_by': str(other_housemaster.id),
+        }
+
+        response = self.client.post('/conduct/new/', data)
+
+        self.assertRedirects(response, '/conduct/')
+        record = DisciplinaryRecord.objects.get(student=self.student, offense='Missing Roll Call')
+        self.assertEqual(record.logged_by, self.housemaster)
 
     def test_incident_create_view_post_success(self):
         """POST /conduct/new/ creates a DisciplinaryRecord and redirects to conduct register."""
@@ -676,6 +1142,13 @@ class UserRolesAndPermissionsTests(TestCase):
 
         # 4. Gate / Security Officer
         self.user_gate = User.objects.create_user(username='gate_officer', password='password123')
+        self.hm_gate = HouseMaster.objects.create(
+            user=self.user_gate,
+            full_name='Gate Officer',
+            staff_id='STF-GATE',
+            phone_number='0241000004',
+            house=self.house1,
+        )
         gate_profile = get_user_profile(self.user_gate)
         gate_profile.role = StaffRole.GATE_OFFICER
         gate_profile.save()
@@ -721,7 +1194,7 @@ class UserRolesAndPermissionsTests(TestCase):
         resp_h2 = self.client.post(f'/exeats/{exeat.pk}/action/approve/', follow=True)
         exeat.refresh_from_db()
         self.assertEqual(exeat.status, Exeat.Status.PENDING)
-        self.assertIn(b'Permission denied', resp_h2.content)
+        self.assertEqual(resp_h2.status_code, 404)
 
         # 2. House 1 Master approves House 1 exeat -> Should succeed
         self.client.login(username='hm_house1', password='password123')
@@ -838,6 +1311,13 @@ class GlobalSearchTests(TestCase):
 
         # 4. User & Housemaster
         self.user = User.objects.create_user(username='search_user', password='password123')
+        self.user_housemaster = HouseMaster.objects.create(
+            user=self.user,
+            full_name='Search User Housemaster',
+            staff_id='STF-SRCH-USER',
+            phone_number='0241000998',
+            house=self.house,
+        )
         self.superuser = User.objects.create_superuser(username='search_admin', password='password123', email='admin@eden.edu')
         self.user_hm = User.objects.create_user(username='search_hm', password='password123')
         self.housemaster = HouseMaster.objects.create(
@@ -1036,6 +1516,13 @@ class RollCallAndGateTests(TestCase):
         )
 
         self.user_gate = User.objects.create_user(username='gate_officer_bob', password='password123')
+        self.gate_hm = HouseMaster.objects.create(
+            user=self.user_gate,
+            full_name='Gate Officer Bob',
+            staff_id='STF-GATE-01',
+            phone_number='0241999777',
+            house=self.house,
+        )
         profile_gate = get_user_profile(self.user_gate)
         profile_gate.role = StaffRole.GATE_OFFICER
         profile_gate.save()
@@ -1044,12 +1531,126 @@ class RollCallAndGateTests(TestCase):
         profile_reg = get_user_profile(self.user_regular)
         profile_reg.role = StaffRole.HOUSE_TUTOR
         profile_reg.save()
+        self.regular_hm = HouseMaster.objects.create(
+            user=self.user_regular,
+            full_name='Assigned House Tutor',
+            staff_id='STF-TUTOR-01',
+            phone_number='0241999666',
+            house=self.house,
+        )
 
-    def test_operations_hub_requires_login(self):
-        """Unauthenticated requests are redirected to login."""
-        resp = self.client.get('/operations/')
-        self.assertEqual(resp.status_code, 302)
-        self.assertIn('/login/', resp.url)
+    def test_separate_operations_pages_require_login_and_combined_page_is_retired(self):
+        """Dedicated pages require login, and the retired combined URL is gone."""
+        for path in ('/operations/roll-call/', '/operations/gate/'):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 302)
+            self.assertIn('/login/', response.url)
+        self.assertEqual(self.client.get('/operations/').status_code, 404)
+
+    def test_roll_call_and_gate_permissions_are_separate_in_sidebar_and_pages(self):
+        """House staff see only their authorized workspace and sidebar link."""
+        self.client.force_login(self.user_hm)
+        home_response = self.client.get('/')
+        self.assertTrue(home_response.context['can_access_roll_call'])
+        self.assertFalse(home_response.context['can_access_gate'])
+        self.assertContains(home_response, 'href="/operations/roll-call/"')
+        self.assertNotContains(home_response, 'href="/operations/gate/"')
+
+        response = self.client.get('/operations/roll-call/')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Roll Call Sessions')
+        self.assertNotContains(response, 'Gate Security & Movement Terminal')
+        self.assertNotContains(response, 'Currently Out')
+        self.assertNotContains(response, 'Overdue at Gate')
+
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder1,
+            academic_term=self.term,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(minutes=1),
+            expected_return=now + timezone.timedelta(hours=2),
+            destination='Town',
+            reason='Test restricted gate access',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.hm,
+        )
+        response = self.client.post(f'/operations/gate/{exeat.pk}/departure/')
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
+
+        response = self.client.get('/operations/gate/')
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
+
+        housemaster_profile = get_user_profile(self.user_hm)
+        housemaster_profile.role = StaffRole.SENIOR_HOUSEMASTER
+        housemaster_profile.save(update_fields=['role'])
+        senior_home_response = self.client.get('/')
+        self.assertTrue(senior_home_response.context['can_access_roll_call'])
+        self.assertFalse(senior_home_response.context['can_access_gate'])
+        self.assertNotContains(senior_home_response, 'href="/operations/gate/"')
+        self.assertEqual(self.client.get('/operations/gate/').status_code, 302)
+
+        self.client.force_login(self.user_gate)
+        home_response = self.client.get('/')
+        self.assertFalse(home_response.context['can_access_roll_call'])
+        self.assertTrue(home_response.context['can_access_gate'])
+        self.assertContains(home_response, 'href="/operations/gate/"')
+        self.assertNotContains(home_response, 'href="/operations/roll-call/"')
+
+        response = self.client.get('/operations/roll-call/')
+        self.assertEqual(response.status_code, 302)
+        response = self.client.get('/operations/gate/')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Gate Security & Movement Terminal')
+        self.assertNotContains(response, 'Dormitory Roster')
+        self.assertNotContains(response, 'id="modal-title"')
+
+        response = self.client.post('/operations/roll-call/new/', {
+            'house': str(self.house.pk),
+            'session_type': RollCallSession.SessionType.EVENING,
+        })
+        self.assertEqual(response.status_code, 302)
+
+        self.client.force_login(self.user_regular)
+        home_response = self.client.get('/')
+        self.assertFalse(home_response.context['can_access_roll_call'])
+        self.assertFalse(home_response.context['can_access_gate'])
+        self.assertNotContains(home_response, 'href="/operations/roll-call/"')
+        self.assertNotContains(
+            home_response,
+            'href="/operations/gate/"',
+        )
+        response = self.client.get('/operations/roll-call/')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.get('/operations/gate/').status_code, 302)
+
+    def test_admin_can_access_both_separate_workspaces(self):
+        admin = User.objects.create_user(
+            username='operations_admin',
+            email='operations-admin@example.com',
+            password='password123',
+        )
+        admin_profile = get_user_profile(admin)
+        admin_profile.role = StaffRole.ADMIN
+        admin_profile.save(update_fields=['role'])
+        self.client.force_login(admin)
+
+        home_response = self.client.get('/')
+        self.assertTrue(home_response.context['can_access_roll_call'])
+        self.assertTrue(home_response.context['can_access_gate'])
+        self.assertContains(home_response, 'Roll Call Sessions')
+        self.assertContains(home_response, 'Gate Security')
+
+        roll_call_response = self.client.get('/operations/roll-call/')
+        gate_response = self.client.get('/operations/gate/')
+        self.assertEqual(roll_call_response.status_code, 200)
+        self.assertEqual(gate_response.status_code, 200)
+        self.assertContains(home_response, 'href="/operations/roll-call/"')
+        self.assertContains(home_response, 'href="/operations/gate/"')
+        self.assertNotContains(roll_call_response, 'Gate Security & Movement Terminal')
+        self.assertNotContains(gate_response, 'Dormitory Roster')
 
     def test_roll_call_session_creation_auto_populates_boarders(self):
         """Roll call auto-populates only boarding students of the target house."""
@@ -1063,6 +1664,103 @@ class RollCallAndGateTests(TestCase):
         self.assertIn(self.boarder1.id, student_ids)
         self.assertIn(self.boarder2.id, student_ids)
         self.assertNotIn(self.day_student.id, student_ids)
+
+    def test_roll_call_roster_is_paginated_and_keeps_session_selected(self):
+        for index in range(15):
+            Student.objects.create(
+                admission_no=f'SHS-PAGE-{index:02d}',
+                index_number=f'IDX-PAGE-{index:02d}',
+                full_name=f'Pagination Student {index:02d}',
+                gender=Student.Gender.MALE,
+                date_of_birth=timezone.now().date() - timezone.timedelta(days=365 * 16),
+                programme=self.programme,
+                residency=Student.ResidencyStatus.BOARDING,
+                house=self.house,
+                dormitory=self.dorm,
+            )
+        session = create_roll_call_session(
+            house=self.house,
+            session_type=RollCallSession.SessionType.EVENING,
+            conducted_by=self.hm,
+        )
+
+        self.client.force_login(self.user_hm)
+        response = self.client.get(
+            f'/operations/roll-call/?session_id={session.pk}&entry_page=2'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['session_entries_page'].paginator.count, 17)
+        self.assertEqual(len(response.context['session_entries_page']), 7)
+        self.assertContains(response, f'session_id={session.pk}&entry_page=1')
+
+        htmx_response = self.client.get(
+            f'/operations/roll-call/?session_id={session.pk}&entry_page=2',
+            HTTP_HX_REQUEST='true',
+            HTTP_HX_TARGET='roll-call-roster',
+        )
+        self.assertTemplateUsed(
+            htmx_response, 'core/operations/partials/roll_call_roster.html'
+        )
+        self.assertNotContains(htmx_response, '<!DOCTYPE html>')
+
+    def test_gate_currently_out_table_paginates_movement_and_reconciliation_rows(self):
+        now = timezone.now()
+        for index in range(16):
+            exeat = Exeat.objects.create(
+                student=self.boarder1,
+                academic_term=self.term,
+                exeat_type=Exeat.ExeatType.TOWN,
+                expected_departure=now - timezone.timedelta(hours=2),
+                expected_return=now + timezone.timedelta(hours=2),
+                destination='Town',
+                reason=f'Gate pagination {index}',
+                status=Exeat.Status.APPROVED,
+                approved_by=self.hm,
+            )
+            ExeatMovement.objects.create(
+                exeat=exeat,
+                actual_departure=now - timezone.timedelta(minutes=index + 1),
+                departure_recorded_by='Gate Officer Bob',
+            )
+
+        reconciled_exeat = Exeat.objects.create(
+            student=self.boarder2,
+            academic_term=self.term,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=2),
+            expected_return=now + timezone.timedelta(hours=2),
+            destination='Town',
+            reason='Reconciled gate pagination',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.hm,
+        )
+        ExeatReconciliation.objects.create(
+            exeat=reconciled_exeat,
+            outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+            actual_departure=now - timezone.timedelta(hours=1),
+            reason='Confirmed departure',
+            reconciled_by=self.user_gate,
+        )
+
+        self.client.force_login(self.user_gate)
+        response = self.client.get('/operations/gate/?out_page=2&movement_page=2')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['active_out_page'].paginator.count, 17)
+        self.assertEqual(len(response.context['active_out_page']), 7)
+        self.assertEqual(len(response.context['recent_movements_page']), 6)
+        self.assertContains(response, 'movement_page=2&out_page=1')
+
+        htmx_response = self.client.get(
+            '/operations/gate/?out_page=2',
+            HTTP_HX_REQUEST='true',
+            HTTP_HX_TARGET='gate-terminal-body',
+        )
+        self.assertTemplateUsed(
+            htmx_response, 'core/operations/partials/gate_terminal_body.html'
+        )
+        self.assertNotContains(htmx_response, '<!DOCTYPE html>')
 
     def test_roll_call_auto_detects_active_exeat(self):
         """Students currently departed on approved exeat are automatically marked ON_EXEAT."""
@@ -1202,6 +1900,273 @@ class RollCallAndGateTests(TestCase):
         self.assertIn(exeat.exeat_number.encode(), resp.content)
 
 
+class HouseScopedAccessTests(TestCase):
+    def setUp(self):
+        today = timezone.now().date()
+        self.year = AcademicYear.objects.create(
+            start_date=today,
+            end_date=today + timezone.timedelta(days=300),
+            is_current=True,
+        )
+        self.term = AcademicTerm.objects.create(
+            academic_year=self.year,
+            term=AcademicTerm.TermChoice.TERM_1,
+            level=AcademicTerm.LevelChoice.ALL,
+            start_date=today,
+            end_date=today + timezone.timedelta(days=90),
+            is_current=True,
+        )
+        self.programme = Programme.objects.create(name='Science', code='SCI')
+        self.house_a = House.objects.create(name='Amber House', number=House.HouseNumber.ONE)
+        self.dorm_a = Dormitory.objects.create(
+            house=self.house_a,
+            name='Amber Block',
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=10,
+        )
+        self.house_b = House.objects.create(name='Cobalt House', number=House.HouseNumber.TWO)
+        self.dorm_b = Dormitory.objects.create(
+            house=self.house_b,
+            name='Cobalt Block',
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=10,
+        )
 
+        self.hm_user = User.objects.create_user(username='amber_hm', password='password123')
+        self.hm_a = HouseMaster.objects.create(
+            user=self.hm_user,
+            full_name='Amber Housemaster',
+            staff_id='SCOPE-HM-A',
+            phone_number='+233200000011',
+            house=self.house_a,
+        )
+        self.hm_b = HouseMaster.objects.create(
+            full_name='Cobalt Housemaster',
+            staff_id='SCOPE-HM-B',
+            phone_number='+233200000012',
+            house=self.house_b,
+        )
 
+        self.gate_user = User.objects.create_user(username='amber_gate', password='password123')
+        self.gate_hm = HouseMaster.objects.create(
+            user=self.gate_user,
+            full_name='Amber Gate Officer',
+            staff_id='SCOPE-GATE-A',
+            phone_number='+233200000013',
+            house=self.house_a,
+        )
+        gate_profile = get_user_profile(self.gate_user)
+        gate_profile.role = StaffRole.GATE_OFFICER
+        gate_profile.save(update_fields=['role'])
 
+        self.tutor_user = User.objects.create_user(username='amber_tutor', password='password123')
+        self.tutor_hm = HouseMaster.objects.create(
+            user=self.tutor_user,
+            full_name='Amber House Tutor',
+            staff_id='SCOPE-TUTOR-A',
+            phone_number='+233200000014',
+            house=self.house_a,
+        )
+        tutor_profile = get_user_profile(self.tutor_user)
+        tutor_profile.role = StaffRole.HOUSE_TUTOR
+        tutor_profile.save(update_fields=['role'])
+
+        self.student_a = self.create_boarder(
+            'SCOPE-A', 'Amber Student', self.house_a, self.dorm_a
+        )
+        self.student_b = self.create_boarder(
+            'SCOPE-B', 'Cobalt Student', self.house_b, self.dorm_b
+        )
+        now = timezone.now()
+        self.exeat_a = self.create_exeat('SCOPE-EX-A', self.student_a, now)
+        self.exeat_b = self.create_exeat('SCOPE-EX-B', self.student_b, now)
+        self.session_a = create_roll_call_session(
+            house=self.house_a,
+            conducted_by=self.hm_a,
+        )
+        self.session_b = create_roll_call_session(
+            house=self.house_b,
+            conducted_by=self.hm_b,
+        )
+
+    def create_boarder(self, suffix, name, house, dormitory):
+        return Student.objects.create(
+            admission_no=suffix,
+            index_number=f'IDX-{suffix}',
+            full_name=name,
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=house,
+            dormitory=dormitory,
+            residency=Student.ResidencyStatus.BOARDING,
+        )
+
+    def create_exeat(self, number, student, now):
+        return Exeat.objects.create(
+            exeat_number=number,
+            student=student,
+            academic_term=self.term,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now,
+            expected_return=now + timezone.timedelta(hours=3),
+            destination='Town',
+            reason='House-scoped test',
+            status=Exeat.Status.PENDING,
+        )
+
+    def test_housemaster_exeat_list_search_and_object_actions_are_scoped(self):
+        self.client.force_login(self.hm_user)
+
+        response = self.client.get('/exeats/')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'SCOPE-EX-A')
+        self.assertNotContains(response, 'SCOPE-EX-B')
+        self.assertEqual(response.context['total_count'], 1)
+
+        response = self.client.get('/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['total_boarders'], 1)
+        self.assertEqual(response.context['total_capacity'], 10)
+        self.assertNotContains(response, 'Cobalt Student')
+
+        response = self.client.get('/exeats/search-students/?q=Student')
+        self.assertContains(response, 'Amber Student')
+        self.assertNotContains(response, 'Cobalt Student')
+
+        response = self.client.get(
+            f'/exeats/new/?student_id={self.student_b.pk}'
+        )
+        self.assertIsNone(response.context['selected_student'])
+        before_create = Exeat.objects.count()
+        response = self.client.post('/exeats/new/', {
+            'student': str(self.student_b.pk),
+            'exeat_type': Exeat.ExeatType.TOWN,
+            'expected_departure': (timezone.now() + timezone.timedelta(hours=1)).strftime(
+                '%Y-%m-%dT%H:%M'
+            ),
+            'expected_return': (timezone.now() + timezone.timedelta(hours=3)).strftime(
+                '%Y-%m-%dT%H:%M'
+            ),
+            'destination': 'Town',
+            'reason': 'Out-of-house application attempt',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Exeat.objects.count(), before_create)
+
+        response = self.client.get(f'/exeats/{self.exeat_b.pk}/')
+        self.assertEqual(response.status_code, 404)
+        response = self.client.post(f'/exeats/{self.exeat_b.pk}/action/cancel/')
+        self.assertEqual(response.status_code, 404)
+        self.exeat_b.refresh_from_db()
+        self.assertEqual(self.exeat_b.status, Exeat.Status.PENDING)
+
+    def test_housemaster_cannot_read_or_change_another_house_roll_call(self):
+        self.client.force_login(self.hm_user)
+
+        response = self.client.get(
+            f'/operations/roll-call/?session_id={self.session_b.pk}'
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [session.pk for session in response.context['recent_sessions']],
+            [self.session_a.pk],
+        )
+        self.assertIsNone(response.context['current_session'])
+
+        response = self.client.post(
+            f'/operations/roll-call/{self.session_b.pk}/complete/'
+        )
+        self.assertEqual(response.status_code, 404)
+        self.session_b.refresh_from_db()
+        self.assertEqual(self.session_b.status, RollCallSession.Status.IN_PROGRESS)
+
+        response = self.client.post(
+            '/operations/roll-call/new/',
+            {'house': str(self.house_b.pk), 'session_type': RollCallSession.SessionType.EVENING},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_gate_operations_are_limited_to_the_assigned_house(self):
+        now = timezone.now()
+        self.exeat_a.status = Exeat.Status.APPROVED
+        self.exeat_a.approved_by = self.hm_a
+        self.exeat_a.expected_departure = now - timezone.timedelta(minutes=1)
+        self.exeat_a.save()
+        self.exeat_b.status = Exeat.Status.APPROVED
+        self.exeat_b.approved_by = self.hm_b
+        self.exeat_b.expected_departure = now - timezone.timedelta(minutes=1)
+        self.exeat_b.save()
+        self.client.force_login(self.gate_user)
+
+        response = self.client.get(
+            f'/operations/gate/verify/?q={self.exeat_b.exeat_number}'
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Cobalt Student')
+
+        response = self.client.post(
+            f'/operations/gate/{self.exeat_b.pk}/departure/'
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=self.exeat_b).exists())
+
+        response = self.client.get('/operations/gate/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['total_boarders'], 1)
+        self.assertNotIn('houses', response.context)
+
+    def test_reports_are_available_but_scoped_for_gate_officer_and_tutor(self):
+        for student, suffix in ((self.student_a, 'A'), (self.student_b, 'B')):
+            DisciplinaryRecord.objects.create(
+                student=student,
+                academic_term=self.term,
+                offense=f'Incident {suffix}',
+                description='House-scoped report test',
+                severity=DisciplinaryRecord.Severity.MINOR,
+                action_taken='Follow-up',
+            )
+
+        self.client.force_login(self.gate_user)
+        response = self.client.get('/reports/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['metrics']['total_boarders'], 1)
+        self.assertEqual(response.context['metrics']['total_infractions'], 1)
+        self.assertContains(response, 'Amber House')
+        self.assertNotContains(response, 'Cobalt House')
+        self.assertNotContains(response, 'Incident B')
+
+        self.client.force_login(self.tutor_user)
+        response = self.client.get('/reports/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['metrics']['total_boarders'], 1)
+        self.assertNotContains(response, 'Cobalt Student')
+
+    def test_house_tutor_keeps_house_scope_without_gaining_approval_authority(self):
+        self.client.force_login(self.gate_user)
+        response = self.client.post(
+            f'/exeats/{self.exeat_a.pk}/action/approve/'
+        )
+        self.assertEqual(response.status_code, 302)
+        self.exeat_a.refresh_from_db()
+        self.assertEqual(self.exeat_a.status, Exeat.Status.PENDING)
+
+        self.client.force_login(self.tutor_user)
+        response = self.client.post(
+            f'/exeats/{self.exeat_a.pk}/action/approve/'
+        )
+        self.assertEqual(response.status_code, 302)
+        self.exeat_a.refresh_from_db()
+        self.assertEqual(self.exeat_a.status, Exeat.Status.PENDING)
+
+        self.assertEqual(get_user_profile(self.gate_user).role, StaffRole.GATE_OFFICER)
+        self.assertEqual(get_user_profile(self.tutor_user).role, StaffRole.HOUSE_TUTOR)
+
+    def test_staff_without_house_assignment_cannot_open_house_workspaces(self):
+        user = User.objects.create_user(username='unassigned_gate', password='password123')
+        profile = get_user_profile(user)
+        profile.role = StaffRole.GATE_OFFICER
+        profile.save(update_fields=['role'])
+        self.client.force_login(user)
+
+        self.assertEqual(self.client.get('/operations/gate/').status_code, 403)
+        self.assertEqual(self.client.get('/reports/').status_code, 403)

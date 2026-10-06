@@ -1,4 +1,9 @@
 {% load static %}
+{% if request.htmx %}
+<span id="conduct-total-count" hx-swap-oob="true" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
+    {{ total_matching }} Total
+</span>
+{% endif %}
 <div class="overflow-x-auto min-h-[340px] pb-16">
     <table class="w-full text-left border-collapse">
         <thead>
@@ -173,10 +178,12 @@
     </table>
 </div>
 
+{% include "core/partials/pagination_controls.html" with pagination_page=records_page pagination_target="#conduct-table" %}
+
 <!-- Table Record Counter Footer -->
 <div class="px-4 py-2.5 bg-slate-50/75 border-t border-slate-200 flex items-center justify-between text-2xs text-slate-500">
     <div class="flex items-center gap-2">
-        <span>Showing <strong>{{ records|length }}</strong> of <strong>{{ total_matching|default:records|length }}</strong> incident logs</span>
+        <span>Showing <strong>{{ records|length }}</strong> of <strong>{{ total_matching }}</strong> incident logs</span>
     </div>
     {% if active_filters_count %}
     <div class="flex items-center gap-1.5">
