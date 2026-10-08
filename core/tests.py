@@ -1612,15 +1612,18 @@ class RollCallAndGateTests(TestCase):
 
         self.client.force_login(self.user_gate)
         home_response = self.client.get('/')
-        self.assertFalse(home_response.context['can_access_roll_call'])
-        self.assertTrue(home_response.context['can_access_gate'])
-        self.assertContains(home_response, 'href="/operations/gate/"')
-        self.assertNotContains(home_response, 'href="/operations/roll-call/"')
+        self.assertRedirects(
+            home_response,
+            '/operations/gate/',
+            fetch_redirect_response=False,
+        )
 
         response = self.client.get('/operations/roll-call/')
         self.assertEqual(response.status_code, 302)
         response = self.client.get('/operations/gate/')
         self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_access_roll_call'])
+        self.assertTrue(response.context['can_access_gate'])
         self.assertContains(response, 'Gate Security & Movement Terminal')
         self.assertNotContains(response, 'Dormitory Roster')
         self.assertNotContains(response, 'id="modal-title"')
@@ -2104,7 +2107,7 @@ class HouseScopedAccessTests(TestCase):
         )
         self.assertEqual(response.status_code, 404)
 
-    def test_gate_operations_are_limited_to_the_assigned_house(self):
+    def test_gate_operations_cover_all_houses(self):
         now = timezone.now()
         self.exeat_a.status = Exeat.Status.APPROVED
         self.exeat_a.approved_by = self.hm_a
@@ -2120,17 +2123,75 @@ class HouseScopedAccessTests(TestCase):
             f'/operations/gate/verify/?q={self.exeat_b.exeat_number}'
         )
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, 'Cobalt Student')
+        self.assertContains(response, 'Cobalt Student')
 
         response = self.client.post(
             f'/operations/gate/{self.exeat_b.pk}/departure/'
         )
-        self.assertEqual(response.status_code, 404)
-        self.assertFalse(ExeatMovement.objects.filter(exeat=self.exeat_b).exists())
+        self.assertEqual(response.status_code, 302)
+        movement = ExeatMovement.objects.get(exeat=self.exeat_b)
+        self.assertIsNotNone(movement.actual_departure)
+
+        response = self.client.post(
+            f'/operations/gate/{self.exeat_b.pk}/return/'
+        )
+        self.assertEqual(response.status_code, 302)
+        movement.refresh_from_db()
+        self.assertIsNotNone(movement.actual_return)
+
+    def test_unassigned_gate_officer_gets_school_wide_gate_landing_only(self):
+        now = timezone.now()
+        for exeat, housemaster in (
+            (self.exeat_a, self.hm_a),
+            (self.exeat_b, self.hm_b),
+        ):
+            exeat.status = Exeat.Status.APPROVED
+            exeat.approved_by = housemaster
+            exeat.expected_departure = now - timezone.timedelta(minutes=1)
+            exeat.save()
+
+        gate_user = User.objects.create_user(
+            username='central_gate',
+            password='password123',
+        )
+        profile = get_user_profile(gate_user)
+        profile.role = StaffRole.GATE_OFFICER
+        profile.save(update_fields=['role'])
+        self.client.force_login(gate_user)
+
+        dashboard_response = self.client.get('/')
+        self.assertRedirects(
+            dashboard_response,
+            '/operations/gate/',
+            fetch_redirect_response=False,
+        )
+        gate_response = self.client.get('/operations/gate/')
+        self.assertEqual(gate_response.status_code, 200)
+        self.assertEqual(gate_response.context['awaiting_departure_count'], 2)
+        self.assertContains(gate_response, 'Amber Student')
+        self.assertContains(gate_response, 'Cobalt Student')
+        self.assertTrue(gate_response.context['can_access_gate'])
+        self.assertFalse(gate_response.context['can_view_houses'])
+
+        verify_response = self.client.get(
+            f'/operations/gate/verify/?q={self.exeat_b.exeat_number}'
+        )
+        self.assertContains(verify_response, 'Cobalt Student')
+
+        response = self.client.post(
+            f'/operations/gate/{self.exeat_b.pk}/departure/'
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(
+            ExeatMovement.objects.filter(
+                exeat=self.exeat_b,
+                actual_departure__isnull=False,
+            ).exists()
+        )
 
         response = self.client.get('/operations/gate/')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['total_boarders'], 1)
+        self.assertEqual(response.context['total_boarders'], 2)
         self.assertNotIn('houses', response.context)
 
     def test_report_filter_form_defaults_and_submits_selected_report(self):
@@ -2151,7 +2212,11 @@ class HouseScopedAccessTests(TestCase):
         self.client.force_login(self.gate_user)
         self.assertEqual(self.client.get('/reports/').status_code, 302)
         self.assertEqual(self.client.get('/reports/print/').status_code, 302)
-        self.assertFalse(self.client.get('/').context['can_view_reports'])
+        self.assertRedirects(
+            self.client.get('/'),
+            '/operations/gate/',
+            fetch_redirect_response=False,
+        )
 
         self.client.force_login(self.tutor_user)
         self.assertEqual(self.client.get('/reports/').status_code, 302)
@@ -2348,14 +2413,18 @@ class HouseScopedAccessTests(TestCase):
         self.assertEqual(get_user_profile(self.gate_user).role, StaffRole.GATE_OFFICER)
         self.assertEqual(get_user_profile(self.tutor_user).role, StaffRole.HOUSE_TUTOR)
 
-    def test_staff_without_house_assignment_cannot_open_house_workspaces(self):
+    def test_unassigned_gate_officer_has_gate_access_but_not_house_workspaces(self):
         user = User.objects.create_user(username='unassigned_gate', password='password123')
         profile = get_user_profile(user)
         profile.role = StaffRole.GATE_OFFICER
         profile.save(update_fields=['role'])
         self.client.force_login(user)
 
-        self.assertEqual(self.client.get('/operations/gate/').status_code, 403)
+        gate_response = self.client.get('/operations/gate/')
+        self.assertEqual(gate_response.status_code, 200)
+        self.assertTrue(gate_response.context['can_access_gate'])
+        self.assertFalse(gate_response.context['can_view_houses'])
+        self.assertFalse(gate_response.context['can_view_exeats'])
         self.assertEqual(self.client.get('/reports/').status_code, 302)
         self.assertEqual(self.client.get('/reports/print/').status_code, 302)
 
