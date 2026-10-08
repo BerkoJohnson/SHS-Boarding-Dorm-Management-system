@@ -1,6 +1,6 @@
 <div id="entry-row-{{ entry.id }}" 
     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-    class="flex flex-col sm:grid sm:grid-cols-12 sm:items-center gap-3 sm:gap-2 p-3 sm:py-2.5 sm:px-2 hover:bg-slate-50/70 transition border-b border-slate-100 last:border-0 {% if entry.status == 'Absent' %}bg-rose-50/30{% elif entry.status == 'On Exeat' %}bg-purple-50/20{% elif entry.status == 'Unmarked' %}bg-amber-50/30{% endif %}">
+    class="flex flex-col sm:grid sm:grid-cols-12 sm:items-center gap-3 sm:gap-1.5 p-3 sm:py-2 sm:px-2 hover:bg-slate-50/70 transition border-b border-slate-100 last:border-0 {% if entry.status == 'Absent' %}bg-rose-50/30{% elif entry.status == 'On Exeat' %}bg-purple-50/20{% elif entry.status == 'Unmarked' %}bg-amber-50/30{% endif %}">
   
   <!-- Student Identity Column -->
   <div class="sm:col-span-3 min-w-0 flex items-center justify-between sm:justify-start">
@@ -92,12 +92,12 @@
   </div>
 
   <!-- Remarks Column -->
-  <div class="hidden sm:block sm:col-span-1 min-w-0 text-slate-500 text-[11px] truncate">
+  <div class="hidden sm:block sm:col-span-1 min-w-0 text-slate-500 text-[10px] truncate">
     {{ entry.remarks|default:"—" }}
   </div>
 
   <!-- Interactive Attendance Marking Actions -->
-  <div class="sm:col-span-6 min-w-0 flex flex-wrap items-center gap-1 w-full sm:w-auto">
+  <div class="sm:col-span-6 min-w-0 flex flex-wrap sm:flex-nowrap items-center gap-1 sm:gap-0.5 w-full sm:w-auto">
     {% if entry.session.status == 'In Progress' %}
       <!-- Mark Present -->
       <button type="button"
@@ -105,7 +105,7 @@
               hx-vals='{"status": "Present", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1.5 sm:py-1 text-[11px] sm:text-[10px] font-medium rounded transition text-center
+              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'Present' %}bg-emerald-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700{% endif %}"
               title="Mark Present">
@@ -118,7 +118,7 @@
               hx-vals='{"status": "Absent", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1.5 sm:py-1 text-[11px] sm:text-[10px] font-medium rounded transition text-center
+              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'Absent' %}bg-rose-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700{% endif %}"
               title="Mark Absent">
@@ -131,7 +131,7 @@
               hx-vals='{"status": "Infirmary", "remarks": "Reported to sick bay", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1.5 sm:py-1 text-[11px] sm:text-[10px] font-medium rounded transition text-center
+              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'Infirmary' %}bg-sky-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-sky-50 text-slate-600 hover:text-sky-700{% endif %}"
               title="Reported to Sick Bay / Infirmary">
@@ -144,7 +144,7 @@
               hx-vals='{"status": "On Exeat", "remarks": "Excused on Exeat", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1.5 sm:py-1 text-[11px] sm:text-[10px] font-medium rounded transition text-center
+              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'On Exeat' %}bg-purple-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-purple-50 text-slate-600 hover:text-purple-700{% endif %}"
               title="Excused Leave / Exeat">
@@ -158,7 +158,7 @@
                 hx-vals='{"status": "Absent", "flag_infraction": "true", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
-                class="flex-1 sm:flex-none px-1.5 py-1.5 sm:py-1 text-[11px] sm:text-[10px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition text-center whitespace-nowrap"
+                class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition text-center whitespace-nowrap"
                 title="Flag and Log Disciplinary Infraction for Missing Roll Call">
           Flag & Log
         </button>
