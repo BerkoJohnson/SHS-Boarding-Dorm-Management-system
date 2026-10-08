@@ -2069,6 +2069,10 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Student / Dorm / Class')
         self.assertContains(response, 'Attendance Status')
+        self.assertContains(
+            response,
+            'lg:grid-cols-[minmax(0,3fr)_minmax(0,7fr)]',
+        )
         self.assertContains(response, 'col-span-7')
         self.assertContains(response, 'col-span-5')
         self.assertNotContains(response, 'Reason for exeat')
