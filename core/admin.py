@@ -11,6 +11,9 @@ from .models import (
     Exeat,
     ExeatMovement,
     ExeatReconciliation,
+    SMSConfiguration,
+    SchoolConfiguration,
+    SMSDelivery,
     HouseMaster,
     DisciplinaryRecord,
     UserProfile,
@@ -58,6 +61,70 @@ class ExeatReconciliationAdmin(admin.ModelAdmin):
     list_filter = ('outcome', 'created_at')
     search_fields = ('exeat__exeat_number', 'exeat__student__full_name', 'reason')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(SMSDelivery)
+class SMSDeliveryAdmin(admin.ModelAdmin):
+    list_display = ('event_type', 'recipient_name', 'phone_number', 'status', 'attempts', 'created_at')
+    list_filter = ('event_type', 'status', 'created_at')
+    search_fields = ('recipient_name', 'phone_number', 'exeat__exeat_number', 'exeat__student__full_name')
+    readonly_fields = (
+        'exeat', 'event_type', 'recipient_name', 'phone_number', 'message',
+        'status', 'provider_reference', 'attempts', 'last_attempted_at',
+        'sent_at', 'last_error', 'dedupe_key', 'scheduled_for',
+        'created_at', 'updated_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SMSConfiguration)
+class SMSConfigurationAdmin(admin.ModelAdmin):
+    list_display = ("enabled", "updated_at")
+    fields = ("enabled", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        return not SMSConfiguration.objects.filter(pk=1).exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        if SMSConfiguration.objects.filter(pk=1).exists():
+            from django.shortcuts import redirect
+            from django.urls import reverse
+
+            return redirect(
+                reverse("admin:core_smsconfiguration_change", args=[1])
+            )
+        return super().changelist_view(request, extra_context)
+
+
+@admin.register(SchoolConfiguration)
+class SchoolConfigurationAdmin(admin.ModelAdmin):
+    fields = ("name", "logo", "address", "contact_number", "updated_at")
+    readonly_fields = ("updated_at",)
+
+    def has_add_permission(self, request):
+        return not SchoolConfiguration.objects.filter(pk=1).exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        if SchoolConfiguration.objects.filter(pk=1).exists():
+            from django.shortcuts import redirect
+            from django.urls import reverse
+
+            return redirect(
+                reverse("admin:core_schoolconfiguration_change", args=[1])
+            )
+        return super().changelist_view(request, extra_context)
 
 
 @admin.register(DisciplinaryRecord)

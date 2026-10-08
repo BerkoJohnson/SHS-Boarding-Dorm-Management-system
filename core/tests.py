@@ -2115,7 +2115,32 @@ class HouseScopedAccessTests(TestCase):
         self.assertEqual(response.context['total_boarders'], 1)
         self.assertNotIn('houses', response.context)
 
-    def test_reports_are_available_but_scoped_for_gate_officer_and_tutor(self):
+    def test_report_filter_form_defaults_and_submits_selected_report(self):
+        self.client.force_login(self.hm_user)
+
+        response = self.client.get('/reports/')
+        self.assertEqual(response.context['report_filters']['report'].value(), 'housing')
+        self.assertEqual(response.context['report']['title'], 'Boarding Occupancy & Placement')
+        self.assertContains(response, 'action="/reports/"')
+        self.assertContains(response, 'method="get"')
+        self.assertContains(response, 'name="report"')
+
+        response = self.client.get('/reports/', {'report': 'attendance'})
+        self.assertEqual(response.context['report_filters']['report'].value(), 'attendance')
+        self.assertEqual(response.context['report']['title'], 'Roll-call Attendance & Follow-up')
+
+    def test_reports_are_denied_to_gate_officer_and_tutor(self):
+        self.client.force_login(self.gate_user)
+        self.assertEqual(self.client.get('/reports/').status_code, 302)
+        self.assertEqual(self.client.get('/reports/print/').status_code, 302)
+        self.assertFalse(self.client.get('/').context['can_view_reports'])
+
+        self.client.force_login(self.tutor_user)
+        self.assertEqual(self.client.get('/reports/').status_code, 302)
+        self.assertEqual(self.client.get('/reports/print/').status_code, 302)
+        self.assertFalse(self.client.get('/').context['can_view_reports'])
+
+    def test_housemaster_reports_and_printable_output_stay_in_assigned_house(self):
         for student, suffix in ((self.student_a, 'A'), (self.student_b, 'B')):
             DisciplinaryRecord.objects.create(
                 student=student,
@@ -2125,21 +2150,165 @@ class HouseScopedAccessTests(TestCase):
                 severity=DisciplinaryRecord.Severity.MINOR,
                 action_taken='Follow-up',
             )
+        DisciplinaryRecord.objects.create(
+            student=self.student_a,
+            academic_term=self.term,
+            offense='Incident A',
+            description='Second occurrence',
+            severity=DisciplinaryRecord.Severity.MAJOR,
+            action_taken='Committee review',
+        )
 
-        self.client.force_login(self.gate_user)
-        response = self.client.get('/reports/')
+        self.client.force_login(self.hm_user)
+        response = self.client.get(
+            f'/reports/?report=discipline&term={self.term.pk}&house={self.house_b.pk}'
+        )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['metrics']['total_boarders'], 1)
-        self.assertEqual(response.context['metrics']['total_infractions'], 1)
+        self.assertTrue(self.client.get('/').context['can_view_reports'])
         self.assertContains(response, 'Amber House')
         self.assertNotContains(response, 'Cobalt House')
+        self.assertContains(response, 'Incident A')
         self.assertNotContains(response, 'Incident B')
+        self.assertEqual(response.context['report']['record_count'], 2)
+        self.assertIn(
+            ('Students with 2+ recorded incidents', 1),
+            response.context['report']['summary'],
+        )
+        self.assertEqual(
+            response.context['report']['sections'][1]['rows'][0][0],
+            'Amber Student',
+        )
+        self.assertEqual(
+            response.context['report']['sections'][0]['rows'][0][0],
+            f'{timezone.now().year}-{timezone.now().month:02d}',
+        )
+        self.assertContains(response, 'The system records actions taken but not intervention outcomes')
 
-        self.client.force_login(self.tutor_user)
-        response = self.client.get('/reports/')
+        housing_response = self.client.get('/reports/?report=housing')
+        self.assertContains(housing_response, 'Amber Block')
+        self.assertNotContains(housing_response, 'Cobalt Block')
+        housing_report = housing_response.context['report']
+        self.assertIn(('Boarders', 1), housing_report['summary'])
+        self.assertIn(('Configured beds', 10), housing_report['summary'])
+        self.assertIn(('Occupied capacity', '10.0%'), housing_report['summary'])
+
+        self.dorm_a.capacity = 0
+        self.dorm_a.save(update_fields=['capacity'])
+        self.create_boarder(
+            'SCOPE-A-OVER', 'Additional Amber Student', self.house_a, self.dorm_a
+        )
+        over_capacity_response = self.client.get('/reports/?report=housing')
+        self.assertIn(
+            ('Over-capacity dormitories', 1),
+            over_capacity_response.context['report']['summary'],
+        )
+        self.assertIn(
+            'Over capacity by 2',
+            [row[-1] for row in over_capacity_response.context['report']['rows']],
+        )
+
+        report_day = timezone.now().date().isoformat()
+        attendance_response = self.client.get(
+            f'/reports/?report=attendance&date_from={report_day}&date_to={report_day}'
+        )
+        self.assertContains(attendance_response, 'Amber House')
+        self.assertNotContains(attendance_response, 'Cobalt House')
+        self.assertEqual(attendance_response.context['report']['record_count'], 1)
+        additional_session = create_roll_call_session(
+            house=self.house_a,
+            conducted_by=self.hm_a,
+        )
+        self.session_a.entries.filter(student=self.student_a).update(
+            status=RollCallEntry.Status.ABSENT
+        )
+        additional_session.entries.filter(student=self.student_a).update(
+            status=RollCallEntry.Status.ABSENT
+        )
+        attendance_response = self.client.get(
+            f'/reports/?report=attendance&date_from={report_day}&date_to={report_day}'
+        )
+        self.assertIn(
+            ('Students with 2+ absences', 1),
+            attendance_response.context['report']['summary'],
+        )
+        self.assertEqual(
+            attendance_response.context['report']['sections'][0]['rows'][0][0],
+            'Amber Student',
+        )
+
+        exeat_response = self.client.get(
+            f'/reports/?report=exeats&date_from={report_day}&date_to={report_day}'
+        )
+        self.assertContains(exeat_response, 'SCOPE-EX-A')
+        self.assertNotContains(exeat_response, 'SCOPE-EX-B')
+        self.assertEqual(exeat_response.context['report']['record_count'], 1)
+
+        print_response = self.client.get(
+            f'/reports/print/?report=discipline&term={self.term.pk}'
+        )
+        self.assertEqual(print_response.status_code, 200)
+        self.assertContains(print_response, 'Incident A')
+        self.assertNotContains(print_response, 'Cobalt House')
+        self.assertNotContains(print_response, 'COLLAPSIBLE UTILITY SIDEBAR')
+        self.assertContains(print_response, 'Students with multiple recorded incidents')
+        self.assertContains(print_response, 'actions taken but not intervention outcomes')
+        self.assertTemplateUsed(print_response, 'core/reports/print.html')
+
+    def test_admin_and_senior_housemaster_reports_are_school_wide(self):
+        DisciplinaryRecord.objects.create(
+            student=self.student_a,
+            academic_term=self.term,
+            offense='Amber report incident',
+            severity=DisciplinaryRecord.Severity.MINOR,
+            action_taken='Follow-up',
+        )
+        DisciplinaryRecord.objects.create(
+            student=self.student_b,
+            academic_term=self.term,
+            offense='Cobalt report incident',
+            severity=DisciplinaryRecord.Severity.MAJOR,
+            action_taken='Committee review',
+        )
+        senior = User.objects.create_user(username='school_senior', password='password123')
+        senior_profile = get_user_profile(senior)
+        senior_profile.role = StaffRole.SENIOR_HOUSEMASTER
+        senior_profile.save(update_fields=['role'])
+        admin = User.objects.create_superuser(
+            username='reports_admin',
+            email='reports-admin@example.com',
+            password='password123',
+        )
+
+        for user in (senior, admin):
+            self.client.force_login(user)
+            response = self.client.get('/reports/?report=discipline&term=' + str(self.term.pk))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.context['metrics']['total_boarders'], 2)
+            self.assertContains(response, 'Amber report incident')
+            self.assertContains(response, 'Cobalt report incident')
+            self.assertContains(response, 'Amber House')
+            self.assertContains(response, 'Cobalt House')
+            print_response = self.client.get(
+                f'/reports/print/?report=discipline&term={self.term.pk}'
+            )
+            self.assertContains(print_response, 'Cobalt report incident')
+
+    def test_invalid_report_date_range_is_reported_and_cannot_be_printed(self):
+        self.client.force_login(self.hm_user)
+        response = self.client.get(
+            '/reports/?report=attendance&date_from=2026-10-10&date_to=2026-10-01'
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['metrics']['total_boarders'], 1)
-        self.assertNotContains(response, 'Cobalt Student')
+        self.assertFalse(response.context['report_filters_valid'])
+        self.assertContains(response, 'End date must be on or after the start date.')
+        self.assertContains(response, 'The selected report filters are invalid.')
+        self.assertContains(response, 'aria-disabled="true"')
+
+        print_response = self.client.get(
+            '/reports/print/?report=attendance&date_from=2026-10-10&date_to=2026-10-01'
+        )
+        self.assertEqual(print_response.status_code, 400)
 
     def test_house_tutor_keeps_house_scope_without_gaining_approval_authority(self):
         self.client.force_login(self.gate_user)
@@ -2169,4 +2338,16 @@ class HouseScopedAccessTests(TestCase):
         self.client.force_login(user)
 
         self.assertEqual(self.client.get('/operations/gate/').status_code, 403)
+        self.assertEqual(self.client.get('/reports/').status_code, 302)
+        self.assertEqual(self.client.get('/reports/print/').status_code, 302)
+
+        unassigned_housemaster = User.objects.create_user(
+            username='unassigned_housemaster',
+            password='password123',
+        )
+        housemaster_profile = get_user_profile(unassigned_housemaster)
+        housemaster_profile.role = StaffRole.HOUSEMASTER
+        housemaster_profile.save(update_fields=['role'])
+        self.client.force_login(unassigned_housemaster)
         self.assertEqual(self.client.get('/reports/').status_code, 403)
+        self.assertEqual(self.client.get('/reports/print/').status_code, 403)

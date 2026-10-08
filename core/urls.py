@@ -1,14 +1,10 @@
 from django.urls import path
-from django.contrib.auth import views as auth_views
 from . import views
 
 app_name = 'core'
 
 urlpatterns = [
-    path('login/', auth_views.LoginView.as_view(
-        template_name='registration/login.html',
-        redirect_authenticated_user=True
-    ), name='login'),
+    path('login/', views.RememberMeLoginView.as_view(), name='login'),
     path('', views.dashboard_view, name='dashboard'),
     path('exeats/', views.exeat_list_view, name='exeat_list'),
     path('exeats/pending-approvals/', views.exeat_approvals_hub_view, name='exeat_approvals'),
@@ -31,7 +27,9 @@ urlpatterns = [
     path('operations/gate/verify/', views.gate_verify_pass_view, name='gate_verify_pass'),
     path('search/', views.global_search_view, name='global_search'),
     path('reports/', views.reports_dashboard_view, name='reports'),
+    path('reports/print/', views.reports_print_view, name='reports_print'),
     path('configuration/', views.configuration_hub_view, name='configuration'),
     path('configuration/term/<uuid:term_id>/set-active/', views.set_active_term_view, name='set_active_term'),
+    path('configuration/sms/set-enabled/', views.set_sms_enabled_view, name='set_sms_enabled'),
     path('logout/', views.logout_view, name='logout'),
 ]

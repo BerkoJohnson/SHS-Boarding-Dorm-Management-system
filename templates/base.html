@@ -41,10 +41,14 @@
     <div class="h-14 flex items-center justify-between px-3.5 border-b border-slate-800/80 bg-[#090d1a]">
       <div class="flex items-center gap-2.5 overflow-hidden">
         <!-- Logo Emblem -->
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-600 to-brand-500 text-white flex items-center justify-center font-extrabold text-sm shadow-md shrink-0 ring-1 ring-white/10">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
-          </svg>
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-600 to-brand-500 text-white flex items-center justify-center font-extrabold text-sm shadow-md shrink-0 ring-1 ring-white/10 overflow-hidden">
+          {% if school_configuration.logo %}
+            <img src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }}" class="w-full h-full object-contain bg-white">
+          {% else %}
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+            </svg>
+          {% endif %}
         </div>
         
         <!-- App Title (Hidden on Collapse) -->
@@ -53,7 +57,7 @@
              x-transition:enter-start="opacity-0 -translate-x-2" 
              x-transition:enter-end="opacity-100 translate-x-0"
              class="flex flex-col overflow-hidden">
-          <span class="font-bold text-white text-xs tracking-wide leading-tight truncate">EDEN HIGH SCHOOL</span>
+          <span class="font-bold text-white text-xs tracking-wide leading-tight truncate">{{ school_configuration.name }}</span>
           <span class="text-[10px] text-slate-400 font-medium tracking-wider uppercase truncate">Boarding & Campus</span>
         </div>
       </div>
@@ -316,7 +320,7 @@
           {% if request.user.is_superuser %}
           <a href="/admin/" target="_blank" class="text-sky-600 hover:text-sky-800 font-medium">Django Admin →</a>
           {% else %}
-          <span class="text-slate-400">Eden High School</span>
+          <span class="text-slate-400">{{ school_configuration.name }}</span>
           {% endif %}
           {% if can_view_houses %}
           <a href="{% url 'core:house_list' %}" class="text-slate-500 hover:text-slate-800">Campus Oversight</a>

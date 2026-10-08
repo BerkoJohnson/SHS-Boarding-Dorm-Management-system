@@ -12,6 +12,53 @@ from .models import (
 )
 
 
+class ReportFilterForm(forms.Form):
+    REPORT_CHOICES = (
+        ("housing", "Boarding occupancy & placement"),
+        ("attendance", "Roll-call attendance & follow-up"),
+        ("exeats", "Exeat & gate compliance"),
+        ("discipline", "Disciplinary trends"),
+    )
+
+    report = forms.ChoiceField(
+        choices=REPORT_CHOICES,
+        required=False,
+        widget=forms.Select(attrs={
+            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+        }),
+    )
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={
+            "type": "date",
+            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
+        }),
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={
+            "type": "date",
+            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
+        }),
+    )
+    term = forms.ModelChoiceField(
+        queryset=AcademicTerm.objects.select_related("academic_year").order_by("-start_date"),
+        required=False,
+        empty_label="All terms",
+        widget=forms.Select(attrs={
+            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+        }),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        date_from = cleaned_data.get("date_from")
+        date_to = cleaned_data.get("date_to")
+        if date_from and date_to and date_from > date_to:
+            self.add_error("date_to", "End date must be on or after the start date.")
+        return cleaned_data
+
+
 class ExeatRequestForm(forms.ModelForm):
     """
     STEP 1 — Draft / Request form.

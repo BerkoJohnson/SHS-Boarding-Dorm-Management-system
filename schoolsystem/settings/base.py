@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django_htmx",
+    "django_celery_beat",
     "core",
 ]
 
@@ -121,6 +122,9 @@ STATICFILES_DIRS = [
     BASE_DIR / "static",
 ]
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
@@ -147,3 +151,34 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOGIN_URL = "core:login"
 LOGIN_REDIRECT_URL = "core:dashboard"
 LOGOUT_REDIRECT_URL = "core:login"
+
+
+
+# SMS Configuration (SMSOnlineGH)
+SMS_ONLINE_GH_API_KEY = os.getenv("SMS_ONLINE_GH_API_KEY", "")
+SMS_SENDER_ID = os.getenv("SMS_SENDER_ID", "EDENSYS")
+SMS_ENABLED = os.getenv("SMS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+SMS_TIME_ZONE = os.getenv("SMS_TIME_ZONE", TIME_ZONE)
+SMS_HTTP_TIMEOUT = float(os.getenv("SMS_HTTP_TIMEOUT", "10"))
+SMS_MAX_ATTEMPTS = int(os.getenv("SMS_MAX_ATTEMPTS", "5"))
+
+# Celery / Redis
+CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_TIMEZONE = SMS_TIME_ZONE
+CELERY_ENABLE_UTC = True
+CELERY_TASK_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_BROKER_CONNECTION_TIMEOUT = 2
+CELERY_BEAT_SCHEDULE = {
+    "dispatch-queued-sms-deliveries": {
+        "task": "core.tasks.dispatch_queued_sms_deliveries",
+        "schedule": 60.0,
+    },
+    "check-overdue-exeats-for-sms": {
+        "task": "core.tasks.enqueue_overdue_exeat_reminders",
+        "schedule": 15 * 60.0,
+    },
+}

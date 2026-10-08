@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.db.models import BooleanField, Count, F, Prefetch, Q, Sum, Value
 from django.core.paginator import Paginator
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import views as auth_views
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth import logout
 from django.contrib import messages
@@ -14,6 +15,8 @@ from .models import (
     Exeat,
     ExeatMovement,
     ExeatReconciliation,
+    SMSConfiguration,
+    SMSDelivery,
     House,
     Dormitory,
     DisciplinaryRecord,
@@ -32,6 +35,7 @@ from .forms import (
     ExeatApprovalForm,
     ExeatReconciliationForm,
     DisciplinaryRecordForm,
+    ReportFilterForm,
 )
 from .permissions import (
     role_required,
@@ -55,6 +59,21 @@ from .services.roll_call import (
     mark_all_present,
     convert_absence_to_disciplinary_record,
 )
+from .services.sms import enqueue_exeat_event_sms
+
+
+class RememberMeLoginView(auth_views.LoginView):
+    template_name = "registration/login.html"
+    redirect_authenticated_user = True
+    remember_me_age = 14 * 24 * 60 * 60
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        if self.request.POST.get("remember_me") == "on":
+            self.request.session.set_expiry(self.remember_me_age)
+        else:
+            self.request.session.set_expiry(0)
+        return response
 
 
 def paginate_queryset(queryset, request, page_parameter='page', per_page=10):
@@ -790,6 +809,7 @@ def exeat_create_view(request):
             # Audit trail (Phase 1): record WHO drafted / submitted this leave request.
             exeat.created_by = request.user
             exeat.save()
+            enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.REQUESTED)
 
             # INTENTIONALLY NOT creating ExeatMovement HERE.
             # Movement is created ONLY during Step 2 (PENDING -> APPROVED transition),
@@ -999,6 +1019,10 @@ def exeat_approval_review_view(request, pk):
                     reviewed.approved_by = hm
 
             reviewed.save()
+            if reviewed.status == Exeat.Status.APPROVED:
+                enqueue_exeat_event_sms(reviewed, SMSDelivery.EventType.APPROVED)
+            elif reviewed.status == Exeat.Status.REJECTED:
+                enqueue_exeat_event_sms(reviewed, SMSDelivery.EventType.REJECTED)
 
             # Step-2 transition: create gate movement log ONLY on APPROVAL.
             movement_created = False
@@ -1100,6 +1124,10 @@ def exeat_reconcile_view(request, pk):
         reconciliation.exeat = exeat
         reconciliation.reconciled_by = request.user
         reconciliation.save()
+        if reconciliation.outcome == ExeatReconciliation.Outcome.STUDENT_OUT:
+            enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
+        elif reconciliation.outcome == ExeatReconciliation.Outcome.RETURNED:
+            enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
         messages.success(request, f"Movement records reconciled for {exeat.exeat_number}.")
         return redirect("core:exeat_detail", pk=exeat.pk)
 
@@ -1155,6 +1183,7 @@ def exeat_action_view(request, pk, action):
                     movement.actual_departure = now
                     movement.departure_recorded_by = user_name
                     movement.save()
+                    enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
                     messages.success(request, f"Gate departure recorded for {exeat.student.full_name}.")
             elif action == 'return':
                 if exeat.status != Exeat.Status.APPROVED:
@@ -1170,6 +1199,7 @@ def exeat_action_view(request, pk, action):
                         reconciliation.outcome = ExeatReconciliation.Outcome.RETURNED
                         reconciliation.return_recorded_by = request.user
                         reconciliation.save()
+                        enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
                         messages.success(request, f"Gate return recorded for {exeat.student.full_name}.")
                     else:
                         movement = ExeatMovement.objects.filter(exeat=exeat).first()
@@ -1185,6 +1215,7 @@ def exeat_action_view(request, pk, action):
                             movement.actual_return = now
                             movement.return_recorded_by = user_name
                             movement.save()
+                            enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
                             messages.success(request, f"Gate return recorded for {exeat.student.full_name}.")
 
         # 2. Authorization workflow (approve / reject / cancel)
@@ -1222,6 +1253,7 @@ def exeat_action_view(request, pk, action):
                     exeat.approval_remarks = rejection_reason
                 exeat.status = Exeat.Status.REJECTED
                 exeat.save()
+                enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.REJECTED)
                 messages.info(request, f"Exeat request {exeat.exeat_number} was rejected.")
 
             elif action == 'approve':
@@ -1251,6 +1283,7 @@ def exeat_action_view(request, pk, action):
                 # Note: Exeat.clean() + Exeat.save() both run full_clean so
                 # approved_by-is-set and jurisdiction rules from Phase 1 are enforced here.
                 exeat.save()
+                enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.APPROVED)
 
                 # Step 2 transition: gate movement placeholder is ONLY created when the
                 # request moves from PENDING -> APPROVED during Housemaster review.
@@ -1870,6 +1903,7 @@ def gate_terminal_action_view(request, exeat_pk, action):
                 movement.actual_departure = timezone.now()
                 movement.departure_recorded_by = officer_name
                 movement.save()
+                enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
                 messages.success(request, f"Gate EXIT logged for {exeat.student.full_name} ({exeat.exeat_number}).")
     elif action == 'return':
         if exeat.status != Exeat.Status.APPROVED:
@@ -1885,6 +1919,7 @@ def gate_terminal_action_view(request, exeat_pk, action):
                 reconciliation.outcome = ExeatReconciliation.Outcome.RETURNED
                 reconciliation.return_recorded_by = request.user
                 reconciliation.save()
+                enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
                 messages.success(request, f"Gate RETURN recorded for {exeat.student.full_name} ({exeat.exeat_number}).")
             else:
                 movement = ExeatMovement.objects.filter(exeat=exeat).first()
@@ -1896,6 +1931,7 @@ def gate_terminal_action_view(request, exeat_pk, action):
                     movement.actual_return = timezone.now()
                     movement.return_recorded_by = officer_name
                     movement.save()
+                    enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
                     messages.success(request, f"Gate RETURN recorded for {exeat.student.full_name} ({exeat.exeat_number}).")
 
     return redirect('core:gate_security')
@@ -1939,32 +1975,70 @@ def gate_verify_pass_view(request):
 @login_required
 @role_required(*REPORT_ROLES)
 def reports_dashboard_view(request):
-    """
-    Shows institution-wide metrics to administrators and house-scoped metrics
-    to other operational staff.
-    """
-    from core.services.reports import get_dashboard_metrics
+    """Show scoped summary metrics and a selectable detailed operational report."""
+    return render(request, 'core/reports/dashboard.html', _reports_context(request))
+
+
+@login_required
+@role_required(*REPORT_ROLES)
+def reports_print_view(request):
+    """Render only the authorized detailed report for browser printing or PDF."""
+    context = _reports_context(request)
+    if not context["report_filters_valid"]:
+        return HttpResponseBadRequest("Invalid report filters. Return to Reports & Stats and correct the selected values.")
+    return render(request, 'core/reports/print.html', context)
+
+
+def _reports_context(request):
+    from core.services.reports import get_dashboard_metrics, get_detailed_report
 
     house_scope = get_house_scope(request.user)
-    metrics = get_dashboard_metrics(
-        house_id=house_scope.pk if house_scope is not None else None
-    )
-    
-    # Get recent infractions for the table
-    recent_infractions = DisciplinaryRecord.objects.select_related(
-        'student', 'student__house'
-    ).order_by('-created_at')
-    if house_scope is not None:
-        recent_infractions = recent_infractions.filter(student__house_id=house_scope.pk)
-    recent_infractions = recent_infractions[:10]
-    
-    context = {
-        'metrics': metrics,
-        'recent_infractions': recent_infractions,
+    filter_data = request.GET.copy()
+    if not filter_data.get("report"):
+        filter_data["report"] = "housing"
+    report_filters = ReportFilterForm(filter_data)
+    report_filters_valid = report_filters.is_valid()
+    cleaned_data = report_filters.cleaned_data
+    report_type = cleaned_data.get("report") or "housing"
+    term = cleaned_data.get("term")
+    date_from = cleaned_data.get("date_from")
+    date_to = cleaned_data.get("date_to")
+    if report_filters_valid:
+        report = get_detailed_report(
+            report_type=report_type,
+            house_id=house_scope.pk if house_scope is not None else None,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term.pk if term else None,
+        )
+    else:
+        report = {
+            "title": "Correct filters to view this report",
+            "headers": ("Status",),
+            "rows": (("The selected report filters are invalid.",),),
+            "point_in_time": False,
+        }
+    report["record_count"] = len(report["rows"])
+    return {
+        'metrics': get_dashboard_metrics(
+            house_id=house_scope.pk if house_scope is not None else None
+        ),
+        'recent_infractions': DisciplinaryRecord.objects.select_related(
+            'student', 'student__house'
+        ).filter(
+            **({'student__house_id': house_scope.pk} if house_scope is not None else {})
+        ).order_by('-created_at')[:10],
         'user_house_scope': house_scope,
-        'active_tab': 'reports'
+        'report': report,
+        'report_filters': report_filters,
+        'report_filters_valid': report_filters_valid,
+        'report_type': report_type,
+        'selected_date_from': date_from,
+        'selected_date_to': date_to,
+        'selected_term': term,
+        'report_generated_at': timezone.localtime(),
+        'active_tab': 'reports',
     }
-    return render(request, 'core/reports/dashboard.html', context)
 
 
 # -----------------------------------------------------------------------------
@@ -1977,14 +2051,11 @@ def configuration_hub_view(request):
     System configuration Control Center hub.
     Provides quick links to Django admin and inline toggle for Academic Terms.
     """
-    if not (request.user.is_superuser or getattr(request.user, 'role', '') == 'Senior Housemaster'):
-        messages.error(request, "You do not have permission to access system configurations.")
-        return redirect('core:dashboard')
-        
     academic_terms = AcademicTerm.objects.select_related('academic_year').order_by('-academic_year__start_date', '-term')
     
     context = {
         'academic_terms': academic_terms,
+        'sms_enabled': SMSConfiguration.is_enabled(),
         'active_tab': 'configuration'
     }
     return render(request, 'core/config/hub.html', context)
@@ -1998,9 +2069,6 @@ def set_active_term_view(request, term_id):
     """
     from core.services.configuration import set_active_term
     
-    if not (request.user.is_superuser or getattr(request.user, 'role', '') == 'Senior Housemaster'):
-        return HttpResponseForbidden("Unauthorized")
-        
     try:
         set_active_term(term_id)
         messages.success(request, "Active academic term successfully updated.")
@@ -2010,3 +2078,22 @@ def set_active_term_view(request, term_id):
     response = HttpResponse(status=204)
     response['HX-Redirect'] = reverse('core:configuration')
     return response
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+@require_POST
+def set_sms_enabled_view(request):
+    """Update the system-wide SMS notification switch."""
+    enabled_value = request.POST.get("enabled")
+    if enabled_value not in {"true", "false"}:
+        messages.error(request, "Choose whether SMS notifications should be enabled or disabled.")
+        return redirect("core:configuration")
+
+    configuration, _created = SMSConfiguration.objects.get_or_create(pk=1)
+    configuration.enabled = enabled_value == "true"
+    configuration.save(update_fields=["enabled", "updated_at"])
+
+    state_label = "enabled" if configuration.enabled else "disabled"
+    messages.success(request, f"SMS notifications are now {state_label}.")
+    return redirect("core:configuration")

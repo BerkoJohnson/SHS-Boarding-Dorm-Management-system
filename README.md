@@ -4,4 +4,28 @@ run tailwind watch
 run development server
 -- python .\manage.py runserver --settings=schoolsystem.settings.development
 
+## Exeat SMS notifications
 
+Configure `SMS_ENABLED`, `SMS_ONLINE_GH_API_KEY`, `SMS_SENDER_ID`, `SMS_TIME_ZONE`,
+and `REDIS_URL` in `.env`. Use Redis 6 or newer as the Celery broker; the
+legacy Redis 5.0.14 server currently installed on this Windows machine does not
+support the `HELLO` handshake used by the Redis Python client. SMS dispatch is
+disabled unless `SMS_ENABLED=true`. After migration, the `SMS Configuration`
+record in Django Admin controls the live SMS switch and takes precedence over
+the environment default. Disable it to stop new SMS queueing, queued-message
+dispatch, and overdue reminders; re-enable it to resume processing.
+The SMS outbox records each recipient's delivery state and retry history.
+
+Run Redis, then start the application and its asynchronous workers in separate
+terminals:
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py runserver --settings=schoolsystem.settings.development
+.\.venv\Scripts\celery.exe -A schoolsystem worker --pool=solo --concurrency=1 --loglevel=INFO
+.\.venv\Scripts\celery.exe -A schoolsystem beat --loglevel=INFO
+```
+
+Exeats generate SMS notifications for request submission, approval or rejection,
+gate departure and return, and overdue status. Guardians and the student's
+assigned Housemaster receive the notices. Overdue reminders are sent at the
+expected return time and then once every 24 hours until a return is recorded.

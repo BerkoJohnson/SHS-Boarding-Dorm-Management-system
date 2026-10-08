@@ -5,7 +5,7 @@ from typing import Dict, Any, List
 from django.utils import timezone
 from django.db.models import Q
 from core.models import (
-    Exeat, ExeatReconciliation, DisciplinaryRecord, StaffRole,
+    Exeat, ExeatReconciliation, DisciplinaryRecord, SchoolConfiguration, StaffRole,
     get_user_profile, get_approvable_pending_for_user,
 )
 from core.permissions import (
@@ -53,8 +53,10 @@ def header_context(request) -> Dict[str, Any]:
     Provides real-time operational alerts (overdue gate logs, pending approvals,
     critical incidents) and authenticated user state to templates inheriting base.html.
     """
+    school_configuration = SchoolConfiguration.get_solo()
     if not hasattr(request, "user") or not request.user.is_authenticated:
         return {
+            "school_configuration": school_configuration,
             "notifications": [],
             "notification_count": 0,
             "overdue_count": 0,
@@ -258,6 +260,7 @@ def header_context(request) -> Dict[str, Any]:
     can_access_roll_call = is_super or (has_house_scope and role in ROLL_CALL_ROLES)
 
     return {
+        "school_configuration": school_configuration,
         "notifications": notifications,
         "notification_count": total_notifications,
         "overdue_count": overdue_count,

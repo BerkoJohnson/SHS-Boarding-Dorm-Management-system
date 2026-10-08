@@ -75,14 +75,12 @@ HOUSE_ROLES = (
     StaffRole.HOUSE_TUTOR,
 )
 
-# Reports are available to staff with operational responsibility, but their
-# report data is restricted to the user's assigned house unless privileged.
+# Reports are restricted to administrators, the Senior Housemaster, and
+# assigned Housemasters. Housemasters see only their assigned house.
 REPORT_ROLES = (
     StaffRole.ADMIN,
     StaffRole.SENIOR_HOUSEMASTER,
     StaffRole.HOUSEMASTER,
-    StaffRole.HOUSE_TUTOR,
-    StaffRole.GATE_OFFICER,
 )
 
 

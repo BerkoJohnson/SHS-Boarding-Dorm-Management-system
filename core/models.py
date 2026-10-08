@@ -852,6 +852,114 @@ class ExeatReconciliation(BaseModel):
         return f"Reconciliation: {self.exeat.exeat_number} ({self.get_outcome_display()})"
 
 
+class SMSDelivery(BaseModel):
+    """Durable per-recipient record for an outbound SMS notification."""
+
+    class EventType(models.TextChoices):
+        REQUESTED = "requested", "Exeat request submitted"
+        APPROVED = "approved", "Exeat approved"
+        REJECTED = "rejected", "Exeat rejected"
+        DEPARTURE = "departure", "Student departed campus"
+        RETURN = "return", "Student returned to campus"
+        OVERDUE = "overdue", "Exeat overdue"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        PROCESSING = "processing", "Processing"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    exeat = models.ForeignKey(
+        Exeat,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="sms_deliveries",
+    )
+    event_type = models.CharField(max_length=30, choices=EventType.choices)
+    recipient_name = models.CharField(max_length=150, blank=True)
+    phone_number = models.CharField(max_length=17, db_index=True)
+    message = models.TextField()
+    status = models.CharField(
+        max_length=15,
+        choices=Status.choices,
+        default=Status.QUEUED,
+    )
+    provider_reference = models.CharField(max_length=200, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_attempted_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    dedupe_key = models.CharField(max_length=200, unique=True, db_index=True)
+    scheduled_for = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "SMS Delivery"
+        verbose_name_plural = "SMS Deliveries"
+
+    def __str__(self):
+        return (
+            f"{self.get_event_type_display()} to {self.phone_number} "
+            f"({self.get_status_display()})"
+        )
+
+
+class SMSConfiguration(models.Model):
+    """Singleton admin configuration for enabling or pausing SMS notifications."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    enabled = models.BooleanField(
+        default=False,
+        help_text="When disabled, no new SMS notifications will be sent.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "SMS Configuration"
+        verbose_name_plural = "SMS Configuration"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        configuration = cls.objects.filter(pk=1).only("enabled").first()
+        if configuration is None:
+            return getattr(settings, "SMS_ENABLED", False)
+        return configuration.enabled
+
+    def __str__(self):
+        return "SMS Notifications"
+
+
+class SchoolConfiguration(models.Model):
+    """Singleton public-facing identity and contact details for the school."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    name = models.CharField(max_length=150, default="EDEN HIGH SCHOOL")
+    logo = models.ImageField(upload_to="school/logos/", blank=True)
+    address = models.TextField(blank=True)
+    contact_number = models.CharField(max_length=30, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "School Configuration"
+        verbose_name_plural = "School Configuration"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_solo(cls):
+        return cls.objects.filter(pk=1).first() or cls()
+
+    def __str__(self):
+        return self.name
+
+
 class DisciplinaryRecord(BaseModel):
     """Conduct and disciplinary log for students."""
 

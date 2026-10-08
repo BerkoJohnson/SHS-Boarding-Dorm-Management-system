@@ -14,6 +14,43 @@
     <!-- Active Academic Term Settings -->
     <div class="lg:col-span-2 space-y-4">
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-bold text-slate-800">SMS Notifications</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Control exeat updates and overdue reminders sent to guardians and housemasters.</p>
+          </div>
+          {% if sms_enabled %}
+            <span class="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-full">ENABLED</span>
+          {% else %}
+            <span class="px-2 py-0.5 bg-slate-200 text-slate-600 text-[10px] font-bold rounded-full">DISABLED</span>
+          {% endif %}
+        </div>
+        <div class="p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <p class="text-xs text-slate-600">
+            {% if sms_enabled %}
+              SMS notifications are active. Turning them off pauses new alerts and queued message delivery.
+            {% else %}
+              SMS notifications are paused. Turning them on allows new alerts and queued messages to be sent.
+            {% endif %}
+          </p>
+          <form method="post" action="{% url 'core:set_sms_enabled' %}">
+            {% csrf_token %}
+            {% if sms_enabled %}
+              <input type="hidden" name="enabled" value="false">
+              <button type="submit" class="px-3 py-1.5 bg-white border border-rose-300 text-rose-700 text-xs font-semibold rounded-lg hover:bg-rose-50 transition">
+                Disable SMS
+              </button>
+            {% else %}
+              <input type="hidden" name="enabled" value="true">
+              <button type="submit" class="px-3 py-1.5 bg-emerald-600 border border-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 transition">
+                Enable SMS
+              </button>
+            {% endif %}
+          </form>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
           <h3 class="text-sm font-bold text-slate-800">Academic Terms Management</h3>
           <p class="text-xs text-slate-500 mt-0.5">Toggle the currently active semester or term.</p>
@@ -67,6 +104,10 @@
           <p class="text-[11px] text-slate-500 mt-0.5">Deep links to full database management.</p>
         </div>
         <div class="p-2 space-y-1">
+          <a href="{% url 'admin:core_schoolconfiguration_changelist' %}" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v18m9-9H3"></path></svg>
+            School Branding & Contact
+          </a>
           <a href="/admin/core/house/" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
             <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
             Manage Houses
