@@ -1,6 +1,6 @@
 <div id="entry-row-{{ entry.id }}" 
     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-    class="flex flex-col sm:grid sm:grid-cols-12 sm:items-center gap-3 sm:gap-1.5 p-3 sm:py-2 sm:px-2 hover:bg-slate-50/70 transition border-b border-slate-100 last:border-0 {% if entry.status == 'Absent' %}bg-rose-50/30{% elif entry.status == 'On Exeat' %}bg-purple-50/20{% elif entry.status == 'Unmarked' %}bg-amber-50/30{% endif %}">
+    class="flex flex-col sm:grid sm:grid-cols-12 sm:items-center gap-3 sm:gap-2 p-3 sm:py-2 sm:px-2 hover:bg-slate-50/70 transition border-b border-slate-100 last:border-0 {% if entry.status == 'Absent' %}bg-rose-50/30{% elif entry.status == 'On Exeat' %}bg-purple-50/20{% elif entry.status == 'Unmarked' %}bg-amber-50/30{% endif %}">
   
   <!-- Student Identity Column -->
   <div class="sm:col-span-3 min-w-0 flex items-center justify-between sm:justify-start">
@@ -23,36 +23,10 @@
           <span>{{ entry.student.dormitory.name|default:entry.session.house.name }}</span>
           {% if entry.student.class_group %} · <span>{{ entry.student.class_group.name }}</span>{% endif %}
         </div>
+        {% if entry.remarks %}
+          <div class="text-[10px] text-slate-500 truncate" title="{{ entry.remarks }}">Note: {{ entry.remarks }}</div>
+        {% endif %}
       </div>
-    </div>
-    
-    <!-- Mobile Status Badge (Hidden on Desktop) -->
-    <div class="sm:hidden shrink-0 ml-2">
-      {% if entry.status == 'Present' %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-          Present
-        </span>
-      {% elif entry.status == 'Absent' %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-          Absent
-        </span>
-      {% elif entry.status == 'On Exeat' %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
-          Exeat
-        </span>
-      {% elif entry.status == 'Infirmary' %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
-          Infirmary
-        </span>
-      {% elif entry.status == 'Unmarked' %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-          Unmarked
-        </span>
-      {% else %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-          {{ entry.status }}
-        </span>
-      {% endif %}
     </div>
   </div>
 
@@ -91,78 +65,83 @@
     {% endif %}
   </div>
 
-  <!-- Remarks Column -->
-  <div class="hidden sm:block sm:col-span-1 min-w-0 text-slate-500 text-[10px] truncate">
-    {{ entry.remarks|default:"—" }}
-  </div>
-
   <!-- Interactive Attendance Marking Actions -->
-  <div class="sm:col-span-6 min-w-0 flex flex-wrap items-center gap-1 w-full sm:w-auto">
+  <div class="sm:col-span-7 min-w-0 w-full sm:w-auto">
     {% if entry.session.status == 'In Progress' %}
-      <!-- Mark Present -->
-      <button type="button"
-              hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-              hx-vals='{"status": "Present", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
-              hx-target="#entry-row-{{ entry.id }}"
-              hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
-                {% if entry.status == 'Present' %}bg-emerald-600 text-white shadow-xs
-                {% else %}bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700{% endif %}"
-              title="Mark Present">
-        Present
-      </button>
-
-      <!-- Mark Absent -->
-      <button type="button"
-              hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-              hx-vals='{"status": "Absent", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
-              hx-target="#entry-row-{{ entry.id }}"
-              hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
-                {% if entry.status == 'Absent' %}bg-rose-600 text-white shadow-xs
-                {% else %}bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700{% endif %}"
-              title="Mark Absent">
-        Absent
-      </button>
-
-      <!-- Mark Sick Bay / Infirmary -->
-      <button type="button"
-              hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-              hx-vals='{"status": "Infirmary", "remarks": "Reported to sick bay", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
-              hx-target="#entry-row-{{ entry.id }}"
-              hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
-                {% if entry.status == 'Infirmary' %}bg-sky-600 text-white shadow-xs
-                {% else %}bg-slate-100 hover:bg-sky-50 text-slate-600 hover:text-sky-700{% endif %}"
-              title="Reported to Sick Bay / Infirmary">
-        Sick Bay
-      </button>
-
-      <!-- Mark On Exeat -->
-      <button type="button"
-              hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-              hx-vals='{"status": "On Exeat", "remarks": "Excused on Exeat", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
-              hx-target="#entry-row-{{ entry.id }}"
-              hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
-                {% if entry.status == 'On Exeat' %}bg-purple-600 text-white shadow-xs
-                {% else %}bg-slate-100 hover:bg-purple-50 text-slate-600 hover:text-purple-700{% endif %}"
-              title="Excused Leave / Exeat">
-        Exeat
-      </button>
-
-      <!-- If Absent: Quick Infraction Logging Button -->
-      {% if entry.status == 'Absent' %}
+      <div class="hidden sm:flex items-center gap-1 whitespace-nowrap">
         <button type="button"
                 hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-                hx-vals='{"status": "Absent", "flag_infraction": "true", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-vals='{"status": "Present", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
-                class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition text-center whitespace-nowrap"
-                title="Flag and Log Disciplinary Infraction for Missing Roll Call">
-          Flag & Log
-        </button>
-      {% endif %}
+                class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
+                  {% if entry.status == 'Present' %}bg-emerald-600 text-white shadow-xs
+                  {% else %}bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700{% endif %}"
+                title="Mark Present">Present</button>
+        <button type="button"
+                hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
+                hx-vals='{"status": "Absent", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-target="#entry-row-{{ entry.id }}"
+                hx-swap="outerHTML"
+                class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
+                  {% if entry.status == 'Absent' %}bg-rose-600 text-white shadow-xs
+                  {% else %}bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700{% endif %}"
+                title="Mark Absent">Absent</button>
+        <button type="button"
+                hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
+                hx-vals='{"status": "Infirmary", "remarks": "Reported to sick bay", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-target="#entry-row-{{ entry.id }}"
+                hx-swap="outerHTML"
+                class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
+                  {% if entry.status == 'Infirmary' %}bg-sky-600 text-white shadow-xs
+                  {% else %}bg-slate-100 hover:bg-sky-50 text-slate-600 hover:text-sky-700{% endif %}"
+                title="Reported to Sick Bay / Infirmary">Sick Bay</button>
+        <button type="button"
+                hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
+                hx-vals='{"status": "On Exeat", "remarks": "Excused on Exeat", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-target="#entry-row-{{ entry.id }}"
+                hx-swap="outerHTML"
+                class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
+                  {% if entry.status == 'On Exeat' %}bg-purple-600 text-white shadow-xs
+                  {% else %}bg-slate-100 hover:bg-purple-50 text-slate-600 hover:text-purple-700{% endif %}"
+                title="Excused Leave / Exeat">Exeat</button>
+        {% if entry.status == 'Absent' %}
+          <button type="button"
+                  hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
+                  hx-vals='{"status": "Absent", "flag_infraction": "true", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                  hx-target="#entry-row-{{ entry.id }}"
+                  hx-swap="outerHTML"
+                  class="px-2 py-1 text-[10px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition whitespace-nowrap"
+                  title="Flag and Log Disciplinary Infraction for Missing Roll Call">Flag & Log</button>
+        {% endif %}
+      </div>
+      <form class="sm:hidden flex items-center gap-2 w-full">
+        {% csrf_token %}
+        <label class="sr-only" for="roll-call-status-{{ entry.id }}">Attendance for {{ entry.student.full_name }}</label>
+        <select id="roll-call-status-{{ entry.id }}"
+                name="status"
+                hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
+                hx-trigger="change"
+                hx-target="#entry-row-{{ entry.id }}"
+                hx-swap="outerHTML"
+                class="min-w-0 flex-1 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
+          <option value="Unmarked" {% if entry.status == 'Unmarked' %}selected{% endif %}>Unmarked</option>
+          <option value="Present" {% if entry.status == 'Present' %}selected{% endif %}>Present</option>
+          <option value="Absent" {% if entry.status == 'Absent' %}selected{% endif %}>Absent</option>
+          <option value="Infirmary" {% if entry.status == 'Infirmary' %}selected{% endif %}>Sick Bay / Infirmary</option>
+          <option value="On Exeat" {% if entry.status == 'On Exeat' %}selected{% endif %}>On Exeat</option>
+          <option value="Activity" {% if entry.status == 'Activity' %}selected{% endif %}>Official Activity</option>
+        </select>
+        {% if entry.status == 'Absent' %}
+          <button type="button"
+                  hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
+                  hx-vals='{"status": "Absent", "flag_infraction": "true", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                  hx-target="#entry-row-{{ entry.id }}"
+                  hx-swap="outerHTML"
+                  class="shrink-0 rounded bg-amber-500 px-2 py-1.5 text-[10px] font-semibold text-white"
+                  title="Flag and Log Disciplinary Infraction for Missing Roll Call">Flag & Log</button>
+        {% endif %}
+      </form>
     {% else %}
       <div class="flex items-center gap-1 text-slate-400 text-[10px] font-medium bg-slate-50 px-2 py-1.5 sm:py-1 rounded-md border border-slate-100 w-full sm:w-auto">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
@@ -171,10 +150,4 @@
     {% endif %}
   </div>
   
-  <!-- Mobile Remarks (Hidden on Desktop) -->
-  {% if entry.remarks %}
-    <div class="sm:hidden text-slate-500 text-[11px] italic bg-slate-50/50 p-1.5 rounded w-full truncate">
-      Note: {{ entry.remarks }}
-    </div>
-  {% endif %}
 </div>

@@ -1872,6 +1872,8 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'hx-swap-oob="outerHTML"')
         self.assertContains(response, 'disabled title="Mark all students before finalizing"')
+        self.assertContains(response, 'class="hidden sm:flex items-center gap-1 whitespace-nowrap"')
+        self.assertContains(response, 'name="status"')
 
         response = self.client.post(
             f'/operations/roll-call/entry/{entries[1].id}/',
@@ -1881,6 +1883,7 @@ class RollCallAndGateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'disabled title="Mark all students before finalizing"')
+        self.assertContains(response, 'Flag & Log')
 
     def test_roll_call_mark_all_present_bulk_preserves_unmarked_and_exeat(self):
         """Bulk correction does not convert unverified or excused entries to present."""
