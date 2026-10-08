@@ -1,8 +1,11 @@
+import json
+
 from django.views.decorators.http import require_POST, require_http_methods
 from django.http import HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import BooleanField, Count, F, Prefetch, Q, Sum, Value
 from django.core.paginator import Paginator
 from django.contrib.auth.decorators import login_required
@@ -59,6 +62,7 @@ from .services.roll_call import (
     complete_roll_call_session,
     mark_all_present,
     convert_absence_to_disciplinary_record,
+    mark_roll_call_infraction_corrected,
 )
 from .services.sms import enqueue_exeat_event_sms
 
@@ -159,7 +163,9 @@ def dashboard_view(request):
     ).count()
 
     # 4. Conduct & Discipline
-    disciplinary_records = DisciplinaryRecord.objects.all()
+    disciplinary_records = DisciplinaryRecord.objects.filter(
+        corrected_at__isnull=True
+    )
     if house_scope is not None:
         disciplinary_records = disciplinary_records.filter(student__house_id=house_scope.pk)
     active_disciplinary_count = disciplinary_records.count()
@@ -617,7 +623,9 @@ def conduct_list_view(request):
         'student__dormitory',
         'student__class_group',
         'academic_term',
-        'logged_by'
+        'logged_by',
+        'corrected_by',
+        'roll_call_entry',
     ).all().order_by('-created_at')
     records_qs = filter_queryset_by_house(
         request.user, records_qs, 'student__house_id'
@@ -630,7 +638,8 @@ def conduct_list_view(request):
             Q(student__admission_no__icontains=query) |
             Q(offense__icontains=query) |
             Q(action_taken__icontains=query) |
-            Q(description__icontains=query)
+            Q(description__icontains=query) |
+            Q(correction_note__icontains=query)
         )
 
     # 2. Severity Filter
@@ -643,7 +652,9 @@ def conduct_list_view(request):
 
     # Top stats aggregations
     all_records = filter_queryset_by_house(
-        request.user, DisciplinaryRecord.objects.all(), 'student__house_id'
+        request.user,
+        DisciplinaryRecord.objects.filter(corrected_at__isnull=True),
+        'student__house_id'
     )
     total_incidents = all_records.count()
     critical_count = all_records.filter(severity=DisciplinaryRecord.Severity.CRITICAL).count()
@@ -1824,7 +1835,7 @@ def roll_call_complete_session_view(request, session_pk):
 @require_POST
 @role_required(*ROLL_CALL_ROLES)
 def roll_call_mark_all_present_view(request, session_pk):
-    """Bulk action marks unmarked and absent students as PRESENT."""
+    """Bulk action corrects explicitly absent students to PRESENT."""
     session = get_object_or_404(
         filter_queryset_by_house(request.user, RollCallSession.objects.all(), 'house_id'),
         pk=session_pk,
@@ -1833,8 +1844,12 @@ def roll_call_mark_all_present_view(request, session_pk):
     if session.status == RollCallSession.Status.COMPLETED:
         messages.error(request, "Cannot modify a finalized roll call session.")
         return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
-    count = mark_all_present(session)
-    messages.success(request, f"Marked {count} students present.")
+    count = mark_all_present(session, request.user)
+    messages.success(
+        request,
+        f"Marked {count} students present. Any linked conduct records were retained "
+        "and marked corrected.",
+    )
     return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
 
 
@@ -1854,41 +1869,87 @@ def roll_call_update_entry_view(request, entry_pk):
         pk=entry_pk
     )
     if request.method == 'POST':
+        def render_update(toast_message=None, toast_level="success"):
+            response = render(
+                request,
+                'core/operations/partials/roll_call_entry_update.html',
+                {
+                    'entry': entry,
+                    'session': entry.session,
+                    'current_session': entry.session,
+                },
+            )
+            if toast_message and request.htmx:
+                response["HX-Trigger"] = json.dumps({
+                    "showToast": {
+                        "message": toast_message,
+                        "level": toast_level,
+                    }
+                })
+            return response
+
         if entry.session.status == RollCallSession.Status.COMPLETED:
-            messages.error(request, "Cannot modify an entry in a finalized session.")
+            error_message = "Cannot modify an entry in a finalized session."
             if request.htmx:
-                return render(request, 'core/operations/partials/entry_row.html', {'entry': entry, 'session': entry.session})
+                return render_update(error_message, "error")
+            messages.error(request, error_message)
             return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+
         new_status = request.POST.get('status')
         remarks = request.POST.get('remarks')
-        if new_status in RollCallEntry.Status.values:
-            try:
+        if new_status not in RollCallEntry.Status.values:
+            error_message = "Choose a valid roll-call status."
+            if request.htmx:
+                return render_update(error_message, "error")
+            messages.error(request, error_message)
+            return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+
+        flag_infraction = request.POST.get('flag_infraction') == 'true'
+        try:
+            with transaction.atomic():
                 update_entry_status(entry, new_status, remarks)
-            except ValueError as error:
-                messages.error(request, str(error))
-                if request.htmx:
-                    return render(
-                        request,
-                        'core/operations/partials/entry_row.html',
-                        {'entry': entry, 'session': entry.session},
+                toast_message = None
+                toast_level = "success"
+
+                if flag_infraction:
+                    if new_status != RollCallEntry.Status.ABSENT:
+                        raise ValueError("An infraction can only be logged for an absent student.")
+                    staff = getattr(request.user, 'housemaster', None)
+                    _, created = convert_absence_to_disciplinary_record(
+                        entry, logged_by=staff
                     )
-                return redirect(
-                    f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}"
-                )
-            
-            # Auto-convert absent to disciplinary if requested
-            if request.POST.get('flag_infraction') == 'true' and new_status == RollCallEntry.Status.ABSENT:
-                staff = getattr(request.user, 'housemaster', None)
-                convert_absence_to_disciplinary_record(entry, logged_by=staff)
-                messages.warning(request, f"Conduct infraction logged for {entry.student.full_name}.")
-                
+                    if created:
+                        toast_message = (
+                            f"Conduct infraction logged for {entry.student.full_name}."
+                        )
+                    else:
+                        toast_message = (
+                            "A conduct record is already linked to this roll-call entry; "
+                            "no duplicate was created."
+                        )
+                        toast_level = "info"
+                elif new_status != RollCallEntry.Status.ABSENT:
+                    corrected = mark_roll_call_infraction_corrected(
+                        entry, new_status, request.user
+                    )
+                    if corrected:
+                        toast_message = (
+                            f"Attendance updated to {new_status}. The previously logged "
+                            "conduct record was retained and marked corrected."
+                        )
+                        toast_level = "info"
+        except ValueError as error:
+            entry.refresh_from_db()
+            if request.htmx:
+                return render_update(str(error), "error")
+            messages.error(request, str(error))
+            return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+
+        if toast_message and not request.htmx:
+            messages.success(request, toast_message)
         if request.htmx:
-            return render(request, 'core/operations/partials/roll_call_entry_update.html', {
-                'entry': entry,
-                'session': entry.session,
-                'current_session': entry.session,
-            })
-            
+            return render_update(toast_message, toast_level)
+
     return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
 
 

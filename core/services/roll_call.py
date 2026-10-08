@@ -172,7 +172,7 @@ def complete_roll_call_session(session: RollCallSession) -> RollCallSession:
         return locked_session
 
 
-def mark_all_present(session: RollCallSession) -> int:
+def mark_all_present(session: RollCallSession, corrected_by) -> int:
     """
     Corrects explicitly absent entries to PRESENT without changing unmarked
     students or excused statuses.
@@ -194,6 +194,18 @@ def mark_all_present(session: RollCallSession) -> int:
         if locked_session.status == RollCallSession.Status.COMPLETED:
             return 0
 
+        absent_entries = list(
+            locked_session.entries.filter(
+                status=RollCallEntry.Status.ABSENT
+            ).select_related("student", "session")
+        )
+        for entry in absent_entries:
+            mark_roll_call_infraction_corrected(
+                entry,
+                RollCallEntry.Status.PRESENT,
+                corrected_by,
+            )
+
         return locked_session.entries.filter(
             status=RollCallEntry.Status.ABSENT
         ).update(status=RollCallEntry.Status.PRESENT)
@@ -202,31 +214,63 @@ def mark_all_present(session: RollCallSession) -> int:
 def convert_absence_to_disciplinary_record(
     entry: RollCallEntry,
     logged_by: Optional[HouseMaster] = None,
-) -> DisciplinaryRecord:
+) -> tuple[DisciplinaryRecord, bool]:
     """
-    Generates a student disciplinary infraction record for an unexcused roll call absence.
+    Creates one linked conduct record for an unexcused roll-call absence.
 
     Args:
         entry: RollCallEntry marked as ABSENT.
         logged_by: Optional HouseMaster logging the infraction.
 
     Returns:
-        DisciplinaryRecord: Created conduct infraction.
+        tuple: The conduct record and whether it was newly created.
     """
+    if entry.status != RollCallEntry.Status.ABSENT:
+        raise ValueError("Only an absent roll-call entry can be logged as an infraction.")
+
     staff = logged_by or entry.session.conducted_by
     if not staff:
         staff = HouseMaster.objects.filter(house=entry.session.house).first()
 
-    record = DisciplinaryRecord.objects.create(
-        student=entry.student,
-        academic_term=entry.session.academic_term,
-        offense=f"Missing {entry.session.get_session_type_display()}",
-        description=(
-            f"Student was marked absent (unexcused) during the {entry.session.get_session_type_display()} "
-            f"inspection on {entry.session.date} for {entry.session.house.name}."
-        ),
-        severity=DisciplinaryRecord.Severity.MINOR,
-        action_taken="Internal campus gating / House duty reprimand",
-        logged_by=staff,
+    record, created = DisciplinaryRecord.objects.get_or_create(
+        roll_call_entry=entry,
+        defaults={
+            "student": entry.student,
+            "academic_term": entry.session.academic_term,
+            "offense": f"Missing {entry.session.get_session_type_display()}",
+            "description": (
+                f"Student was marked absent (unexcused) during the {entry.session.get_session_type_display()} "
+                f"inspection on {entry.session.date} for {entry.session.house.name}."
+            ),
+            "severity": DisciplinaryRecord.Severity.MINOR,
+            "action_taken": "Internal campus gating / House duty reprimand",
+            "logged_by": staff,
+        },
     )
-    return record
+    return record, created
+
+
+def mark_roll_call_infraction_corrected(
+    entry: RollCallEntry,
+    new_status: str,
+    corrected_by,
+) -> bool:
+    """Retain a linked infraction and record that its roll-call status was corrected."""
+    record = DisciplinaryRecord.objects.filter(
+        roll_call_entry=entry,
+        corrected_at__isnull=True,
+    ).first()
+    if record is None:
+        return False
+
+    actor_name = corrected_by.get_full_name() or corrected_by.get_username()
+    record.corrected_at = timezone.now()
+    record.corrected_by = corrected_by
+    record.correction_note = (
+        f"Roll-call status was changed from Absent to {new_status} by {actor_name}. "
+        "The original conduct record is retained for audit and is not counted as an active incident."
+    )
+    record.save(
+        update_fields=["corrected_at", "corrected_by", "correction_note", "updated_at"]
+    )
+    return True

@@ -984,6 +984,27 @@ class DisciplinaryRecord(BaseModel):
     logged_by = models.ForeignKey(
         HouseMaster, on_delete=models.SET_NULL, null=True, blank=True
     )
+    roll_call_entry = models.OneToOneField(
+        "RollCallEntry",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="disciplinary_record",
+        help_text="Roll-call entry that generated this conduct record, if applicable.",
+    )
+    corrected_at = models.DateTimeField(null=True, blank=True)
+    corrected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="corrected_disciplinary_records",
+    )
+    correction_note = models.TextField(blank=True)
+
+    @property
+    def is_corrected(self):
+        return self.corrected_at is not None
 
     class Meta:
         ordering = ["-created_at"]

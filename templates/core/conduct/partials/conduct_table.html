@@ -53,9 +53,21 @@
                 <!-- Offense & Description -->
                 <td class="px-3 py-2.5">
                     <div class="font-semibold text-slate-900">{{ record.offense }}</div>
+                    {% if record.is_corrected %}
+                    <span class="inline-flex mt-1 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 border border-sky-200"
+                          title="{{ record.correction_note }}">
+                        Corrected · {{ record.corrected_at|date:"d M Y H:i" }}
+                    </span>
+                    {% endif %}
                     {% if record.description %}
                     <div class="text-2xs text-slate-400 max-w-xs truncate mt-0.5" title="{{ record.description }}">
                         {{ record.description }}
+                    </div>
+                    {% endif %}
+                    {% if record.correction_note %}
+                    <div class="text-[10px] text-sky-700 max-w-xs mt-0.5">
+                        {{ record.correction_note }}
+                        {% if record.corrected_by %} — {{ record.corrected_by.get_full_name|default:record.corrected_by.username }}{% endif %}
                     </div>
                     {% endif %}
                 </td>

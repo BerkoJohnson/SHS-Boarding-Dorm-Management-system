@@ -130,7 +130,8 @@ def header_context(request) -> Dict[str, Any]:
 
     # 3. Critical Infractions
     critical_records = DisciplinaryRecord.objects.filter(
-        severity=DisciplinaryRecord.Severity.CRITICAL
+        severity=DisciplinaryRecord.Severity.CRITICAL,
+        corrected_at__isnull=True,
     ).select_related("student", "student__house").order_by("-created_at")
     if role not in CONDUCT_ROLES and role not in ADMIN_ROLES:
         critical_records = critical_records.none()

@@ -63,6 +63,7 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                             </svg>
                         </div>
+
                     {% elif message.tags == 'warning' or 'warning' in message.tags %}
                         <div class="w-7 h-7 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200 shadow-2xs">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -125,6 +126,7 @@
                     {% else %}bg-emerald-500{% endif %}"
                     :style="`width: ${progress}%`">
                 </div>
+
             </div>
 
         </div>
@@ -132,3 +134,33 @@
     {% endif %}
 
 </div>
+
+<script>
+  document.body.addEventListener("showToast", (event) => {
+    const container = document.getElementById("toast-container");
+    if (!container || !event.detail?.message) return;
+
+    const level = event.detail.level || "success";
+    const toast = document.createElement("div");
+    const colors = {
+      error: "border-rose-200 text-rose-700",
+      warning: "border-amber-200 text-amber-700",
+      info: "border-sky-200 text-sky-700",
+      success: "border-emerald-200 text-emerald-700",
+    };
+    toast.className = `pointer-events-auto rounded-xl border bg-white/95 px-4 py-3 text-xs font-medium shadow-xl ${colors[level] || colors.success}`;
+    toast.setAttribute("role", level === "error" ? "alert" : "status");
+    toast.textContent = event.detail.message;
+    container.appendChild(toast);
+    window.setTimeout(() => toast.remove(), 4500);
+  });
+
+  document.body.addEventListener("htmx:responseError", () => {
+    document.body.dispatchEvent(new CustomEvent("showToast", {
+      detail: {
+        level: "error",
+        message: "The attendance update failed. Please try again.",
+      },
+    }));
+  });
+</script>

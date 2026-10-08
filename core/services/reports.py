@@ -72,7 +72,10 @@ def get_dashboard_metrics(house_id=None):
     
     # 3. Disciplinary Stats (Current Term)
     if current_term:
-        term_infractions = DisciplinaryRecord.objects.filter(academic_term=current_term)
+        term_infractions = DisciplinaryRecord.objects.filter(
+            academic_term=current_term,
+            corrected_at__isnull=True,
+        )
         if house_id is not None:
             term_infractions = term_infractions.filter(student__house_id=house_id)
         total_infractions = term_infractions.count()
@@ -84,7 +87,10 @@ def get_dashboard_metrics(house_id=None):
         house_breakdown = houses.annotate(
             infraction_count=Count(
                 'students__disciplinary_records',
-                filter=Q(students__disciplinary_records__academic_term=current_term)
+                filter=Q(
+                    students__disciplinary_records__academic_term=current_term,
+                    students__disciplinary_records__corrected_at__isnull=True,
+                )
             )
         ).order_by('-infraction_count')[:5]
     else:
@@ -456,6 +462,7 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
         incidents = incidents.filter(created_at__date__lte=date_to)
     if term_id:
         incidents = incidents.filter(academic_term_id=term_id)
+    active_incidents = incidents.filter(corrected_at__isnull=True)
     incident_rows = incidents.values(
         "created_at",
         "student__full_name",
@@ -465,14 +472,16 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
         "severity",
         "action_taken",
         "logged_by__full_name",
+        "corrected_at",
+        "correction_note",
     )
-    severity_breakdown = incidents.values("severity").annotate(
+    severity_breakdown = active_incidents.values("severity").annotate(
         incident_count=Count("id")
     ).order_by("severity")
-    offense_breakdown = incidents.values("offense").annotate(
+    offense_breakdown = active_incidents.values("offense").annotate(
         incident_count=Count("id")
     ).order_by("-incident_count", "offense")[:10]
-    repeat_students = incidents.values(
+    repeat_students = active_incidents.values(
         "student_id",
         "student__full_name",
         "student__house__name",
@@ -505,7 +514,7 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
             item["major_count"],
             item["critical_count"],
         )
-        for item in incidents.values(
+        for item in active_incidents.values(
             "created_at__year",
             "created_at__month",
         ).annotate(
@@ -532,15 +541,22 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
             _SEVERITY_LABELS.get(incident["severity"], incident["severity"]),
             incident["action_taken"],
             incident["logged_by__full_name"] or "—",
+            (
+                f"Corrected {incident['corrected_at']}: {incident['correction_note']}"
+                if incident["corrected_at"]
+                else "Active"
+            ),
         )
         for incident in incident_rows
     ]
     return {
         "title": "Disciplinary Trends & Committee Review",
-        "headers": ("Logged", "Student", "House", "Dormitory", "Incident", "Severity", "Action Taken", "Reported By"),
+        "headers": ("Logged", "Student", "House", "Dormitory", "Incident", "Severity", "Action Taken", "Reported By", "Record Status"),
         "rows": rows,
         "summary": (
             ("Recorded incidents", incident_count),
+            ("Active incidents", active_incidents.count()),
+            ("Corrected records", incident_count - active_incidents.count()),
             ("Students with incidents", distinct_student_count),
             ("Students with 2+ recorded incidents", repeated_student_count),
             ("Minor", severity_counts.get("Minor Offense", 0)),

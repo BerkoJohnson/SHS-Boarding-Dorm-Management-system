@@ -136,7 +136,11 @@ class SchoolConfigurationAdmin(admin.ModelAdmin):
 
 @admin.register(DisciplinaryRecord)
 class DisciplinaryRecordAdmin(admin.ModelAdmin):
-    list_display = ('student', 'offense', 'severity', 'action_taken', 'logged_by', 'created_at')
+    list_display = (
+        'student', 'offense', 'severity', 'is_corrected', 'action_taken',
+        'logged_by', 'corrected_by', 'corrected_at', 'created_at',
+    )
+    readonly_fields = ('roll_call_entry', 'corrected_by', 'corrected_at', 'correction_note')
 @admin.register(RollCallSession)
 class RollCallSessionAdmin(admin.ModelAdmin):
     list_display = ('house', 'dormitory', 'session_type', 'date', 'conducted_by', 'status')

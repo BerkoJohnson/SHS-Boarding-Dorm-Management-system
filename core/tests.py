@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.urls import reverse
 from django.utils import timezone
 from core.models import (
     Student,
@@ -1854,6 +1855,98 @@ class RollCallAndGateTests(TestCase):
         infraction = DisciplinaryRecord.objects.filter(student=self.boarder1).first()
         self.assertIsNotNone(infraction)
         self.assertIn('Evening Roll Call', infraction.offense)
+        self.assertEqual(infraction.roll_call_entry, entry)
+
+    def test_flagged_roll_call_infraction_notifies_and_later_status_correction_is_audited(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        entry = session.entries.get(student=self.boarder1)
+        self.client.login(username='hm_volta', password='password123')
+        page_response = self.client.get(reverse('core:roll_call_sessions'))
+        self.assertContains(
+            page_response,
+            'document.body.addEventListener("showToast"',
+        )
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {
+                'status': RollCallEntry.Status.ABSENT,
+                'flag_infraction': 'true',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('showToast', response['HX-Trigger'])
+        self.assertIn('success', response['HX-Trigger'])
+        record = DisciplinaryRecord.objects.get(roll_call_entry=entry)
+        self.assertIsNone(record.corrected_at)
+
+        duplicate_response = self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {
+                'status': RollCallEntry.Status.ABSENT,
+                'flag_infraction': 'true',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertIn('no duplicate was created', duplicate_response['HX-Trigger'])
+        self.assertEqual(
+            DisciplinaryRecord.objects.filter(roll_call_entry=entry).count(),
+            1,
+        )
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {'status': RollCallEntry.Status.PRESENT},
+            HTTP_HX_REQUEST='true',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('showToast', response['HX-Trigger'])
+        self.assertIn('corrected', response['HX-Trigger'])
+        entry.refresh_from_db()
+        record.refresh_from_db()
+        self.assertEqual(entry.status, RollCallEntry.Status.PRESENT)
+        self.assertIsNotNone(record.corrected_at)
+        self.assertEqual(record.corrected_by, self.user_hm)
+        self.assertIn('changed from Absent to Present', record.correction_note)
+        conduct_response = self.client.get('/conduct/')
+        self.assertEqual(conduct_response.status_code, 200)
+        self.assertContains(conduct_response, 'Corrected')
+        self.assertContains(conduct_response, 'retained for audit')
+
+        report = get_detailed_report("discipline", house_id=self.house.pk)
+        self.assertIn(("Active incidents", 0), report["summary"])
+        self.assertIn(("Corrected records", 1), report["summary"])
+        self.assertTrue(report["rows"][0][-1].startswith("Corrected "))
+
+    def test_invalid_flagged_roll_call_update_returns_failure_toast_without_logging(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        entry = session.entries.get(student=self.boarder1)
+        self.client.login(username='hm_volta', password='password123')
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {
+                'status': RollCallEntry.Status.PRESENT,
+                'flag_infraction': 'true',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('showToast', response['HX-Trigger'])
+        self.assertIn('error', response['HX-Trigger'])
+        entry.refresh_from_db()
+        self.assertEqual(entry.status, RollCallEntry.Status.UNMARKED)
+        self.assertContains(response, 'Not yet verified')
+        self.assertFalse(DisciplinaryRecord.objects.filter(roll_call_entry=entry).exists())
 
     def test_roll_call_htmx_update_refreshes_metrics_and_finalize_state(self):
         session = create_roll_call_session(
@@ -1872,7 +1965,9 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'hx-swap-oob="outerHTML"')
         self.assertContains(response, 'disabled title="Mark all students before finalizing"')
-        self.assertContains(response, 'class="hidden sm:flex items-center gap-1 whitespace-nowrap"')
+        self.assertContains(response, 'class="hidden lg:flex items-center gap-1 whitespace-nowrap"')
+        self.assertContains(response, 'lg:grid-cols-12')
+        self.assertContains(response, 'break-words')
         self.assertContains(response, 'name="status"')
 
         response = self.client.post(
@@ -1912,6 +2007,10 @@ class RollCallAndGateTests(TestCase):
 
         entry1.status = RollCallEntry.Status.ABSENT
         entry1.save()
+        infraction, _ = convert_absence_to_disciplinary_record(
+            entry1,
+            logged_by=self.hm,
+        )
         entry2.status = RollCallEntry.Status.ON_EXEAT
         entry2.save()
 
@@ -1925,9 +2024,12 @@ class RollCallAndGateTests(TestCase):
         entry1.refresh_from_db()
         entry2.refresh_from_db()
         entry3.refresh_from_db()
+        infraction.refresh_from_db()
         self.assertEqual(entry1.status, RollCallEntry.Status.PRESENT)
         self.assertEqual(entry2.status, RollCallEntry.Status.ON_EXEAT)
         self.assertEqual(entry3.status, RollCallEntry.Status.UNMARKED)
+        self.assertIsNotNone(infraction.corrected_at)
+        self.assertEqual(infraction.corrected_by, self.user_hm)
 
     def test_attendance_report_counts_unmarked_entries(self):
         session = create_roll_call_session(
