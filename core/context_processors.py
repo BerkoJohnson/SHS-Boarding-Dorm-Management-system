@@ -241,7 +241,7 @@ def header_context(request) -> Dict[str, Any]:
     elif assigned_house:
         jurisdiction_scope = f"{assigned_house.name} Oversight"
     elif role == StaffRole.GATE_OFFICER:
-        jurisdiction_scope = "House-Scoped Gate Operations"
+        jurisdiction_scope = "School-Wide Gate Operations"
     elif role == StaffRole.HOUSE_TUTOR:
         jurisdiction_scope = "House Tutorial & Incident Logging"
     else:
@@ -255,7 +255,7 @@ def header_context(request) -> Dict[str, Any]:
     can_view_config = is_super or role in ADMIN_ROLES
     can_create_exeat = is_super or (has_house_scope and role in EXEAT_CREATE_ROLES)
     can_approve_exeat = is_super or (has_house_scope and role in EXEAT_APPROVAL_ROLES)
-    can_access_gate = is_super or (has_house_scope and role in GATE_ROLES)
+    can_access_gate = is_super or role in GATE_ROLES
     can_access_roll_call = is_super or (has_house_scope and role in ROLL_CALL_ROLES)
 
     return {

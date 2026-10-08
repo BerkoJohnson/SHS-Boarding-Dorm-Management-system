@@ -51,6 +51,7 @@ from .permissions import (
     REPORT_ROLES,
     filter_queryset_by_house,
     get_house_scope,
+    get_gate_house_scope,
 )
 from .services.roll_call import (
     create_roll_call_session,
@@ -105,6 +106,10 @@ def dashboard_view(request):
       - Grouped student population, occupancy, movement, and care metrics.
       - Latest five records from the Exeat Register with live search and status filtering.
     """
+    profile = get_user_profile(request.user)
+    if profile and profile.role == StaffRole.GATE_OFFICER:
+        return redirect('core:gate_security')
+
     now = timezone.now()
     house_scope = get_house_scope(request.user)
     active_terms = AcademicTerm.objects.filter(is_current=True)
@@ -1450,9 +1455,7 @@ def global_search_view(request):
             'keywords': ['exeat', 'leave', 'pass', 'permission', 'out', 'new', 'create', 'issue'],
         })
 
-    if is_super or role == StaffRole.ADMIN or (
-        house_scope is not None and role in GATE_ROLES
-    ):
+    if is_super or role in GATE_ROLES:
         system_quick_actions.append({
             'title': 'Gate Security Terminal',
             'description': 'Record student gate check-out departures and check-in arrivals',
@@ -1632,8 +1635,8 @@ def roll_call_sessions_view(request):
 @login_required
 @role_required(*GATE_ROLES)
 def gate_security_view(request):
-    """Render assigned-house gate operations without roll-call data."""
-    house_scope = get_house_scope(request.user)
+    """Render school-wide gate operations without roll-call data."""
+    house_scope = get_gate_house_scope(request.user)
     now = timezone.now()
 
     active_departures = ExeatMovement.objects.filter(
@@ -1877,12 +1880,9 @@ def gate_terminal_action_view(request, exeat_pk, action):
         messages.error(request, "Permission denied: Only authorized Gate Officers and administrators can log gate movements.")
         return redirect('core:gate_security')
 
+    get_gate_house_scope(request.user)
     exeat = get_object_or_404(
-        filter_queryset_by_house(
-            request.user,
-            Exeat.objects.select_related('student', 'movement'),
-            'student__house_id',
-        ),
+        Exeat.objects.select_related('student', 'movement'),
         pk=exeat_pk
     )
     officer_name = request.user.get_full_name() or request.user.username
@@ -1946,15 +1946,12 @@ def gate_verify_pass_view(request):
     q = request.GET.get('q', '').strip()
     exeat = None
     if q:
-        exeat = filter_queryset_by_house(
-            request.user,
-            Exeat.objects.filter(
+        get_gate_house_scope(request.user)
+        exeat = Exeat.objects.filter(
             Q(exeat_number__iexact=q) |
             Q(student__admission_no__iexact=q) |
             Q(student__index_number__iexact=q) |
             Q(exeat_number__icontains=q)
-            ),
-            'student__house_id',
         ).select_related(
             'student', 'student__house', 'student__dormitory', 'student__programme', 'movement'
         ).first()

@@ -29,7 +29,7 @@ ROLL_CALL_ROLES = (
     StaffRole.HOUSEMASTER,
 )
 
-# Gate Operations: Logging departures/returns at the security checkpoint
+# Gate Operations: School-wide departure/return logging at the main checkpoint
 GATE_ROLES = (
     StaffRole.ADMIN,
     StaffRole.GATE_OFFICER,
@@ -91,6 +91,19 @@ def get_house_scope(user):
             "This account must be assigned to a house before accessing house operations."
         )
     return housemaster.house
+
+
+def get_gate_house_scope(user):
+    """Return no house filter for authorized school-wide gate operations."""
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("An authenticated staff account is required.")
+
+    profile = get_user_profile(user)
+    if user.is_superuser or (profile and profile.role in ADMIN_ROLES):
+        return None
+    if profile and profile.role == StaffRole.GATE_OFFICER:
+        return None
+    raise PermissionDenied("This account is not authorized for gate operations.")
 
 
 def filter_queryset_by_house(user, queryset, house_lookup):
