@@ -48,7 +48,6 @@ from .permissions import (
     EXEAT_APPROVAL_ROLES,
     EXEAT_CREATE_ROLES,
     CONDUCT_ROLES,
-    HOUSE_ROLES,
     REPORT_ROLES,
     filter_queryset_by_house,
     get_house_scope,
@@ -477,9 +476,9 @@ def exeat_approvals_hub_view(request):
 
 
 @login_required
-@role_required(*HOUSE_ROLES)
+@role_required(*ADMIN_ROLES)
 def house_list_view(request):
-    """Summarize residential occupancy, staffing coverage, and placement gaps."""
+    """Show school-wide residential occupancy and placement oversight to admins."""
     boarding = Student.ResidencyStatus.BOARDING
     house_scope = get_house_scope(request.user)
     dormitories = Dormitory.objects.annotate(
@@ -1396,10 +1395,10 @@ def global_search_view(request):
     role = profile.role if profile else None
     is_super = request.user.is_superuser
 
-    # 3. Search Houses & Dormitories (Restricted to housing roles)
+    # 3. Search Houses & Dormitories (Restricted to administration roles)
     houses = []
     dormitories = []
-    if is_super or role in HOUSE_ROLES:
+    if is_super or role in ADMIN_ROLES:
         house_results = House.objects.filter(name__icontains=query)
         house_results = filter_queryset_by_house(
             request.user, house_results, 'pk'
@@ -1488,7 +1487,7 @@ def global_search_view(request):
             'keywords': ['conduct', 'incident', 'discipline', 'offense', 'punish', 'warning', 'suspension', 'log', 'new'],
         })
 
-    if is_super or role in HOUSE_ROLES:
+    if is_super or role in ADMIN_ROLES:
         system_quick_actions.append({
             'title': 'Houses & Dormitories Overview',
             'description': 'View boarding houses, dorm capacity, and bed allocations',

@@ -80,6 +80,7 @@
             </div>
 
             <!-- Houses & Dormitories -->
+            {% if can_view_houses %}
             <a href="{% url 'core:house_list' %}" 
                @click="userMenuOpen = false"
                class="flex items-center gap-2.5 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition">
@@ -88,6 +89,7 @@
                 </svg>
                 <span>Houses & Dorms</span>
             </a>
+            {% endif %}
 
             <!-- Pending Exeat Approvals -->
             <a href="{% url 'core:exeat_list' %}?status=Pending" 

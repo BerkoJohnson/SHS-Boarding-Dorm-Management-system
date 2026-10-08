@@ -67,14 +67,6 @@ CONDUCT_ROLES = (
     StaffRole.HOUSE_TUTOR,
 )
 
-# Houses & Dormitories: Viewing house rosters and dormitory info
-HOUSE_ROLES = (
-    StaffRole.ADMIN,
-    StaffRole.SENIOR_HOUSEMASTER,
-    StaffRole.HOUSEMASTER,
-    StaffRole.HOUSE_TUTOR,
-)
-
 # Reports are restricted to administrators, the Senior Housemaster, and
 # assigned Housemasters. Housemasters see only their assigned house.
 REPORT_ROLES = (

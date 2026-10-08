@@ -16,7 +16,6 @@ from core.permissions import (
     EXEAT_APPROVAL_ROLES,
     EXEAT_CREATE_ROLES,
     CONDUCT_ROLES,
-    HOUSE_ROLES,
     REPORT_ROLES,
 )
 
@@ -249,7 +248,7 @@ def header_context(request) -> Dict[str, Any]:
         jurisdiction_scope = "Standard Staff Jurisdiction"
 
     is_super = user.is_superuser
-    can_view_houses = is_super or (has_house_scope and role in HOUSE_ROLES)
+    can_view_houses = is_super or role in ADMIN_ROLES
     can_view_conduct = is_super or (has_house_scope and role in CONDUCT_ROLES)
     can_view_exeats = is_super or (has_house_scope and role in EXEAT_ROLES)
     can_view_reports = is_super or (has_house_scope and role in REPORT_ROLES)
