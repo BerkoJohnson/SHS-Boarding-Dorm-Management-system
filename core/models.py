@@ -984,13 +984,21 @@ class DisciplinaryRecord(BaseModel):
     logged_by = models.ForeignKey(
         HouseMaster, on_delete=models.SET_NULL, null=True, blank=True
     )
-    roll_call_entry = models.OneToOneField(
+    roll_call_entry = models.ForeignKey(
         "RollCallEntry",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="disciplinary_record",
+        related_name="disciplinary_records",
         help_text="Roll-call entry that generated this conduct record, if applicable.",
+    )
+    roll_call_follow_up = models.OneToOneField(
+        "RollCallAbsenceFollowUp",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="disciplinary_record",
+        help_text="Confirmed absence follow-up that generated this conduct record.",
     )
     corrected_at = models.DateTimeField(null=True, blank=True)
     corrected_by = models.ForeignKey(
@@ -1124,10 +1132,14 @@ class RollCallEntry(BaseModel):
     class Status(models.TextChoices):
         UNMARKED = "Unmarked", "Not yet verified"
         PRESENT = "Present", "Present"
-        ABSENT = "Absent", "Absent (Unexcused)"
+        ABSENT = "Absent", "Absent - review required"
         ON_EXEAT = "On Exeat", "On Exeat (Excused Leave)"
         INFIRMARY = "Infirmary", "Sick Bay / Infirmary"
         OFFICIAL_ACTIVITY = "Activity", "Official Activity"
+
+    class StatusSource(models.TextChoices):
+        STAFF = "staff", "Verified by staff"
+        GATE = "gate", "Reconciled from gate log"
 
     session = models.ForeignKey(
         RollCallSession,
@@ -1144,7 +1156,22 @@ class RollCallEntry(BaseModel):
         choices=Status.choices,
         default=Status.UNMARKED
     )
+    status_source = models.CharField(
+        max_length=10,
+        choices=StatusSource.choices,
+        default=StatusSource.STAFF,
+    )
     remarks = models.CharField(max_length=200, blank=True, null=True)
+    gate_conflict_at = models.DateTimeField(null=True, blank=True)
+    gate_conflict_note = models.TextField(blank=True)
+    gate_conflict_reviewed_at = models.DateTimeField(null=True, blank=True)
+    gate_conflict_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_roll_call_gate_conflicts",
+    )
 
     class Meta:
         ordering = ["student__full_name"]
@@ -1172,6 +1199,63 @@ class RollCallEntry(BaseModel):
         if self.pk:
             self.clean()
         super().save(*args, **kwargs)
+
+
+class RollCallAbsenceFollowUp(BaseModel):
+    """Review trail for an absence before it is treated as a conduct incident."""
+
+    class Status(models.TextChoices):
+        PENDING = "Pending", "Pending review"
+        CONFIRMED = "Confirmed", "Confirmed unexcused"
+        EXCUSED = "Excused", "Authorized absence"
+        CORRECTED = "Corrected", "Roll-call entry corrected"
+
+    entry = models.ForeignKey(
+        RollCallEntry,
+        on_delete=models.CASCADE,
+        related_name="absence_follow_ups",
+    )
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    reported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reported_roll_call_absences",
+    )
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_roll_call_absences",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(blank=True)
+    resulting_status = models.CharField(
+        max_length=20,
+        choices=RollCallEntry.Status.choices,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["entry"],
+                condition=models.Q(status="Pending"),
+                name="one_pending_absence_follow_up_per_entry",
+            )
+        ]
+        verbose_name = "Roll Call Absence Follow-Up"
+        verbose_name_plural = "Roll Call Absence Follow-Ups"
+
+    def __str__(self):
+        return f"{self.entry.student.full_name} - {self.get_status_display()}"
 
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)

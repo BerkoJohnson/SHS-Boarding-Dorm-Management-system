@@ -19,13 +19,14 @@ from core.models import (
     get_user_profile,
     RollCallSession,
     RollCallEntry,
+    RollCallAbsenceFollowUp,
 )
 from core.services.roll_call import (
     create_roll_call_session,
     update_entry_status,
     complete_roll_call_session,
     mark_all_present,
-    convert_absence_to_disciplinary_record,
+    resolve_absence_follow_up,
 )
 from core.services.reports import get_detailed_report
 
@@ -1816,6 +1817,7 @@ class RollCallAndGateTests(TestCase):
         entry_boarder2 = session.entries.get(student=self.boarder2)
 
         self.assertEqual(entry_boarder1.status, RollCallEntry.Status.ON_EXEAT)
+        self.assertEqual(entry_boarder1.status_source, RollCallEntry.StatusSource.GATE)
         self.assertIn('Active Gate Exeat', entry_boarder1.remarks)
         self.assertEqual(entry_boarder2.status, RollCallEntry.Status.UNMARKED)
 
@@ -1831,8 +1833,8 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(session.present_count, 0)
         self.assertEqual(session.attendance_rate, 0)
 
-    def test_roll_call_update_entry_and_flag_infraction(self):
-        """Housemaster can mark student absent and optionally log disciplinary infraction."""
+    def test_roll_call_absence_creates_pending_follow_up_not_a_conduct_record(self):
+        """An absence is reviewed before it can be recorded as a conduct incident."""
         session = create_roll_call_session(
             house=self.house,
             session_type=RollCallSession.SessionType.EVENING,
@@ -1843,7 +1845,7 @@ class RollCallAndGateTests(TestCase):
         self.client.login(username='hm_volta', password='password123')
         resp = self.client.post(
             f'/operations/roll-call/entry/{entry.id}/',
-            {'status': 'Absent', 'flag_infraction': 'true'},
+            {'status': RollCallEntry.Status.ABSENT},
             follow=True
         )
         self.assertEqual(resp.status_code, 200)
@@ -1851,13 +1853,14 @@ class RollCallAndGateTests(TestCase):
         entry.refresh_from_db()
         self.assertEqual(entry.status, RollCallEntry.Status.ABSENT)
 
-        # Infraction created
-        infraction = DisciplinaryRecord.objects.filter(student=self.boarder1).first()
-        self.assertIsNotNone(infraction)
-        self.assertIn('Evening Roll Call', infraction.offense)
-        self.assertEqual(infraction.roll_call_entry, entry)
+        follow_up = RollCallAbsenceFollowUp.objects.get(entry=entry)
+        self.assertEqual(follow_up.status, RollCallAbsenceFollowUp.Status.PENDING)
+        self.assertEqual(follow_up.reported_by, self.user_hm)
+        self.assertFalse(DisciplinaryRecord.objects.filter(roll_call_entry=entry).exists())
+        self.assertContains(resp, 'Absence Follow-Up Queue')
+        self.assertContains(resp, 'Open session to review')
 
-    def test_flagged_roll_call_infraction_notifies_and_later_status_correction_is_audited(self):
+    def test_absence_follow_up_confirmation_creates_audited_conduct_record(self):
         session = create_roll_call_session(
             house=self.house,
             conducted_by=self.hm,
@@ -1872,31 +1875,40 @@ class RollCallAndGateTests(TestCase):
 
         response = self.client.post(
             f'/operations/roll-call/entry/{entry.id}/',
-            {
-                'status': RollCallEntry.Status.ABSENT,
-                'flag_infraction': 'true',
-            },
+            {'status': RollCallEntry.Status.ABSENT},
             HTTP_HX_REQUEST='true',
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn('showToast', response['HX-Trigger'])
-        self.assertIn('success', response['HX-Trigger'])
-        record = DisciplinaryRecord.objects.get(roll_call_entry=entry)
-        self.assertIsNone(record.corrected_at)
+        self.assertIn('follow-up', response['HX-Trigger'])
+        follow_up = RollCallAbsenceFollowUp.objects.get(entry=entry)
+        self.assertEqual(follow_up.status, RollCallAbsenceFollowUp.Status.PENDING)
+        self.assertFalse(DisciplinaryRecord.objects.filter(roll_call_entry=entry).exists())
 
         duplicate_response = self.client.post(
             f'/operations/roll-call/entry/{entry.id}/',
+            {'status': RollCallEntry.Status.ABSENT},
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertIn('already recorded for follow-up', duplicate_response['HX-Trigger'])
+        self.assertEqual(RollCallAbsenceFollowUp.objects.filter(entry=entry).count(), 1)
+
+        response = self.client.post(
+            reverse('core:roll_call_resolve_absence_follow_up', args=[follow_up.id]),
             {
-                'status': RollCallEntry.Status.ABSENT,
-                'flag_infraction': 'true',
+                'resolution': RollCallAbsenceFollowUp.Status.CONFIRMED,
+                'resolution_note': 'House staff checked and confirmed the student was absent.',
             },
             HTTP_HX_REQUEST='true',
         )
-        self.assertIn('no duplicate was created', duplicate_response['HX-Trigger'])
-        self.assertEqual(
-            DisciplinaryRecord.objects.filter(roll_call_entry=entry).count(),
-            1,
-        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('conduct incident was recorded', response['HX-Trigger'])
+        follow_up.refresh_from_db()
+        self.assertEqual(follow_up.status, RollCallAbsenceFollowUp.Status.CONFIRMED)
+        self.assertEqual(follow_up.resolved_by, self.user_hm)
+        record = DisciplinaryRecord.objects.get(roll_call_follow_up=follow_up)
+        self.assertIsNone(record.corrected_at)
+        self.assertIn('confirmed after review', record.description.lower())
 
         response = self.client.post(
             f'/operations/roll-call/entry/{entry.id}/',
@@ -1908,8 +1920,10 @@ class RollCallAndGateTests(TestCase):
         self.assertIn('showToast', response['HX-Trigger'])
         self.assertIn('corrected', response['HX-Trigger'])
         entry.refresh_from_db()
+        follow_up.refresh_from_db()
         record.refresh_from_db()
         self.assertEqual(entry.status, RollCallEntry.Status.PRESENT)
+        self.assertEqual(follow_up.status, RollCallAbsenceFollowUp.Status.CONFIRMED)
         self.assertIsNotNone(record.corrected_at)
         self.assertEqual(record.corrected_by, self.user_hm)
         self.assertIn('changed from Absent to Present', record.correction_note)
@@ -1923,7 +1937,136 @@ class RollCallAndGateTests(TestCase):
         self.assertIn(("Corrected records", 1), report["summary"])
         self.assertTrue(report["rows"][0][-1].startswith("Corrected "))
 
-    def test_invalid_flagged_roll_call_update_returns_failure_toast_without_logging(self):
+    def test_authorized_absence_and_recording_error_resolutions_do_not_create_incidents(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        entry = session.entries.get(student=self.boarder1)
+        self.client.force_login(self.user_hm)
+        self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {'status': RollCallEntry.Status.ABSENT},
+        )
+        follow_up = RollCallAbsenceFollowUp.objects.get(entry=entry)
+
+        response = self.client.post(
+            reverse('core:roll_call_resolve_absence_follow_up', args=[follow_up.id]),
+            {
+                'resolution': RollCallAbsenceFollowUp.Status.EXCUSED,
+                'resulting_status': RollCallEntry.Status.OFFICIAL_ACTIVITY,
+                'resolution_note': 'Assigned to an authorized school activity.',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        follow_up.refresh_from_db()
+        entry.refresh_from_db()
+        self.assertEqual(follow_up.status, RollCallAbsenceFollowUp.Status.EXCUSED)
+        self.assertEqual(entry.status, RollCallEntry.Status.OFFICIAL_ACTIVITY)
+        self.assertEqual(entry.remarks, follow_up.resolution_note)
+        self.assertFalse(DisciplinaryRecord.objects.filter(roll_call_entry=entry).exists())
+
+        other_entry = session.entries.get(student=self.boarder2)
+        update_entry_status(
+            other_entry,
+            RollCallEntry.Status.ABSENT,
+            updated_by=self.user_hm,
+        )
+        correction = other_entry.absence_follow_ups.get()
+        update_entry_status(
+            entry,
+            RollCallEntry.Status.PRESENT,
+            remarks=entry.remarks,
+            updated_by=self.user_hm,
+        )
+        complete_roll_call_session(session)
+        response = self.client.post(
+            reverse('core:roll_call_resolve_absence_follow_up', args=[correction.id]),
+            {
+                'resolution': RollCallAbsenceFollowUp.Status.CORRECTED,
+                'resulting_status': RollCallEntry.Status.PRESENT,
+                'resolution_note': 'A second staff count confirmed the student was present.',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        correction.refresh_from_db()
+        other_entry.refresh_from_db()
+        self.assertEqual(correction.status, RollCallAbsenceFollowUp.Status.CORRECTED)
+        self.assertEqual(other_entry.status, RollCallEntry.Status.PRESENT)
+        self.assertFalse(
+            DisciplinaryRecord.objects.filter(roll_call_entry=other_entry).exists()
+        )
+
+    def test_changing_pending_absence_to_authorized_status_resolves_as_excused(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        entry = session.entries.get(student=self.boarder1)
+        self.client.force_login(self.user_hm)
+        self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {'status': RollCallEntry.Status.ABSENT},
+        )
+        follow_up = RollCallAbsenceFollowUp.objects.get(entry=entry)
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {
+                'status': RollCallEntry.Status.INFIRMARY,
+                'remarks': 'Staff confirmed the student is in the sick bay.',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('authorized exception', response['HX-Trigger'])
+        follow_up.refresh_from_db()
+        entry.refresh_from_db()
+        self.assertEqual(follow_up.status, RollCallAbsenceFollowUp.Status.EXCUSED)
+        self.assertEqual(
+            follow_up.resolution_note,
+            'Staff confirmed the student is in the sick bay.',
+        )
+        self.assertEqual(entry.status, RollCallEntry.Status.INFIRMARY)
+        self.assertFalse(
+            DisciplinaryRecord.objects.filter(roll_call_entry=entry).exists()
+        )
+
+    def test_excused_roll_call_statuses_require_a_staff_reason(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        entry = session.entries.get(student=self.boarder1)
+        self.client.force_login(self.user_hm)
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {'status': RollCallEntry.Status.INFIRMARY},
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Add a brief staff-verified reason', response['HX-Trigger'])
+        entry.refresh_from_db()
+        self.assertEqual(entry.status, RollCallEntry.Status.UNMARKED)
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entry.id}/',
+            {
+                'status': RollCallEntry.Status.INFIRMARY,
+                'remarks': 'Staff confirmed the student is in the sick bay.',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.status, RollCallEntry.Status.INFIRMARY)
+        self.assertNotIn('diagnosis', entry.remarks.lower())
+
+    def test_legacy_flag_action_only_queues_absence_for_review(self):
         session = create_roll_call_session(
             house=self.house,
             conducted_by=self.hm,
@@ -1934,7 +2077,7 @@ class RollCallAndGateTests(TestCase):
         response = self.client.post(
             f'/operations/roll-call/entry/{entry.id}/',
             {
-                'status': RollCallEntry.Status.PRESENT,
+                'status': RollCallEntry.Status.ABSENT,
                 'flag_infraction': 'true',
             },
             HTTP_HX_REQUEST='true',
@@ -1942,10 +2085,15 @@ class RollCallAndGateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('showToast', response['HX-Trigger'])
-        self.assertIn('error', response['HX-Trigger'])
+        self.assertIn('follow-up', response['HX-Trigger'])
         entry.refresh_from_db()
-        self.assertEqual(entry.status, RollCallEntry.Status.UNMARKED)
-        self.assertContains(response, 'Not yet verified')
+        self.assertEqual(entry.status, RollCallEntry.Status.ABSENT)
+        self.assertTrue(
+            entry.absence_follow_ups.filter(
+                status=RollCallAbsenceFollowUp.Status.PENDING
+            ).exists()
+        )
+        self.assertContains(response, 'Absent')
         self.assertFalse(DisciplinaryRecord.objects.filter(roll_call_entry=entry).exists())
 
     def test_roll_call_htmx_update_refreshes_metrics_and_finalize_state(self):
@@ -1978,7 +2126,7 @@ class RollCallAndGateTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, 'disabled title="Mark all students before finalizing"')
-        self.assertContains(response, 'Flag & Log')
+        self.assertContains(response, 'Absence follow-up pending')
 
     def test_roll_call_mark_all_present_bulk_preserves_unmarked_and_exeat(self):
         """Bulk correction does not convert unverified or excused entries to present."""
@@ -2005,12 +2153,20 @@ class RollCallAndGateTests(TestCase):
             status=RollCallEntry.Status.UNMARKED,
         )
 
-        entry1.status = RollCallEntry.Status.ABSENT
-        entry1.save()
-        infraction, _ = convert_absence_to_disciplinary_record(
+        update_entry_status(
             entry1,
+            RollCallEntry.Status.ABSENT,
+            updated_by=self.user_hm,
+        )
+        follow_up = entry1.absence_follow_ups.get()
+        infraction = resolve_absence_follow_up(
+            follow_up,
+            RollCallAbsenceFollowUp.Status.CONFIRMED,
+            self.user_hm,
+            'House staff verified the student was unexcused.',
             logged_by=self.hm,
         )
+        self.assertIsNotNone(infraction)
         entry2.status = RollCallEntry.Status.ON_EXEAT
         entry2.save()
 
@@ -2124,6 +2280,76 @@ class RollCallAndGateTests(TestCase):
         movement.refresh_from_db()
         self.assertIsNotNone(movement.actual_return)
         self.assertEqual(movement.state_display, "Returned")
+
+    def test_gate_departures_reconcile_only_unmarked_entries_and_surface_conflicts(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        marked_entry = session.entries.get(student=self.boarder1)
+        unmarked_entry = session.entries.get(student=self.boarder2)
+        marked_entry.status = RollCallEntry.Status.PRESENT
+        marked_entry.save()
+
+        now = timezone.now()
+        exeats = []
+        for student in (self.boarder1, self.boarder2):
+            exeats.append(
+                Exeat.objects.create(
+                    student=student,
+                    academic_term=self.term,
+                    exeat_type=Exeat.ExeatType.TOWN,
+                    expected_departure=now - timezone.timedelta(minutes=1),
+                    expected_return=now + timezone.timedelta(hours=2),
+                    destination='Town',
+                    reason='Authorized visit',
+                    status=Exeat.Status.APPROVED,
+                    approved_by=self.hm,
+                )
+            )
+
+        self.client.force_login(self.user_gate)
+        first_response = self.client.post(
+            f'/operations/gate/{exeats[0].id}/departure/',
+            follow=True,
+        )
+        self.assertEqual(first_response.status_code, 200)
+        marked_entry.refresh_from_db()
+        self.assertEqual(marked_entry.status, RollCallEntry.Status.PRESENT)
+        self.assertIsNotNone(marked_entry.gate_conflict_at)
+        self.assertIsNone(marked_entry.gate_conflict_reviewed_at)
+
+        second_response = self.client.post(
+            f'/operations/gate/{exeats[1].id}/departure/',
+            follow=True,
+        )
+        self.assertEqual(second_response.status_code, 200)
+        unmarked_entry.refresh_from_db()
+        self.assertEqual(unmarked_entry.status, RollCallEntry.Status.ON_EXEAT)
+        self.assertEqual(unmarked_entry.status_source, RollCallEntry.StatusSource.GATE)
+
+        with self.assertRaisesMessage(ValueError, 'gate/roll-call discrepancy'):
+            complete_roll_call_session(session)
+
+        self.client.force_login(self.user_hm)
+        review_response = self.client.post(
+            f'/operations/roll-call/entry/{marked_entry.id}/',
+            {
+                'status': RollCallEntry.Status.PRESENT,
+                'remarks': 'Staff confirmed the student attended before departing.',
+            },
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(review_response.status_code, 200)
+        marked_entry.refresh_from_db()
+        self.assertIsNotNone(marked_entry.gate_conflict_reviewed_at)
+        self.assertEqual(marked_entry.gate_conflict_reviewed_by, self.user_hm)
+        complete_roll_call_session(session)
+
+        self.client.force_login(self.user_gate)
+        self.client.post(f'/operations/gate/{exeats[1].id}/return/', follow=True)
+        unmarked_entry.refresh_from_db()
+        self.assertEqual(unmarked_entry.status, RollCallEntry.Status.ON_EXEAT)
 
     def test_gate_verify_pass_lookup(self):
         """Gate terminal barcode/pass lookup locates approved exeat."""

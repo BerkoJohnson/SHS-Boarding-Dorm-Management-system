@@ -19,6 +19,7 @@ from .models import (
     UserProfile,
     RollCallSession,
     RollCallEntry,
+    RollCallAbsenceFollowUp,
 )
 
 
@@ -140,7 +141,13 @@ class DisciplinaryRecordAdmin(admin.ModelAdmin):
         'student', 'offense', 'severity', 'is_corrected', 'action_taken',
         'logged_by', 'corrected_by', 'corrected_at', 'created_at',
     )
-    readonly_fields = ('roll_call_entry', 'corrected_by', 'corrected_at', 'correction_note')
+    readonly_fields = (
+        'roll_call_entry',
+        'roll_call_follow_up',
+        'corrected_by',
+        'corrected_at',
+        'correction_note',
+    )
 @admin.register(RollCallSession)
 class RollCallSessionAdmin(admin.ModelAdmin):
     list_display = ('house', 'dormitory', 'session_type', 'date', 'conducted_by', 'status')
@@ -150,7 +157,7 @@ class RollCallSessionAdmin(admin.ModelAdmin):
 
 @admin.register(RollCallEntry)
 class RollCallEntryAdmin(admin.ModelAdmin):
-    list_display = ('session', 'student', 'status', 'remarks')
+    list_display = ('session', 'student', 'status', 'status_source', 'remarks', 'gate_conflict_at')
     list_filter = ('status', 'session__house', 'session__date')
     search_fields = ('student__full_name', 'student__admission_no', 'remarks')
 
@@ -163,6 +170,28 @@ class RollCallEntryAdmin(admin.ModelAdmin):
         if obj and obj.session.status == 'Completed':
             return False
         return super().has_delete_permission(request, obj)
+
+
+@admin.register(RollCallAbsenceFollowUp)
+class RollCallAbsenceFollowUpAdmin(admin.ModelAdmin):
+    list_display = ('entry', 'status', 'reported_by', 'resolved_by', 'resolved_at')
+    list_filter = ('status', 'entry__session__house', 'entry__session__date')
+    search_fields = ('entry__student__full_name', 'entry__student__admission_no', 'resolution_note')
+    readonly_fields = (
+        'entry',
+        'status',
+        'reported_by',
+        'resolved_by',
+        'resolved_at',
+        'resolution_note',
+        'resulting_status',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 admin.site.register(

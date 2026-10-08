@@ -5,6 +5,7 @@ Handles automated roster generation, active exeat reconciliation, and attendance
 from datetime import date
 from typing import Optional, List
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from core.models import (
     Student,
@@ -14,6 +15,7 @@ from core.models import (
     AcademicTerm,
     RollCallSession,
     RollCallEntry,
+    RollCallAbsenceFollowUp,
     Exeat,
     ExeatMovement,
     DisciplinaryRecord,
@@ -100,6 +102,11 @@ def create_roll_call_session(
                     session=session,
                     student=student,
                     status=entry_status,
+                    status_source=(
+                        RollCallEntry.StatusSource.GATE
+                        if student.id in active_student_ids_on_exeat
+                        else RollCallEntry.StatusSource.STAFF
+                    ),
                     remarks=entry_remarks,
                 )
             )
@@ -114,6 +121,7 @@ def update_entry_status(
     entry: RollCallEntry,
     new_status: str,
     remarks: Optional[str] = None,
+    updated_by=None,
 ) -> RollCallEntry:
     """
     Updates the attendance status of a single student entry within an active session.
@@ -131,6 +139,14 @@ def update_entry_status(
     """
     if new_status not in RollCallEntry.Status.values:
         raise ValueError(f"Invalid roll call status: {new_status}")
+    if new_status in (
+        RollCallEntry.Status.ON_EXEAT,
+        RollCallEntry.Status.INFIRMARY,
+        RollCallEntry.Status.OFFICIAL_ACTIVITY,
+    ) and not (remarks or "").strip():
+        raise ValueError(
+            "Add a brief staff-verified reason for an exeat, sick-bay, or official-duty status."
+        )
 
     with transaction.atomic():
         session = RollCallSession.objects.select_for_update().get(
@@ -141,12 +157,78 @@ def update_entry_status(
                 "Cannot modify attendance records in a finalized roll call session."
             )
 
+        previous_status = entry.status
         entry.session = session
         entry.status = new_status
         if remarks is not None:
-            entry.remarks = remarks
-        entry.save()
+            entry.remarks = remarks.strip()
+        entry.status_source = RollCallEntry.StatusSource.STAFF
+        update_fields = ["status", "status_source", "updated_at"]
+        if remarks is not None:
+            update_fields.append("remarks")
+        if entry.gate_conflict_at and not entry.gate_conflict_reviewed_at:
+            entry.gate_conflict_reviewed_at = timezone.now()
+            entry.gate_conflict_reviewed_by = updated_by
+            update_fields.extend(
+                ["gate_conflict_reviewed_at", "gate_conflict_reviewed_by"]
+            )
+        entry.save(update_fields=update_fields)
+
+        if new_status == RollCallEntry.Status.ABSENT:
+            if previous_status != RollCallEntry.Status.ABSENT:
+                RollCallAbsenceFollowUp.objects.create(
+                    entry=entry,
+                    reported_by=updated_by,
+                )
+        else:
+            is_authorized_exception = new_status in (
+                RollCallEntry.Status.ON_EXEAT,
+                RollCallEntry.Status.INFIRMARY,
+                RollCallEntry.Status.OFFICIAL_ACTIVITY,
+            )
+            resolve_pending_absence_follow_ups(
+                entry,
+                (
+                    RollCallAbsenceFollowUp.Status.EXCUSED
+                    if is_authorized_exception
+                    else RollCallAbsenceFollowUp.Status.CORRECTED
+                ),
+                updated_by,
+                (remarks or "").strip()
+                if is_authorized_exception
+                else (
+                    f"Attendance changed from {previous_status} to {new_status} "
+                    "before the absence was confirmed."
+                ),
+                new_status,
+            )
+            if previous_status == RollCallEntry.Status.ABSENT and updated_by:
+                mark_roll_call_infraction_corrected(
+                    entry,
+                    new_status,
+                    updated_by,
+                )
     return entry
+
+
+def resolve_pending_absence_follow_ups(
+    entry: RollCallEntry,
+    resolution: str,
+    resolved_by,
+    resolution_note: str,
+    resulting_status: str = "",
+) -> int:
+    """Resolve any pending absence reviews while preserving who changed them and why."""
+    return entry.absence_follow_ups.filter(
+        status=RollCallAbsenceFollowUp.Status.PENDING
+    ).update(
+        status=resolution,
+        resolved_by=resolved_by,
+        resolved_at=timezone.now(),
+        resolution_note=resolution_note,
+        resulting_status=resulting_status,
+        updated_at=timezone.now(),
+    )
 
 
 def complete_roll_call_session(session: RollCallSession) -> RollCallSession:
@@ -165,6 +247,16 @@ def complete_roll_call_session(session: RollCallSession) -> RollCallSession:
             raise ValueError(
                 f"Cannot finalize roll call: {unmarked_count} "
                 "student(s) are still unmarked."
+            )
+
+        unreviewed_conflict_count = locked_session.entries.filter(
+            gate_conflict_at__isnull=False,
+            gate_conflict_reviewed_at__isnull=True,
+        ).count()
+        if unreviewed_conflict_count:
+            raise ValueError(
+                f"Cannot finalize roll call: {unreviewed_conflict_count} "
+                "gate/roll-call discrepancy(s) still need review."
             )
 
         locked_session.status = RollCallSession.Status.COMPLETED
@@ -197,23 +289,25 @@ def mark_all_present(session: RollCallSession, corrected_by) -> int:
         absent_entries = list(
             locked_session.entries.filter(
                 status=RollCallEntry.Status.ABSENT
+            ).filter(
+                Q(gate_conflict_at__isnull=True)
+                | Q(gate_conflict_reviewed_at__isnull=False)
             ).select_related("student", "session")
         )
         for entry in absent_entries:
-            mark_roll_call_infraction_corrected(
+            update_entry_status(
                 entry,
                 RollCallEntry.Status.PRESENT,
-                corrected_by,
+                remarks=entry.remarks,
+                updated_by=corrected_by,
             )
-
-        return locked_session.entries.filter(
-            status=RollCallEntry.Status.ABSENT
-        ).update(status=RollCallEntry.Status.PRESENT)
+        return len(absent_entries)
 
 
 def convert_absence_to_disciplinary_record(
     entry: RollCallEntry,
     logged_by: Optional[HouseMaster] = None,
+    follow_up: Optional[RollCallAbsenceFollowUp] = None,
 ) -> tuple[DisciplinaryRecord, bool]:
     """
     Creates one linked conduct record for an unexcused roll-call absence.
@@ -232,15 +326,27 @@ def convert_absence_to_disciplinary_record(
     if not staff:
         staff = HouseMaster.objects.filter(house=entry.session.house).first()
 
+    if follow_up is None:
+        follow_up = entry.absence_follow_ups.filter(
+            status=RollCallAbsenceFollowUp.Status.CONFIRMED
+        ).order_by("-resolved_at").first()
+    if (
+        follow_up is None
+        or follow_up.status != RollCallAbsenceFollowUp.Status.CONFIRMED
+    ):
+        raise ValueError("An absence must be reviewed and confirmed before it is logged.")
+
     record, created = DisciplinaryRecord.objects.get_or_create(
-        roll_call_entry=entry,
+        roll_call_follow_up=follow_up,
         defaults={
+            "roll_call_entry": entry,
             "student": entry.student,
             "academic_term": entry.session.academic_term,
             "offense": f"Missing {entry.session.get_session_type_display()}",
             "description": (
                 f"Student was marked absent (unexcused) during the {entry.session.get_session_type_display()} "
-                f"inspection on {entry.session.date} for {entry.session.house.name}."
+                f"roll call on {entry.session.date} for {entry.session.house.name}. "
+                f"Confirmed after review: {follow_up.resolution_note}"
             ),
             "severity": DisciplinaryRecord.Severity.MINOR,
             "action_taken": "Internal campus gating / House duty reprimand",
@@ -256,21 +362,162 @@ def mark_roll_call_infraction_corrected(
     corrected_by,
 ) -> bool:
     """Retain a linked infraction and record that its roll-call status was corrected."""
-    record = DisciplinaryRecord.objects.filter(
+    records = DisciplinaryRecord.objects.filter(
         roll_call_entry=entry,
         corrected_at__isnull=True,
-    ).first()
-    if record is None:
+    )
+    if not records.exists():
         return False
 
     actor_name = corrected_by.get_full_name() or corrected_by.get_username()
-    record.corrected_at = timezone.now()
-    record.corrected_by = corrected_by
-    record.correction_note = (
+    correction_note = (
         f"Roll-call status was changed from Absent to {new_status} by {actor_name}. "
         "The original conduct record is retained for audit and is not counted as an active incident."
     )
-    record.save(
-        update_fields=["corrected_at", "corrected_by", "correction_note", "updated_at"]
+    records.update(
+        corrected_at=timezone.now(),
+        corrected_by=corrected_by,
+        correction_note=correction_note,
+        updated_at=timezone.now(),
     )
     return True
+
+
+def resolve_absence_follow_up(
+    follow_up: RollCallAbsenceFollowUp,
+    resolution: str,
+    resolved_by,
+    resolution_note: str,
+    resulting_status: str = "",
+    logged_by: Optional[HouseMaster] = None,
+) -> Optional[DisciplinaryRecord]:
+    """Resolve a pending absence; only confirmed unexcused cases create conduct records."""
+    if resolution not in (
+        RollCallAbsenceFollowUp.Status.CONFIRMED,
+        RollCallAbsenceFollowUp.Status.EXCUSED,
+        RollCallAbsenceFollowUp.Status.CORRECTED,
+    ):
+        raise ValueError("Choose a valid absence follow-up resolution.")
+    if not resolution_note.strip():
+        raise ValueError("Enter a brief note explaining the follow-up decision.")
+    if resolution != RollCallAbsenceFollowUp.Status.CONFIRMED:
+        allowed_statuses = {
+            RollCallEntry.Status.PRESENT,
+            RollCallEntry.Status.ON_EXEAT,
+            RollCallEntry.Status.INFIRMARY,
+            RollCallEntry.Status.OFFICIAL_ACTIVITY,
+        }
+        if resulting_status not in allowed_statuses:
+            raise ValueError("Choose a verified attendance status for this resolution.")
+        if (
+            resolution == RollCallAbsenceFollowUp.Status.EXCUSED
+            and resulting_status == RollCallEntry.Status.PRESENT
+        ):
+            raise ValueError("An authorized absence must use an excused attendance status.")
+
+    with transaction.atomic():
+        RollCallSession.objects.select_for_update().get(
+            pk=follow_up.entry.session_id
+        )
+        locked_follow_up = RollCallAbsenceFollowUp.objects.select_for_update().select_related(
+            "entry__session", "entry__student"
+        ).get(pk=follow_up.pk)
+        if locked_follow_up.status != RollCallAbsenceFollowUp.Status.PENDING:
+            raise ValueError("This absence follow-up has already been resolved.")
+        if locked_follow_up.entry.status != RollCallEntry.Status.ABSENT:
+            raise ValueError("The roll-call entry is no longer marked absent.")
+
+        locked_follow_up.status = resolution
+        locked_follow_up.resolved_by = resolved_by
+        locked_follow_up.resolved_at = timezone.now()
+        locked_follow_up.resolution_note = resolution_note.strip()
+        locked_follow_up.resulting_status = resulting_status
+        locked_follow_up.save(
+            update_fields=[
+                "status",
+                "resolved_by",
+                "resolved_at",
+                "resolution_note",
+                "resulting_status",
+                "updated_at",
+            ]
+        )
+
+        if resolution != RollCallAbsenceFollowUp.Status.CONFIRMED:
+            entry = locked_follow_up.entry
+            entry.status = resulting_status
+            entry.status_source = RollCallEntry.StatusSource.STAFF
+            entry.remarks = resolution_note.strip()
+            RollCallEntry.objects.filter(pk=entry.pk).update(
+                status=entry.status,
+                status_source=entry.status_source,
+                remarks=entry.remarks,
+                updated_at=timezone.now(),
+            )
+            entry.refresh_from_db()
+            mark_roll_call_infraction_corrected(
+                entry,
+                resulting_status,
+                resolved_by,
+            )
+            return None
+
+        return convert_absence_to_disciplinary_record(
+            locked_follow_up.entry,
+            logged_by=logged_by,
+            follow_up=locked_follow_up,
+        )[0]
+
+
+def reconcile_gate_departure_with_roll_calls(exeat: Exeat, movement: ExeatMovement) -> int:
+    """Reconcile gate departures into active roll calls without overwriting staff marks."""
+    student = exeat.student
+    if not movement.actual_departure or not student.house_id:
+        return 0
+
+    departure_date = timezone.localtime(movement.actual_departure).date()
+    reconciled = 0
+    with transaction.atomic():
+        sessions = list(
+            RollCallSession.objects.select_for_update().filter(
+                house_id=student.house_id,
+                date=departure_date,
+                status=RollCallSession.Status.IN_PROGRESS,
+            ).filter(
+                Q(dormitory__isnull=True)
+                | Q(dormitory_id=student.dormitory_id)
+            )
+        )
+        for entry in RollCallEntry.objects.select_for_update().filter(
+            session__in=sessions,
+            student=student,
+        ).select_related("session"):
+            if entry.status == RollCallEntry.Status.UNMARKED:
+                entry.status = RollCallEntry.Status.ON_EXEAT
+                entry.status_source = RollCallEntry.StatusSource.GATE
+                entry.remarks = (
+                    f"Gate departure recorded at "
+                    f"{timezone.localtime(movement.actual_departure).strftime('%Y-%m-%d %H:%M UTC')}."
+                )
+                entry.save(
+                    update_fields=["status", "status_source", "remarks", "updated_at"]
+                )
+                reconciled += 1
+            elif entry.status != RollCallEntry.Status.ON_EXEAT:
+                entry.gate_conflict_at = movement.actual_departure
+                entry.gate_conflict_note = (
+                    f"Gate departure was recorded while roll call showed "
+                    f"{entry.get_status_display()}. Review both records; attendance was not changed automatically."
+                )
+                entry.gate_conflict_reviewed_at = None
+                entry.gate_conflict_reviewed_by = None
+                entry.save(
+                    update_fields=[
+                        "gate_conflict_at",
+                        "gate_conflict_note",
+                        "gate_conflict_reviewed_at",
+                        "gate_conflict_reviewed_by",
+                        "updated_at",
+                    ]
+                )
+    return reconciled

@@ -32,6 +32,37 @@
     </div>
   </div>
 
+  {% if pending_follow_up_count %}
+  <section class="overflow-hidden rounded-xl border border-amber-200 bg-white shadow-xs">
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-amber-100 bg-amber-50/70 px-4 py-2.5">
+      <div>
+        <h2 class="text-xs font-bold text-amber-900">Absence Follow-Up Queue</h2>
+        <p class="mt-0.5 text-[10px] text-amber-800">
+          {{ pending_follow_up_count }} absence(s) awaiting review; an absence is not a conduct incident unless confirmed.
+        </p>
+      </div>
+      <span class="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+        Oldest first
+      </span>
+    </div>
+    <div class="divide-y divide-slate-100">
+      {% for follow_up in pending_follow_ups %}
+      <a href="?session_id={{ follow_up.entry.session_id }}{% if selected_house %}&house={{ selected_house }}{% endif %}"
+         class="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 hover:bg-amber-50/40">
+        <span class="min-w-0">
+          <strong class="block truncate text-xs text-slate-800">{{ follow_up.entry.student.full_name }}</strong>
+          <span class="text-[10px] text-slate-500">
+            {{ follow_up.entry.session.house.name }} · {{ follow_up.entry.session.get_session_type_display }} · {{ follow_up.entry.session.date|date:"M d, Y" }}
+          </span>
+        </span>
+        <span class="text-[10px] font-semibold text-amber-700">Open session to review</span>
+      </a>
+      {% endfor %}
+    </div>
+    {% include "core/partials/pagination_controls.html" with pagination_page=pending_follow_ups pagination_query=pending_follow_up_pagination_query pagination_parameter="follow_up_page" %}
+  </section>
+  {% endif %}
+
   <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
     
     <!-- Left Session History & Selector Column -->

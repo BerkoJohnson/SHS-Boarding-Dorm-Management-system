@@ -23,8 +23,25 @@
           <span>{{ entry.student.dormitory.name|default:entry.session.house.name }}</span>
           {% if entry.student.class_group %} · <span>{{ entry.student.class_group.name }}</span>{% endif %}
         </div>
-        {% if entry.remarks %}
+        {% if entry.session.status == 'In Progress' %}
+          <input id="entry-remarks-{{ entry.id }}"
+                 name="remarks"
+                 type="text"
+                 value="{{ entry.remarks|default_if_none:'' }}"
+                 maxlength="200"
+                 placeholder="Reason for exeat, sick bay, or duty (no diagnosis)"
+                 aria-label="Attendance note for {{ entry.student.full_name }}"
+                 class="mt-1 w-full min-w-0 rounded border border-slate-200 bg-white px-1.5 py-1 text-[10px] text-slate-600 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none">
+        {% elif entry.remarks %}
           <div class="text-[10px] text-slate-500 break-words" title="{{ entry.remarks }}">Note: {{ entry.remarks }}</div>
+        {% endif %}
+        {% if entry.gate_conflict_at %}
+          <div class="mt-1 rounded border px-1.5 py-1 text-[10px] break-words
+                      {% if entry.gate_conflict_reviewed_at %}border-slate-200 bg-slate-50 text-slate-500
+                      {% else %}border-amber-200 bg-amber-50 text-amber-800{% endif %}"
+               title="{{ entry.gate_conflict_note }}">
+            {% if entry.gate_conflict_reviewed_at %}Gate/roll-call discrepancy reviewed{% else %}Review gate/roll-call discrepancy{% endif %}: {{ entry.gate_conflict_note }}
+          </div>
         {% endif %}
       </div>
     </div>
@@ -40,7 +57,7 @@
     {% elif entry.status == 'Absent' %}
       <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
         <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-        Absent (Unexcused)
+        Absent — review required
       </span>
     {% elif entry.status == 'On Exeat' %}
       <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
@@ -63,6 +80,9 @@
         {{ entry.status }}
       </span>
     {% endif %}
+    {% if entry.status_source == 'gate' %}
+      <div class="mt-1 text-[9px] font-medium text-purple-600">From verified gate log</div>
+    {% endif %}
   </div>
 
   <!-- Interactive Attendance Marking Actions -->
@@ -72,6 +92,7 @@
         <button type="button"
                 hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
                 hx-vals='{"status": "Present", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-include="#entry-remarks-{{ entry.id }}"
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
                 class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
@@ -81,6 +102,7 @@
         <button type="button"
                 hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
                 hx-vals='{"status": "Absent", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-include="#entry-remarks-{{ entry.id }}"
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
                 class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
@@ -89,7 +111,8 @@
                 title="Mark Absent">Absent</button>
         <button type="button"
                 hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-                hx-vals='{"status": "Infirmary", "remarks": "Reported to sick bay", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-vals='{"status": "Infirmary", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-include="#entry-remarks-{{ entry.id }}"
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
                 class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
@@ -98,22 +121,14 @@
                 title="Reported to Sick Bay / Infirmary">Sick Bay</button>
         <button type="button"
                 hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-                hx-vals='{"status": "On Exeat", "remarks": "Excused on Exeat", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-vals='{"status": "On Exeat", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
+                hx-include="#entry-remarks-{{ entry.id }}"
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
                 class="px-2 py-1 text-[10px] font-medium rounded transition whitespace-nowrap
                   {% if entry.status == 'On Exeat' %}bg-purple-600 text-white shadow-xs
                   {% else %}bg-slate-100 hover:bg-purple-50 text-slate-600 hover:text-purple-700{% endif %}"
                 title="Excused Leave / Exeat">Exeat</button>
-        {% if entry.status == 'Absent' %}
-          <button type="button"
-                  hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-                  hx-vals='{"status": "Absent", "flag_infraction": "true", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
-                  hx-target="#entry-row-{{ entry.id }}"
-                  hx-swap="outerHTML"
-                  class="px-2 py-1 text-[10px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition whitespace-nowrap"
-                  title="Flag and Log Disciplinary Infraction for Missing Roll Call">Flag & Log</button>
-        {% endif %}
       </div>
       <form class="lg:hidden flex items-center gap-2 w-full">
         {% csrf_token %}
@@ -122,25 +137,17 @@
                 name="status"
                 hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
                 hx-trigger="change"
+                hx-include="#entry-remarks-{{ entry.id }}"
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
                 class="min-w-0 flex-1 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
           <option value="Unmarked" {% if entry.status == 'Unmarked' %}selected{% endif %}>Unmarked</option>
           <option value="Present" {% if entry.status == 'Present' %}selected{% endif %}>Present</option>
-          <option value="Absent" {% if entry.status == 'Absent' %}selected{% endif %}>Absent</option>
+          <option value="Absent" {% if entry.status == 'Absent' %}selected{% endif %}>Absent — review required</option>
           <option value="Infirmary" {% if entry.status == 'Infirmary' %}selected{% endif %}>Sick Bay / Infirmary</option>
           <option value="On Exeat" {% if entry.status == 'On Exeat' %}selected{% endif %}>On Exeat</option>
           <option value="Activity" {% if entry.status == 'Activity' %}selected{% endif %}>Official Activity</option>
         </select>
-        {% if entry.status == 'Absent' %}
-          <button type="button"
-                  hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-                  hx-vals='{"status": "Absent", "flag_infraction": "true", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
-                  hx-target="#entry-row-{{ entry.id }}"
-                  hx-swap="outerHTML"
-                  class="shrink-0 rounded bg-amber-500 px-2 py-1.5 text-[10px] font-semibold text-white"
-                  title="Flag and Log Disciplinary Infraction for Missing Roll Call">Flag & Log</button>
-        {% endif %}
       </form>
     {% else %}
       <div class="flex items-center gap-1 text-slate-400 text-[10px] font-medium bg-slate-50 px-2 py-1.5 lg:py-1 rounded-md border border-slate-100 w-full lg:w-auto">
@@ -148,6 +155,61 @@
         Locked
       </div>
     {% endif %}
+    {% for follow_up in entry.pending_absence_follow_ups %}
+      <div class="mt-2 rounded-lg border border-amber-200 bg-amber-50/70 p-2">
+        <p class="mb-1 text-[10px] font-semibold text-amber-800">
+          Absence follow-up pending — not a conduct incident unless confirmed
+        </p>
+        <form method="post"
+              action="{% url 'core:roll_call_resolve_absence_follow_up' follow_up.id %}"
+              hx-post="{% url 'core:roll_call_resolve_absence_follow_up' follow_up.id %}"
+              hx-target="#entry-row-{{ entry.id }}"
+              hx-swap="outerHTML"
+              class="flex flex-wrap items-center gap-1.5">
+          {% csrf_token %}
+          <label class="sr-only" for="follow-up-resolution-{{ follow_up.id }}">Absence review decision</label>
+          <select id="follow-up-resolution-{{ follow_up.id }}"
+                  name="resolution"
+                  required
+                  class="min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-[10px] text-slate-700">
+            <option value="" selected disabled>Review outcome</option>
+            <option value="Confirmed">Confirm unexcused</option>
+            <option value="Excused">Authorized reason</option>
+            <option value="Corrected">Recording error</option>
+          </select>
+          <label class="sr-only" for="follow-up-status-{{ follow_up.id }}">Verified attendance status</label>
+          <select id="follow-up-status-{{ follow_up.id }}"
+                  name="resulting_status"
+                  class="min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-[10px] text-slate-700">
+            <option value="">Verified status</option>
+            <option value="Present">Present</option>
+            <option value="On Exeat">On Exeat</option>
+            <option value="Infirmary">Sick Bay</option>
+            <option value="Activity">Official Duty</option>
+          </select>
+          <label class="sr-only" for="follow-up-note-{{ follow_up.id }}">Review note</label>
+          <input id="follow-up-note-{{ follow_up.id }}"
+                 name="resolution_note"
+                 type="text"
+                 maxlength="1000"
+                 required
+                 placeholder="Brief review note; no diagnosis"
+                 class="min-w-[10rem] flex-1 rounded border border-amber-300 bg-white px-1.5 py-1 text-[10px] text-slate-700 placeholder:text-slate-400">
+          <button type="submit"
+                  class="rounded bg-amber-700 px-2 py-1 text-[10px] font-semibold text-white hover:bg-amber-800">
+            Resolve
+          </button>
+        </form>
+      </div>
+    {% endfor %}
+    {% for follow_up in entry.latest_absence_follow_ups %}
+      {% if follow_up.status != 'Pending' %}
+        <div class="mt-1 text-[10px] text-slate-500">
+          Absence review: <strong>{{ follow_up.get_status_display }}</strong>
+          {% if follow_up.resolution_note %} · {{ follow_up.resolution_note }}{% endif %}
+        </div>
+      {% endif %}
+    {% endfor %}
   </div>
   
 </div>

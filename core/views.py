@@ -32,6 +32,7 @@ from .models import (
     get_exeat_queue_stats,
     RollCallSession,
     RollCallEntry,
+    RollCallAbsenceFollowUp,
 )
 from .forms import (
     ExeatCreateForm,
@@ -61,8 +62,8 @@ from .services.roll_call import (
     update_entry_status,
     complete_roll_call_session,
     mark_all_present,
-    convert_absence_to_disciplinary_record,
-    mark_roll_call_infraction_corrected,
+    resolve_absence_follow_up,
+    reconcile_gate_departure_with_roll_calls,
 )
 from .services.sms import enqueue_exeat_event_sms
 
@@ -1598,6 +1599,29 @@ def roll_call_sessions_view(request):
     if selected_status:
         sessions_qs = sessions_qs.filter(status=selected_status)
 
+    pending_follow_ups_qs = RollCallAbsenceFollowUp.objects.filter(
+        status=RollCallAbsenceFollowUp.Status.PENDING
+    ).select_related(
+        'entry__student',
+        'entry__session',
+        'entry__session__house',
+    ).order_by('created_at')
+    pending_follow_ups_qs = filter_queryset_by_house(
+        request.user,
+        pending_follow_ups_qs,
+        'entry__session__house_id',
+    )
+    if selected_house_id:
+        pending_follow_ups_qs = pending_follow_ups_qs.filter(
+            entry__session__house_id=selected_house_id
+        )
+    pending_follow_up_count = pending_follow_ups_qs.count()
+    pending_follow_ups_page, pending_follow_up_pagination_query = paginate_queryset(
+        pending_follow_ups_qs,
+        request,
+        page_parameter='follow_up_page',
+    )
+
     recent_sessions = list(sessions_qs[:15])
     selected_session_id = request.GET.get('session_id')
     current_session = None
@@ -1615,6 +1639,19 @@ def roll_call_sessions_view(request):
     if current_session:
         session_entries_qs = current_session.entries.select_related(
             'student', 'student__house', 'student__dormitory', 'student__class_group'
+        ).prefetch_related(
+            Prefetch(
+                'absence_follow_ups',
+                queryset=RollCallAbsenceFollowUp.objects.filter(
+                    status=RollCallAbsenceFollowUp.Status.PENDING
+                ).order_by('-created_at'),
+                to_attr='pending_absence_follow_ups',
+            ),
+            Prefetch(
+                'absence_follow_ups',
+                queryset=RollCallAbsenceFollowUp.objects.order_by('-created_at')[:1],
+                to_attr='latest_absence_follow_ups',
+            )
         ).order_by('student__full_name')
         session_entries_page, pagination_query = paginate_queryset(
             session_entries_qs, request, page_parameter='entry_page'
@@ -1629,6 +1666,15 @@ def roll_call_sessions_view(request):
         'houses': houses,
         'recent_sessions': recent_sessions,
         'current_session': current_session,
+        'pending_absence_count': (
+            current_session.entries.filter(
+                absence_follow_ups__status=RollCallAbsenceFollowUp.Status.PENDING
+            ).distinct().count()
+            if current_session else 0
+        ),
+        'pending_follow_ups': pending_follow_ups_page,
+        'pending_follow_up_count': pending_follow_up_count,
+        'pending_follow_up_pagination_query': pending_follow_up_pagination_query,
         'session_entries': session_entries,
         'session_entries_page': session_entries_page,
         'pagination_query': pagination_query,
@@ -1847,8 +1893,9 @@ def roll_call_mark_all_present_view(request, session_pk):
     count = mark_all_present(session, request.user)
     messages.success(
         request,
-        f"Marked {count} students present. Any linked conduct records were retained "
-        "and marked corrected.",
+        f"Marked {count} eligible absent students present. Unmarked students, excused "
+        "statuses, and unresolved gate discrepancies were left unchanged; any linked "
+        "conduct records were retained and marked corrected.",
     )
     return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
 
@@ -1863,13 +1910,173 @@ def roll_call_update_entry_view(request, entry_pk):
             request.user,
             RollCallEntry.objects.select_related(
                 'session', 'student', 'student__house', 'student__dormitory'
+            ).prefetch_related(
+                Prefetch(
+                    'absence_follow_ups',
+                    queryset=RollCallAbsenceFollowUp.objects.filter(
+                        status=RollCallAbsenceFollowUp.Status.PENDING
+                    ).order_by('-created_at'),
+                    to_attr='pending_absence_follow_ups',
+                ),
+                Prefetch(
+                    'absence_follow_ups',
+                    queryset=RollCallAbsenceFollowUp.objects.order_by('-created_at')[:1],
+                    to_attr='latest_absence_follow_ups',
+                ),
             ),
             'session__house_id',
         ),
         pk=entry_pk
     )
-    if request.method == 'POST':
-        def render_update(toast_message=None, toast_level="success"):
+    def render_update(toast_message=None, toast_level="success"):
+        entry.pending_absence_follow_ups = list(
+            entry.absence_follow_ups.filter(
+                status=RollCallAbsenceFollowUp.Status.PENDING
+            ).order_by('-created_at')
+        )
+        entry.latest_absence_follow_ups = list(
+            entry.absence_follow_ups.order_by('-created_at')[:1]
+        )
+        response = render(
+            request,
+            'core/operations/partials/roll_call_entry_update.html',
+            {
+                'entry': entry,
+                'session': entry.session,
+                'current_session': entry.session,
+                'pending_absence_count': entry.session.entries.filter(
+                    absence_follow_ups__status=RollCallAbsenceFollowUp.Status.PENDING
+                ).distinct().count(),
+            },
+        )
+        if toast_message and request.htmx:
+            response["HX-Trigger"] = json.dumps({
+                "showToast": {
+                    "message": toast_message,
+                    "level": toast_level,
+                }
+            })
+        return response
+
+    if entry.session.status == RollCallSession.Status.COMPLETED:
+        error_message = "Cannot modify an entry in a finalized session."
+        if request.htmx:
+            return render_update(error_message, "error")
+        messages.error(request, error_message)
+        return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+
+    new_status = request.POST.get('status')
+    remarks = request.POST.get('remarks')
+    if new_status not in RollCallEntry.Status.values:
+        error_message = "Choose a valid roll-call status."
+        if request.htmx:
+            return render_update(error_message, "error")
+        messages.error(request, error_message)
+        return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+
+    try:
+        previous_status = entry.status
+        had_pending_follow_up = entry.absence_follow_ups.filter(
+            status=RollCallAbsenceFollowUp.Status.PENDING
+        ).exists()
+        had_active_conduct_record = entry.disciplinary_records.filter(
+            corrected_at__isnull=True
+        ).exists()
+        update_entry_status(
+            entry,
+            new_status,
+            remarks,
+            updated_by=request.user,
+        )
+    except ValueError as error:
+        entry.refresh_from_db()
+        if request.htmx:
+            return render_update(str(error), "error")
+        messages.error(request, str(error))
+        return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+
+    toast_message = None
+    toast_level = "success"
+    if new_status == RollCallEntry.Status.ABSENT:
+        if previous_status != RollCallEntry.Status.ABSENT:
+            toast_message = (
+                "Absence flagged for staff follow-up. It is not a conduct "
+                "incident unless confirmed after review."
+            )
+        else:
+            toast_message = "This absence is already recorded for follow-up."
+        toast_level = "info"
+    elif previous_status == RollCallEntry.Status.ABSENT and had_pending_follow_up:
+        if new_status in (
+            RollCallEntry.Status.ON_EXEAT,
+            RollCallEntry.Status.INFIRMARY,
+            RollCallEntry.Status.OFFICIAL_ACTIVITY,
+        ):
+            toast_message = (
+                "Absence reviewed as an authorized exception and recorded for audit."
+            )
+        else:
+            toast_message = (
+                f"Attendance updated to {new_status}; the pending absence was "
+                "retained as a reviewed roll-call correction."
+            )
+        toast_level = "info"
+    elif previous_status == RollCallEntry.Status.ABSENT and had_active_conduct_record:
+        toast_message = (
+            f"Attendance updated to {new_status}; the confirmed conduct "
+            "record was retained and marked corrected."
+        )
+        toast_level = "info"
+    elif new_status in (
+        RollCallEntry.Status.ON_EXEAT,
+        RollCallEntry.Status.INFIRMARY,
+        RollCallEntry.Status.OFFICIAL_ACTIVITY,
+    ):
+        toast_message = (
+            f"{new_status} status recorded with the staff verification note."
+        )
+
+    if toast_message and not request.htmx:
+        messages.success(request, toast_message)
+    if request.htmx:
+        return render_update(toast_message, toast_level)
+    return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+
+
+@login_required
+@require_POST
+@role_required(*ROLL_CALL_ROLES)
+def roll_call_resolve_absence_follow_up_view(request, follow_up_pk):
+    """Resolve a pending absence without treating it as misconduct by default."""
+    follow_up = get_object_or_404(
+        filter_queryset_by_house(
+            request.user,
+            RollCallAbsenceFollowUp.objects.select_related(
+                'entry__session',
+                'entry__student',
+                'entry__session__house',
+            ),
+            'entry__session__house_id',
+        ),
+        pk=follow_up_pk,
+    )
+    resolution = request.POST.get('resolution', '')
+    resulting_status = request.POST.get('resulting_status', '')
+    resolution_note = request.POST.get('resolution_note', '')
+    try:
+        resolve_absence_follow_up(
+            follow_up,
+            resolution,
+            request.user,
+            resolution_note,
+            resulting_status,
+            logged_by=getattr(request.user, 'housemaster', None),
+        )
+    except ValueError as error:
+        if request.htmx:
+            entry = follow_up.entry
+            entry.pending_absence_follow_ups = [follow_up]
+            entry.latest_absence_follow_ups = [follow_up]
             response = render(
                 request,
                 'core/operations/partials/roll_call_entry_update.html',
@@ -1877,80 +2084,69 @@ def roll_call_update_entry_view(request, entry_pk):
                     'entry': entry,
                     'session': entry.session,
                     'current_session': entry.session,
+                    'pending_absence_count': entry.session.entries.filter(
+                        absence_follow_ups__status=RollCallAbsenceFollowUp.Status.PENDING
+                    ).distinct().count(),
                 },
             )
-            if toast_message and request.htmx:
-                response["HX-Trigger"] = json.dumps({
-                    "showToast": {
-                        "message": toast_message,
-                        "level": toast_level,
-                    }
-                })
+            response["HX-Trigger"] = json.dumps({
+                "showToast": {"message": str(error), "level": "error"}
+            })
             return response
+        messages.error(request, str(error))
+        return redirect(
+            f"{reverse('core:roll_call_sessions')}?session_id={follow_up.entry.session_id}"
+        )
 
-        if entry.session.status == RollCallSession.Status.COMPLETED:
-            error_message = "Cannot modify an entry in a finalized session."
-            if request.htmx:
-                return render_update(error_message, "error")
-            messages.error(request, error_message)
-            return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+    if resolution == RollCallAbsenceFollowUp.Status.CONFIRMED:
+        message = (
+            f"Unexcused absence confirmed for {follow_up.entry.student.full_name}; "
+            "a conduct incident was recorded."
+        )
+    elif resolution == RollCallAbsenceFollowUp.Status.EXCUSED:
+        message = "Absence marked authorized; no conduct incident was created."
+    else:
+        message = "Roll-call entry corrected; the review decision was retained for audit."
 
-        new_status = request.POST.get('status')
-        remarks = request.POST.get('remarks')
-        if new_status not in RollCallEntry.Status.values:
-            error_message = "Choose a valid roll-call status."
-            if request.htmx:
-                return render_update(error_message, "error")
-            messages.error(request, error_message)
-            return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+    if request.htmx:
+        entry = follow_up.entry
+        entry.refresh_from_db()
+        entry.pending_absence_follow_ups = list(
+            entry.absence_follow_ups.filter(
+                status=RollCallAbsenceFollowUp.Status.PENDING
+            ).order_by('-created_at')
+        )
+        entry.latest_absence_follow_ups = list(
+            entry.absence_follow_ups.order_by('-created_at')[:1]
+        )
+        response = render(
+            request,
+            'core/operations/partials/roll_call_entry_update.html',
+            {
+                'entry': entry,
+                'session': entry.session,
+                'current_session': entry.session,
+                'pending_absence_count': entry.session.entries.filter(
+                    absence_follow_ups__status=RollCallAbsenceFollowUp.Status.PENDING
+                ).distinct().count(),
+            },
+        )
+        response["HX-Trigger"] = json.dumps({
+            "showToast": {
+                "message": message,
+                "level": (
+                    "success"
+                    if resolution == RollCallAbsenceFollowUp.Status.CONFIRMED
+                    else "info"
+                ),
+            }
+        })
+        return response
 
-        flag_infraction = request.POST.get('flag_infraction') == 'true'
-        try:
-            with transaction.atomic():
-                update_entry_status(entry, new_status, remarks)
-                toast_message = None
-                toast_level = "success"
-
-                if flag_infraction:
-                    if new_status != RollCallEntry.Status.ABSENT:
-                        raise ValueError("An infraction can only be logged for an absent student.")
-                    staff = getattr(request.user, 'housemaster', None)
-                    _, created = convert_absence_to_disciplinary_record(
-                        entry, logged_by=staff
-                    )
-                    if created:
-                        toast_message = (
-                            f"Conduct infraction logged for {entry.student.full_name}."
-                        )
-                    else:
-                        toast_message = (
-                            "A conduct record is already linked to this roll-call entry; "
-                            "no duplicate was created."
-                        )
-                        toast_level = "info"
-                elif new_status != RollCallEntry.Status.ABSENT:
-                    corrected = mark_roll_call_infraction_corrected(
-                        entry, new_status, request.user
-                    )
-                    if corrected:
-                        toast_message = (
-                            f"Attendance updated to {new_status}. The previously logged "
-                            "conduct record was retained and marked corrected."
-                        )
-                        toast_level = "info"
-        except ValueError as error:
-            entry.refresh_from_db()
-            if request.htmx:
-                return render_update(str(error), "error")
-            messages.error(request, str(error))
-            return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
-
-        if toast_message and not request.htmx:
-            messages.success(request, toast_message)
-        if request.htmx:
-            return render_update(toast_message, toast_level)
-
-    return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")
+    messages.success(request, message)
+    return redirect(
+        f"{reverse('core:roll_call_sessions')}?session_id={follow_up.entry.session_id}"
+    )
 
 
 @login_required
@@ -1986,9 +2182,23 @@ def gate_terminal_action_view(request, exeat_pk, action):
             else:
                 movement.actual_departure = timezone.now()
                 movement.departure_recorded_by = officer_name
-                movement.save()
+                with transaction.atomic():
+                    movement.save()
+                    reconciled_count = reconcile_gate_departure_with_roll_calls(
+                        exeat,
+                        movement,
+                    )
                 enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
-                messages.success(request, f"Gate EXIT logged for {exeat.student.full_name} ({exeat.exeat_number}).")
+                message = (
+                    f"Gate EXIT logged for {exeat.student.full_name} "
+                    f"({exeat.exeat_number})."
+                )
+                if reconciled_count:
+                    message += (
+                        f" {reconciled_count} unmarked roll-call entry/entries "
+                        "were automatically marked On Exeat."
+                    )
+                messages.success(request, message)
     elif action == 'return':
         if exeat.status != Exeat.Status.APPROVED:
             messages.error(request, "Only approved exeats can have gate return logged.")

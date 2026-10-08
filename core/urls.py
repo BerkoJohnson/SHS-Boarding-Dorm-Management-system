@@ -23,6 +23,7 @@ urlpatterns = [
     path('operations/roll-call/<uuid:session_pk>/complete/', views.roll_call_complete_session_view, name='roll_call_complete'),
     path('operations/roll-call/<uuid:session_pk>/mark-all-present/', views.roll_call_mark_all_present_view, name='roll_call_mark_all_present'),
     path('operations/roll-call/entry/<uuid:entry_pk>/', views.roll_call_update_entry_view, name='roll_call_update_entry'),
+    path('operations/roll-call/absence-follow-up/<uuid:follow_up_pk>/', views.roll_call_resolve_absence_follow_up_view, name='roll_call_resolve_absence_follow_up'),
     path('operations/gate/<uuid:exeat_pk>/<str:action>/', views.gate_terminal_action_view, name='gate_terminal_action'),
     path('operations/gate/verify/', views.gate_verify_pass_view, name='gate_verify_pass'),
     path('search/', views.global_search_view, name='global_search'),
