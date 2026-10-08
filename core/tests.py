@@ -2016,7 +2016,6 @@ class RollCallAndGateTests(TestCase):
             f'/operations/roll-call/entry/{entry.id}/',
             {
                 'status': RollCallEntry.Status.INFIRMARY,
-                'remarks': 'Staff confirmed the student is in the sick bay.',
             },
             HTTP_HX_REQUEST='true',
         )
@@ -2026,16 +2025,13 @@ class RollCallAndGateTests(TestCase):
         follow_up.refresh_from_db()
         entry.refresh_from_db()
         self.assertEqual(follow_up.status, RollCallAbsenceFollowUp.Status.EXCUSED)
-        self.assertEqual(
-            follow_up.resolution_note,
-            'Staff confirmed the student is in the sick bay.',
-        )
+        self.assertEqual(follow_up.resolution_note, '')
         self.assertEqual(entry.status, RollCallEntry.Status.INFIRMARY)
         self.assertFalse(
             DisciplinaryRecord.objects.filter(roll_call_entry=entry).exists()
         )
 
-    def test_excused_roll_call_statuses_require_a_staff_reason(self):
+    def test_excused_roll_call_statuses_do_not_require_a_staff_note(self):
         session = create_roll_call_session(
             house=self.house,
             conducted_by=self.hm,
@@ -2043,28 +2039,40 @@ class RollCallAndGateTests(TestCase):
         entry = session.entries.get(student=self.boarder1)
         self.client.force_login(self.user_hm)
 
-        response = self.client.post(
-            f'/operations/roll-call/entry/{entry.id}/',
-            {'status': RollCallEntry.Status.INFIRMARY},
-            HTTP_HX_REQUEST='true',
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('Add a brief staff-verified reason', response['HX-Trigger'])
-        entry.refresh_from_db()
-        self.assertEqual(entry.status, RollCallEntry.Status.UNMARKED)
+        for status in (
+            RollCallEntry.Status.INFIRMARY,
+            RollCallEntry.Status.ON_EXEAT,
+            RollCallEntry.Status.OFFICIAL_ACTIVITY,
+        ):
+            response = self.client.post(
+                f'/operations/roll-call/entry/{entry.id}/',
+                {'status': status},
+                HTTP_HX_REQUEST='true',
+            )
+            self.assertEqual(response.status_code, 200)
+            entry.refresh_from_db()
+            self.assertEqual(entry.status, status)
+            self.assertEqual(entry.remarks, '')
 
-        response = self.client.post(
-            f'/operations/roll-call/entry/{entry.id}/',
-            {
-                'status': RollCallEntry.Status.INFIRMARY,
-                'remarks': 'Staff confirmed the student is in the sick bay.',
-            },
-            HTTP_HX_REQUEST='true',
+    def test_roll_call_roster_shows_identity_and_status_in_two_columns(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
         )
+        self.client.force_login(self.user_hm)
+
+        response = self.client.get(
+            reverse('core:roll_call_sessions'),
+            {'session_id': session.pk},
+        )
+
         self.assertEqual(response.status_code, 200)
-        entry.refresh_from_db()
-        self.assertEqual(entry.status, RollCallEntry.Status.INFIRMARY)
-        self.assertNotIn('diagnosis', entry.remarks.lower())
+        self.assertContains(response, 'Student / Dorm / Class')
+        self.assertContains(response, 'Attendance Status')
+        self.assertContains(response, 'col-span-7')
+        self.assertContains(response, 'col-span-5')
+        self.assertNotContains(response, 'Reason for exeat')
+        self.assertNotContains(response, 'entry-remarks-')
 
     def test_legacy_flag_action_only_queues_absence_for_review(self):
         session = create_roll_call_session(
@@ -2113,10 +2121,11 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'hx-swap-oob="outerHTML"')
         self.assertContains(response, 'disabled title="Mark all students before finalizing"')
-        self.assertContains(response, 'class="hidden lg:flex items-center gap-1 whitespace-nowrap"')
-        self.assertContains(response, 'lg:grid-cols-12')
+        self.assertContains(response, 'col-span-5 min-w-0 w-full')
+        self.assertContains(response, 'grid-cols-12')
         self.assertContains(response, 'break-words')
         self.assertContains(response, 'name="status"')
+        self.assertNotContains(response, 'entry-remarks-')
 
         response = self.client.post(
             f'/operations/roll-call/entry/{entries[1].id}/',

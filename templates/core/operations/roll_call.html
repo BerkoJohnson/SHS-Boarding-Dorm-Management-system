@@ -63,10 +63,10 @@
   </section>
   {% endif %}
 
-  <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+  <div class="grid grid-cols-1 gap-4 lg:grid-cols-10">
     
     <!-- Left Session History & Selector Column -->
-    <div class="lg:col-span-1 space-y-3">
+    <div class="space-y-3 lg:col-span-3">
       <div class="bg-white rounded-xl border border-slate-200/90 overflow-hidden shadow-xs">
         <div class="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
           <span class="text-xs font-bold text-slate-800">Roll Call Sessions</span>
@@ -133,7 +133,7 @@
     </div>
 
     <!-- Right Active Roster Container -->
-    <div class="lg:col-span-3">
+    <div class="space-y-4 lg:col-span-7">
       {% include "core/operations/partials/roll_call_roster.html" %}
     </div>
 

@@ -139,15 +139,6 @@ def update_entry_status(
     """
     if new_status not in RollCallEntry.Status.values:
         raise ValueError(f"Invalid roll call status: {new_status}")
-    if new_status in (
-        RollCallEntry.Status.ON_EXEAT,
-        RollCallEntry.Status.INFIRMARY,
-        RollCallEntry.Status.OFFICIAL_ACTIVITY,
-    ) and not (remarks or "").strip():
-        raise ValueError(
-            "Add a brief staff-verified reason for an exeat, sick-bay, or official-duty status."
-        )
-
     with transaction.atomic():
         session = RollCallSession.objects.select_for_update().get(
             pk=entry.session_id
@@ -160,12 +151,9 @@ def update_entry_status(
         previous_status = entry.status
         entry.session = session
         entry.status = new_status
-        if remarks is not None:
-            entry.remarks = remarks.strip()
+        entry.remarks = (remarks or "").strip()
         entry.status_source = RollCallEntry.StatusSource.STAFF
-        update_fields = ["status", "status_source", "updated_at"]
-        if remarks is not None:
-            update_fields.append("remarks")
+        update_fields = ["status", "status_source", "remarks", "updated_at"]
         if entry.gate_conflict_at and not entry.gate_conflict_reviewed_at:
             entry.gate_conflict_reviewed_at = timezone.now()
             entry.gate_conflict_reviewed_by = updated_by

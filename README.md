@@ -43,8 +43,8 @@ Staff-marked absences enter the authorized follow-up queue and are not conduct
 incidents by default. A reviewer can confirm an unexcused absence, record an
 authorized reason, or correct a recording error; only confirmation creates a
 conduct incident. Follow-up decisions and corrections retain an audit trail.
-Sick-bay, official-duty, and manually recorded exeat statuses require a brief
-staff note; roll call does not collect diagnoses or punishment details.
+Attendance status changes do not require a free-text reason; roll call does
+not collect diagnoses or punishment details.
 
 Staff must assign each remaining student a status before finalizing the
 session. Unmarked students remain in the roster and attendance-rate denominator

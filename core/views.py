@@ -2033,7 +2033,7 @@ def roll_call_update_entry_view(request, entry_pk):
         RollCallEntry.Status.OFFICIAL_ACTIVITY,
     ):
         toast_message = (
-            f"{new_status} status recorded with the staff verification note."
+            f"{new_status} status recorded."
         )
 
     if toast_message and not request.htmx:
