@@ -165,25 +165,22 @@ class Programme(BaseModel):
 
 
 class House(BaseModel):
-    """Administrative House (Houses 1 to 4)."""
-
-    class HouseNumber(models.IntegerChoices):
-        ONE = 1, "House 1 (Red)"
-        TWO = 2, "House 2 (Blue)"
-        THREE = 3, "House 3 (Yellow)"
-        FOUR = 4, "House 4 (Green)"
+    """A school-defined boarding house."""
 
     name = models.CharField(
         max_length=50, help_text="House name (e.g., Red House, Blue House)."
     )
-    number = models.PositiveSmallIntegerField(choices=HouseNumber.choices, unique=True)
+    display_order = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Optional ordering for house lists. Houses with the same value are sorted by name.",
+    )
     motto = models.CharField(max_length=150, blank=True, null=True)
 
     class Meta:
-        ordering = ["number"]
+        ordering = ["display_order", "name"]
 
     def __str__(self):
-        return f"{self.name} ({self.get_number_display()})"
+        return self.name
 
 
 class Dormitory(BaseModel):
@@ -1323,21 +1320,20 @@ def get_exeat_queue_stats(scoped_pending_qs, user):
     # --- Per-house breakdown (for the queue-jump chip bar) ---
     house_totals = list(
         scoped_pending_qs
-        .values(house_id=F('student__house_id'), house_name=F('student__house__name'), house_number=F('student__house__number'))
+        .values(house_id=F('student__house_id'), house_name=F('student__house__name'), house_order=F('student__house__display_order'))
         .annotate(pending=Count('id'))
-        .order_by('house_number')
+        .order_by('house_order', 'house_name')
     )
     stats['per_house'] = [
         {
             'id': row['house_id'],
             'name': row['house_name'] or 'Unassigned',
-            'number': row['house_number'],
             'pending': row['pending'],
         }
         for row in house_totals if row['house_id'] is not None
     ]
     # Also carry an "All houses" chip with total count
     if stats['per_house']:
-        stats['per_house'].insert(0, {'id': None, 'name': 'All Queues', 'number': 0, 'pending': stats['total_pending']})
+        stats['per_house'].insert(0, {'id': None, 'name': 'All Queues', 'pending': stats['total_pending']})
 
     return stats

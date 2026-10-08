@@ -100,12 +100,7 @@
           <span class="text-[10px] text-slate-400 font-semibold uppercase">Boarding Placement</span>
         </div>
         <div class="flex items-start gap-3">
-          <div class="w-12 h-12 shrink-0 rounded-xl bg-gradient-to-br
-              {% if exeat.student.house.number == 1 %}from-red-500 to-rose-600
-              {% elif exeat.student.house.number == 2 %}from-blue-500 to-indigo-600
-              {% elif exeat.student.house.number == 3 %}from-amber-500 to-orange-600
-              {% elif exeat.student.house.number == 4 %}from-emerald-500 to-teal-600
-              {% else %}from-slate-500 to-slate-700{% endif %}
+          <div class="w-12 h-12 shrink-0 rounded-xl bg-gradient-to-br from-slate-500 to-slate-700
               text-white font-extrabold flex items-center justify-center text-base shadow-sm">
             {{ exeat.student.full_name|make_list|first|upper }}
           </div>
@@ -119,12 +114,7 @@
               <div class="p-2 rounded-lg bg-slate-50 border border-slate-200">
                 <div class="text-slate-400 font-bold uppercase tracking-wider text-[10px]">House</div>
                 <div class="mt-0.5 font-semibold text-slate-800 inline-flex items-center gap-1.5">
-                  <span class="w-2 h-2 rounded-full
-                      {% if exeat.student.house.number == 1 %}bg-red-500
-                      {% elif exeat.student.house.number == 2 %}bg-blue-500
-                      {% elif exeat.student.house.number == 3 %}bg-amber-500
-                      {% elif exeat.student.house.number == 4 %}bg-emerald-500
-                      {% else %}bg-slate-400{% endif %}"></span>
+                  <span class="w-2 h-2 rounded-full bg-slate-400"></span>
                   {{ exeat.student.house.name|default:"Unassigned" }}
                 </div>
               </div>

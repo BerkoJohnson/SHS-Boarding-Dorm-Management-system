@@ -26,7 +26,7 @@ Use these rules throughout:
 - Dependency manifests: `pyproject.toml` / `uv.lock` and `package.json` / `package-lock.json`; `requirements.txt` is also present and should be checked for consistency.
 - Runtime settings: `schoolsystem/settings/base.py`, `development.py`, and `production.py`. Development and production must use different secrets and appropriate security settings.
 - Main routes are in `schoolsystem/urls.py` and `core/urls.py`; business rules are primarily in `core/models.py`, `core/forms.py`, `core/permissions.py`, `core/views.py`, and `core/services/`.
-- Schema history is represented by `core/migrations/0001_initial.py` through `0011_exeatreconciliation.py`.
+- Schema history is represented by the migrations under `core/migrations/`.
 - Existing functional regression evidence is concentrated in `core/tests.py`.
 - UI references are the Django templates under `templates/` and Tailwind source in `static/src/input.css`; the README currently contains only basic development commands and is not a complete product specification.
 
@@ -36,11 +36,11 @@ The workbook `media/admissions_roster.xlsx` has six sheets (`Agric`, `Bus`, `Gen
 
 `Admission No.`, `Full Name`, `Index Number`, `Gender`, `Date of Birth`, `Programme`, `House`, `Class`, `Status`, `Residency`, `Parent Name`, `Parent Contact`.
 
-The existing importer is `core/management/commands/import_roster.py`. It creates or finds programmes, classes, houses, dormitory blocks, and guardians; assigns a student by admission number; and applies mappings for house number/gender, residency, status, and dates. Preserve its intended source mapping, but validate assumptions and improve failures/atomicity only as explicit, tested decisions. Do not expose workbook records in prompts or documentation.
+The existing importer is `core/management/commands/import_roster.py`. It creates or finds programmes, classes, named houses, dormitory blocks, and guardians; assigns a student by admission number; and applies mappings for house name, dormitory gender, residency, status, and dates. House identity is based on the school's configured house name, not a fixed numeric house slot. Preserve intended source mappings, but validate assumptions and improve failures/atomicity only as explicit, tested decisions. Do not expose workbook records in prompts or documentation.
 
 ### Feature inventory to preserve
 
-1. **Academic structure and student directory** — academic years/terms and track levels; programmes, classes, four numbered houses, gendered dormitories, students, guardians, and staff assignments.
+1. **Academic structure and student directory** — academic years/terms and track levels; programmes, classes, configurable named houses, gendered dormitories, students, guardians, and staff assignments.
 2. **Roles and jurisdiction** — Administrator, Senior Housemaster, Housemaster, House Tutor, and Gate Officer; school-wide access for privileged roles and house-scoped data/actions for assigned staff.
 3. **Dashboard and shared shell** — student/boarding/capacity indicators, exeat activity, alerts, a collapsible navigation sidebar, profile menu, notifications, toast messages, and global search.
 4. **Exeat workflow** — create a pending request; authorized house/senior staff review and approve or reject; approval establishes the gate log; authorized gate staff record departure and return; staff reconcile approved passes with missing movement records; cancel only when business rules permit.

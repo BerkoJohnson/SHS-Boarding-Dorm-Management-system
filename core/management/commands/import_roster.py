@@ -2,6 +2,7 @@ from datetime import datetime
 import pandas as pd
 from django.core.management.base import BaseCommand
 from core.models import Student, Programme, House, Dormitory, ClassGroup, Guardian
+from core.services.roster import get_roster_house_identity
 
 
 class Command(BaseCommand):
@@ -13,8 +14,6 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         file_path = options['file_path']
         xls = pd.ExcelFile(file_path)
-
-        num_map = {'ONE': 1, 'TWO': 2, 'THREE': 3, 'FOUR': 4}
 
         for sheet in xls.sheet_names:
             self.stdout.write(f"Processing sheet: {sheet}...")
@@ -41,28 +40,15 @@ class Command(BaseCommand):
                 dorm_obj = None
 
                 if house_str and house_str.lower() != 'unallocated':
-                    # Parse house number designation (1 to 4)
-                    h_num = 1
-                    for k, v in num_map.items():
-                        if k in house_str.upper():
-                            h_num = v
-                            break
-
-                    # Extract clean house name (e.g., "Red House", "Blue House")
-                    clean_house_name = house_str.split('(')[0].strip().title()
-                    if not clean_house_name.lower().endswith('house'):
-                        clean_house_name = f"{clean_house_name} House"
-
-                    # Get or create administrative House
+                    clean_house_name, gender_code = get_roster_house_identity(
+                        house_str,
+                        str(row['Gender']),
+                    )
                     house_obj, _ = House.objects.get_or_create(
-                        number=h_num,
-                        defaults={
-                            'name': clean_house_name
-                        }
+                        name__iexact=clean_house_name,
+                        defaults={'name': clean_house_name},
                     )
 
-                    # Determine gender block from string '(M)' or '(F)'
-                    gender_code = Dormitory.GenderBlock.MALE if '(M)' in house_str.upper() else Dormitory.GenderBlock.FEMALE
                     block_label = "Boys Block" if gender_code == Dormitory.GenderBlock.MALE else "Girls Block"
                     dorm_name = f"{house_obj.name} {block_label}"
 

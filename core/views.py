@@ -327,7 +327,7 @@ def exeat_list_view(request):
     elif status_filter:
         exeats = exeats.filter(status=status_filter)
 
-    houses = House.objects.all().order_by('number')
+    houses = House.objects.all().order_by('display_order', 'name')
     house_scope = get_house_scope(request.user)
     if house_scope is not None:
         houses = houses.filter(pk=house_scope.pk)
@@ -454,7 +454,7 @@ def exeat_approvals_hub_view(request):
             Q(staff_id__iexact=request.user.username)
             | Q(full_name__icontains=request.user.username)
         ).first()
-    houses = House.objects.all().order_by('number')
+    houses = House.objects.all().order_by('display_order', 'name')
     if house_scope is not None:
         houses = houses.filter(pk=house_scope.pk)
 
@@ -496,7 +496,7 @@ def house_list_view(request):
             Prefetch('dormitories', queryset=dormitories),
             'housemasters',
         )
-        .order_by('number')
+        .order_by('display_order', 'name')
     )
     if house_scope is not None:
         houses_qs = houses_qs.filter(pk=house_scope.pk)
@@ -644,7 +644,7 @@ def conduct_list_view(request):
     major_count = all_records.filter(severity=DisciplinaryRecord.Severity.MAJOR).count()
     minor_count = all_records.filter(severity=DisciplinaryRecord.Severity.MINOR).count()
 
-    houses = House.objects.all().order_by('number')
+    houses = House.objects.all().order_by('display_order', 'name')
     if house_scope is not None:
         houses = houses.filter(pk=house_scope.pk)
     active_filters_count = sum(1 for v in [severity, house_id] if v)
@@ -1565,7 +1565,7 @@ def global_search_view(request):
 def roll_call_sessions_view(request):
     """Render house-scoped roll-call sessions without gate-security data."""
     house_scope = get_house_scope(request.user)
-    houses = House.objects.all().order_by('number').prefetch_related('dormitories')
+    houses = House.objects.all().order_by('display_order', 'name').prefetch_related('dormitories')
     if house_scope is not None:
         houses = houses.filter(pk=house_scope.pk)
 
