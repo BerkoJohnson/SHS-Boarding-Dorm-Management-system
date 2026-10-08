@@ -35,54 +35,11 @@
         </div>
 
         <!-- Session Command Actions -->
-        <div class="flex items-center gap-2">
-          {% if current_session.status == 'In Progress' %}
-            <!-- Mark All Present -->
-            <form method="post" action="{% url 'core:roll_call_mark_all_present' current_session.id %}">
-              {% csrf_token %}
-              <button type="submit" 
-                      class="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded-lg text-xs border border-emerald-200 transition shadow-2xs">
-                Mark All Present
-              </button>
-            </form>
-
-            <!-- Finalize / Complete Session -->
-            <form method="post" action="{% url 'core:roll_call_complete' current_session.id %}">
-              {% csrf_token %}
-              <button type="submit"
-                      class="px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white font-medium rounded-lg text-xs transition shadow-xs">
-                Finalize Roll Call
-              </button>
-            </form>
-          {% else %}
-            <span class="text-xs text-slate-400 italic">Roll call records finalized & archived.</span>
-          {% endif %}
-        </div>
+        {% include "core/operations/partials/roll_call_actions.html" with current_session=current_session %}
       </div>
 
       <!-- Quick Metrics Strip -->
-      <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3 text-center">
-        <div class="p-2 rounded-lg bg-slate-50 border border-slate-100">
-          <span class="text-[10px] uppercase font-semibold text-slate-400 block">Total Boarders</span>
-          <span class="text-base font-bold text-slate-800">{{ current_session.total_students }}</span>
-        </div>
-        <div class="p-2 rounded-lg bg-emerald-50/60 border border-emerald-100">
-          <span class="text-[10px] uppercase font-semibold text-emerald-600 block">Present Rate</span>
-          <span class="text-base font-bold text-emerald-700">{{ current_session.attendance_rate }}%</span>
-        </div>
-        <div class="p-2 rounded-lg bg-emerald-50/60 border border-emerald-100">
-          <span class="text-[10px] uppercase font-semibold text-emerald-600 block">Accounted For</span>
-          <span class="text-base font-bold text-emerald-700">{{ current_session.present_count }}</span>
-        </div>
-        <div class="p-2 rounded-lg bg-rose-50/60 border border-rose-100">
-          <span class="text-[10px] uppercase font-semibold text-rose-600 block">Absent (Unexcused)</span>
-          <span class="text-base font-bold text-rose-700">{{ current_session.absent_count }}</span>
-        </div>
-        <div class="p-2 rounded-lg bg-purple-50/60 border border-purple-100">
-          <span class="text-[10px] uppercase font-semibold text-purple-600 block">On Exeat / Infirmary</span>
-          <span class="text-base font-bold text-purple-700">{{ current_session.on_exeat_count|add:current_session.infirmary_count }}</span>
-        </div>
-      </div>
+      {% include "core/operations/partials/roll_call_metrics.html" with current_session=current_session %}
     </div>
 
     <!-- Student Attendance Roster Table -->
@@ -90,7 +47,7 @@
       <div class="px-4 py-2.5 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between">
         <span class="text-xs font-semibold text-slate-700">Dormitory Roster ({{ session_entries.paginator.count }} Students)</span>
         {% if current_session.status == 'In Progress' %}
-          <span class="text-[11px] text-slate-400">Click any status button to update instantly via HTMX</span>
+          <span class="text-[11px] text-slate-400">Entries start unmarked. Verify each student before finalizing.</span>
         {% else %}
           <span class="text-[11px] text-slate-400 font-medium">Session finalized &mdash; records are locked</span>
         {% endif %}

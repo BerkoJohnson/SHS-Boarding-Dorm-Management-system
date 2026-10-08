@@ -29,3 +29,12 @@ Exeats generate SMS notifications for request submission, approval or rejection,
 gate departure and return, and overdue status. Guardians and the student's
 assigned Housemaster receive the notices. Overdue reminders are sent at the
 expected return time and then once every 24 hours until a return is recorded.
+
+## Roll-call attendance verification
+
+New roll-call rosters begin with students marked **Unmarked**; an active gate
+exeat is automatically recorded as **On Exeat**. Staff must assign each remaining
+student a status before finalizing the session. Unmarked students are excluded
+from neither the roster nor the attendance-rate denominator, so an incomplete
+roll call cannot appear fully attended. The attendance report also shows the
+number of unmarked entries in sessions still in progress.

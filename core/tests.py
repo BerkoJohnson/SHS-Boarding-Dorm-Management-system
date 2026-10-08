@@ -22,9 +22,11 @@ from core.models import (
 from core.services.roll_call import (
     create_roll_call_session,
     update_entry_status,
+    complete_roll_call_session,
     mark_all_present,
     convert_absence_to_disciplinary_record,
 )
+from core.services.reports import get_detailed_report
 
 User = get_user_model()
 
@@ -1814,7 +1816,19 @@ class RollCallAndGateTests(TestCase):
 
         self.assertEqual(entry_boarder1.status, RollCallEntry.Status.ON_EXEAT)
         self.assertIn('Active Gate Exeat', entry_boarder1.remarks)
-        self.assertEqual(entry_boarder2.status, RollCallEntry.Status.PRESENT)
+        self.assertEqual(entry_boarder2.status, RollCallEntry.Status.UNMARKED)
+
+    def test_roll_call_entries_start_unmarked_and_unmarked_is_not_present(self):
+        session = create_roll_call_session(
+            house=self.house,
+            session_type=RollCallSession.SessionType.EVENING,
+            conducted_by=self.hm,
+        )
+
+        self.assertEqual(session.unmarked_count, 2)
+        self.assertEqual(session.accounted_count, 0)
+        self.assertEqual(session.present_count, 0)
+        self.assertEqual(session.attendance_rate, 0)
 
     def test_roll_call_update_entry_and_flag_infraction(self):
         """Housemaster can mark student absent and optionally log disciplinary infraction."""
@@ -1841,8 +1855,35 @@ class RollCallAndGateTests(TestCase):
         self.assertIsNotNone(infraction)
         self.assertIn('Evening Roll Call', infraction.offense)
 
-    def test_roll_call_mark_all_present_bulk(self):
-        """Bulk action resets unexcused absent entries to Present while preserving Exeat status."""
+    def test_roll_call_htmx_update_refreshes_metrics_and_finalize_state(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        entries = list(session.entries.order_by('student_id'))
+        self.client.login(username='hm_volta', password='password123')
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entries[0].id}/',
+            {'status': RollCallEntry.Status.PRESENT},
+            HTTP_HX_REQUEST='true',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'hx-swap-oob="outerHTML"')
+        self.assertContains(response, 'disabled title="Mark all students before finalizing"')
+
+        response = self.client.post(
+            f'/operations/roll-call/entry/{entries[1].id}/',
+            {'status': RollCallEntry.Status.ABSENT},
+            HTTP_HX_REQUEST='true',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'disabled title="Mark all students before finalizing"')
+
+    def test_roll_call_mark_all_present_bulk_preserves_unmarked_and_exeat(self):
+        """Bulk correction does not convert unverified or excused entries to present."""
         session = create_roll_call_session(
             house=self.house,
             session_type=RollCallSession.SessionType.EVENING,
@@ -1850,6 +1891,21 @@ class RollCallAndGateTests(TestCase):
         )
         entry1 = session.entries.get(student=self.boarder1)
         entry2 = session.entries.get(student=self.boarder2)
+        student3 = Student.objects.create(
+            admission_no='SHS-2026-B3',
+            index_number='IDX-2026-B3',
+            full_name='Third Boarder',
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=self.house,
+            dormitory=self.dorm,
+            residency=Student.ResidencyStatus.BOARDING,
+        )
+        entry3 = RollCallEntry.objects.create(
+            session=session,
+            student=student3,
+            status=RollCallEntry.Status.UNMARKED,
+        )
 
         entry1.status = RollCallEntry.Status.ABSENT
         entry1.save()
@@ -1865,8 +1921,73 @@ class RollCallAndGateTests(TestCase):
 
         entry1.refresh_from_db()
         entry2.refresh_from_db()
+        entry3.refresh_from_db()
         self.assertEqual(entry1.status, RollCallEntry.Status.PRESENT)
         self.assertEqual(entry2.status, RollCallEntry.Status.ON_EXEAT)
+        self.assertEqual(entry3.status, RollCallEntry.Status.UNMARKED)
+
+    def test_attendance_report_counts_unmarked_entries(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        session.entries.filter(student=self.boarder1).update(
+            status=RollCallEntry.Status.PRESENT
+        )
+
+        report = get_detailed_report(
+            "attendance",
+            date_from=session.date,
+            date_to=session.date,
+        )
+        row = report["rows"][0]
+
+        self.assertEqual(report["headers"][10], "Unmarked")
+        self.assertEqual(row[5], 2)
+        self.assertEqual(row[6], 1)
+        self.assertEqual(row[10], 1)
+
+    def test_roll_call_cannot_finalize_with_unmarked_entries(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+
+        with self.assertRaisesMessage(ValueError, "2 student(s) are still unmarked"):
+            complete_roll_call_session(session)
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, RollCallSession.Status.IN_PROGRESS)
+
+    def test_roll_call_finalize_view_blocks_unmarked_and_get_requests(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        self.client.login(username='hm_volta', password='password123')
+
+        get_response = self.client.get(f'/operations/roll-call/{session.id}/complete/')
+        self.assertEqual(get_response.status_code, 405)
+
+        response = self.client.post(
+            f'/operations/roll-call/{session.id}/complete/',
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        session.refresh_from_db()
+        self.assertEqual(session.status, RollCallSession.Status.IN_PROGRESS)
+        self.assertContains(response, '2 student(s) are still unmarked')
+
+    def test_roll_call_finalizes_after_all_entries_are_marked(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+        )
+        session.entries.update(status=RollCallEntry.Status.PRESENT)
+
+        completed_session = complete_roll_call_session(session)
+
+        self.assertEqual(completed_session.status, RollCallSession.Status.COMPLETED)
 
     def test_gate_terminal_action_departure_and_return(self):
         """Gate Officer can log departure and arrival return through terminal action."""

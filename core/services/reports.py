@@ -285,6 +285,9 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
             report_infirmary_count=Count(
                 "entries", filter=Q(entries__status=RollCallEntry.Status.INFIRMARY)
             ),
+            report_unmarked_count=Count(
+                "entries", filter=Q(entries__status=RollCallEntry.Status.UNMARKED)
+            ),
         )
         rows = []
         for session in session_rows:
@@ -305,6 +308,7 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                 session["report_absent_count"],
                 session["report_on_exeat_count"],
                 session["report_infirmary_count"],
+                session["report_unmarked_count"],
                 f"{rate}%",
                 session["conducted_by__full_name"] or "—",
             ))
@@ -339,13 +343,14 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
         )
         return {
             "title": "Roll-call Attendance & Follow-up",
-            "headers": ("Date", "House", "Dormitory", "Session", "Status", "Expected", "Present", "Absent", "On Exeat", "Infirmary", "Attendance", "Conducted By"),
+            "headers": ("Date", "House", "Dormitory", "Session", "Status", "Expected", "Present", "Absent", "On Exeat", "Infirmary", "Unmarked", "Attendance", "Conducted By"),
             "rows": rows,
             "summary": (
                 ("Sessions", len(rows)),
                 ("Incomplete sessions", sum(1 for row in rows if row[4] == "In Progress")),
                 ("Sessions with absences", sum(1 for row in rows if row[7])),
                 ("Students marked absent", sum(row[7] for row in rows)),
+                ("Students not yet marked", sum(row[10] for row in rows)),
                 ("Students with 2+ absences", len(repeat_absence_rows)),
             ),
             "sections": ({

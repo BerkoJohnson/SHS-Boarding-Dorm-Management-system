@@ -1068,6 +1068,14 @@ class RollCallSession(BaseModel):
         return self.entries.filter(status=RollCallEntry.Status.PRESENT).count()
 
     @property
+    def unmarked_count(self):
+        return self.entries.filter(status=RollCallEntry.Status.UNMARKED).count()
+
+    @property
+    def accounted_count(self):
+        return self.total_students - self.unmarked_count
+
+    @property
     def absent_count(self):
         return self.entries.filter(status=RollCallEntry.Status.ABSENT).count()
 
@@ -1093,6 +1101,7 @@ class RollCallEntry(BaseModel):
     Individual student attendance record within a RollCallSession.
     """
     class Status(models.TextChoices):
+        UNMARKED = "Unmarked", "Not yet verified"
         PRESENT = "Present", "Present"
         ABSENT = "Absent", "Absent (Unexcused)"
         ON_EXEAT = "On Exeat", "On Exeat (Excused Leave)"
@@ -1112,7 +1121,7 @@ class RollCallEntry(BaseModel):
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
-        default=Status.PRESENT
+        default=Status.UNMARKED
     )
     remarks = models.CharField(max_length=200, blank=True, null=True)
 

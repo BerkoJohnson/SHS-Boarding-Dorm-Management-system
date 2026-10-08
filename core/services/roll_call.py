@@ -33,8 +33,8 @@ def create_roll_call_session(
     Creates a new RollCallSession and automatically provisions RollCallEntry records
     for all boarding students enrolled in the target House or Dormitory block.
 
-    Reconciles with the Exeat system: students with active, unreturned approved exeats
-    at the time of the session are automatically marked as ON_EXEAT.
+    Students start UNMARKED unless an active, unreturned gate exeat automatically
+    reconciles them as ON_EXEAT.
 
     Args:
         house: Target House for roll call muster.
@@ -92,7 +92,7 @@ def create_roll_call_session(
                 entry_status = RollCallEntry.Status.ON_EXEAT
                 entry_remarks = "Active Gate Exeat (Departed)"
             else:
-                entry_status = RollCallEntry.Status.PRESENT
+                entry_status = RollCallEntry.Status.UNMARKED
                 entry_remarks = ""
 
             entries.append(
@@ -129,24 +129,53 @@ def update_entry_status(
     Raises:
         ValueError: If the parent session is already finalized/completed.
     """
-    # Guard: prevent mutations on finalized sessions
-    if entry.session.status == RollCallSession.Status.COMPLETED:
-        raise ValueError(
-            "Cannot modify attendance records in a finalized roll call session."
-        )
+    if new_status not in RollCallEntry.Status.values:
+        raise ValueError(f"Invalid roll call status: {new_status}")
 
-    if new_status in RollCallEntry.Status.values:
+    with transaction.atomic():
+        session = RollCallSession.objects.select_for_update().get(
+            pk=entry.session_id
+        )
+        if session.status == RollCallSession.Status.COMPLETED:
+            raise ValueError(
+                "Cannot modify attendance records in a finalized roll call session."
+            )
+
+        entry.session = session
         entry.status = new_status
-    if remarks is not None:
-        entry.remarks = remarks
-    entry.save()
+        if remarks is not None:
+            entry.remarks = remarks
+        entry.save()
     return entry
+
+
+def complete_roll_call_session(session: RollCallSession) -> RollCallSession:
+    """Finalize a session only after every roster entry has been verified."""
+    with transaction.atomic():
+        locked_session = RollCallSession.objects.select_for_update().get(
+            pk=session.pk
+        )
+        if locked_session.status == RollCallSession.Status.COMPLETED:
+            return locked_session
+
+        unmarked_count = locked_session.entries.filter(
+            status=RollCallEntry.Status.UNMARKED
+        ).count()
+        if unmarked_count:
+            raise ValueError(
+                f"Cannot finalize roll call: {unmarked_count} "
+                "student(s) are still unmarked."
+            )
+
+        locked_session.status = RollCallSession.Status.COMPLETED
+        locked_session.save(update_fields=["status", "updated_at"])
+        return locked_session
 
 
 def mark_all_present(session: RollCallSession) -> int:
     """
-    Bulk updates all non-exeat entries in an in-progress session to PRESENT.
-    Leaves students marked as ON_EXEAT or INFIRMARY intact.
+    Corrects explicitly absent entries to PRESENT without changing unmarked
+    students or excused statuses.
 
     Args:
         session: Active RollCallSession.
@@ -158,10 +187,16 @@ def mark_all_present(session: RollCallSession) -> int:
     if session.status == RollCallSession.Status.COMPLETED:
         return 0
 
-    updated = session.entries.filter(
-        status=RollCallEntry.Status.ABSENT
-    ).update(status=RollCallEntry.Status.PRESENT)
-    return updated
+    with transaction.atomic():
+        locked_session = RollCallSession.objects.select_for_update().get(
+            pk=session.pk
+        )
+        if locked_session.status == RollCallSession.Status.COMPLETED:
+            return 0
+
+        return locked_session.entries.filter(
+            status=RollCallEntry.Status.ABSENT
+        ).update(status=RollCallEntry.Status.PRESENT)
 
 
 def convert_absence_to_disciplinary_record(

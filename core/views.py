@@ -56,6 +56,7 @@ from .permissions import (
 from .services.roll_call import (
     create_roll_call_session,
     update_entry_status,
+    complete_roll_call_session,
     mark_all_present,
     convert_absence_to_disciplinary_record,
 )
@@ -1790,6 +1791,7 @@ def roll_call_create_session_view(request):
 
 
 @login_required
+@require_POST
 @role_required(*ROLL_CALL_ROLES)
 def roll_call_complete_session_view(request, session_pk):
     """Marks a roll call session as completed."""
@@ -1802,19 +1804,27 @@ def roll_call_complete_session_view(request, session_pk):
         messages.info(request, "This roll call session has already been finalized.")
         return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
         
-    session.status = RollCallSession.Status.COMPLETED
-    session.save(update_fields=['status', 'updated_at'])
+    try:
+        complete_roll_call_session(session)
+    except ValueError as error:
+        messages.error(request, str(error))
+        return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
+
+    session.refresh_from_db()
     messages.success(
         request,
-        f"Roll call session for {session.house.name} finalized: {session.present_count}/{session.total_students} boarders accounted for."
+        f"Roll call session for {session.house.name} finalized: "
+        f"{session.present_count} present, {session.absent_count} absent, "
+        f"{session.on_exeat_count} on exeat, and {session.infirmary_count} in infirmary."
     )
     return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
 
 
 @login_required
+@require_POST
 @role_required(*ROLL_CALL_ROLES)
 def roll_call_mark_all_present_view(request, session_pk):
-    """Bulk action marking all unexcused students as PRESENT."""
+    """Bulk action marks unmarked and absent students as PRESENT."""
     session = get_object_or_404(
         filter_queryset_by_house(request.user, RollCallSession.objects.all(), 'house_id'),
         pk=session_pk,
@@ -1829,6 +1839,7 @@ def roll_call_mark_all_present_view(request, session_pk):
 
 
 @login_required
+@require_POST
 @role_required(*ROLL_CALL_ROLES)
 def roll_call_update_entry_view(request, entry_pk):
     """HTMX inline status update for an individual student attendance entry."""
@@ -1851,7 +1862,19 @@ def roll_call_update_entry_view(request, entry_pk):
         new_status = request.POST.get('status')
         remarks = request.POST.get('remarks')
         if new_status in RollCallEntry.Status.values:
-            update_entry_status(entry, new_status, remarks)
+            try:
+                update_entry_status(entry, new_status, remarks)
+            except ValueError as error:
+                messages.error(request, str(error))
+                if request.htmx:
+                    return render(
+                        request,
+                        'core/operations/partials/entry_row.html',
+                        {'entry': entry, 'session': entry.session},
+                    )
+                return redirect(
+                    f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}"
+                )
             
             # Auto-convert absent to disciplinary if requested
             if request.POST.get('flag_infraction') == 'true' and new_status == RollCallEntry.Status.ABSENT:
@@ -1860,9 +1883,10 @@ def roll_call_update_entry_view(request, entry_pk):
                 messages.warning(request, f"Conduct infraction logged for {entry.student.full_name}.")
                 
         if request.htmx:
-            return render(request, 'core/operations/partials/entry_row.html', {
+            return render(request, 'core/operations/partials/roll_call_entry_update.html', {
                 'entry': entry,
                 'session': entry.session,
+                'current_session': entry.session,
             })
             
     return redirect(f"{reverse('core:roll_call_sessions')}?session_id={entry.session.id}")

@@ -1,6 +1,6 @@
 <div id="entry-row-{{ entry.id }}" 
     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-    class="flex flex-col sm:grid sm:grid-cols-12 sm:items-center gap-3 sm:gap-4 p-3 sm:py-2.5 sm:px-4 hover:bg-slate-50/70 transition border-b border-slate-100 last:border-0 {% if entry.status == 'Absent' %}bg-rose-50/30{% elif entry.status == 'On Exeat' %}bg-purple-50/20{% endif %}">
+    class="flex flex-col sm:grid sm:grid-cols-12 sm:items-center gap-3 sm:gap-4 p-3 sm:py-2.5 sm:px-4 hover:bg-slate-50/70 transition border-b border-slate-100 last:border-0 {% if entry.status == 'Absent' %}bg-rose-50/30{% elif entry.status == 'On Exeat' %}bg-purple-50/20{% elif entry.status == 'Unmarked' %}bg-amber-50/30{% endif %}">
   
   <!-- Student Identity Column -->
   <div class="sm:col-span-4 flex items-center justify-between sm:justify-start">
@@ -10,6 +10,7 @@
         {% elif entry.status == 'Absent' %}bg-rose-100 text-rose-800
         {% elif entry.status == 'On Exeat' %}bg-purple-100 text-purple-800
         {% elif entry.status == 'Infirmary' %}bg-sky-100 text-sky-800
+        {% elif entry.status == 'Unmarked' %}bg-amber-100 text-amber-800
         {% else %}bg-slate-100 text-slate-700{% endif %}">
         {{ entry.student.full_name|slice:":1" }}
       </div>
@@ -43,6 +44,10 @@
         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
           Infirmary
         </span>
+      {% elif entry.status == 'Unmarked' %}
+        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+          Unmarked
+        </span>
       {% else %}
         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
           {{ entry.status }}
@@ -72,6 +77,11 @@
       <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
         <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
         Sick Bay / Infirmary
+      </span>
+    {% elif entry.status == 'Unmarked' %}
+      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+        <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+        Not yet verified
       </span>
     {% else %}
       <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">

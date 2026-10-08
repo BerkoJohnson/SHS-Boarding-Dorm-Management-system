@@ -1,0 +1,26 @@
+<div id="roll-call-metrics" {% if oob %}hx-swap-oob="outerHTML"{% endif %} class="grid grid-cols-2 sm:grid-cols-6 gap-3 pt-3 text-center">
+  <div class="p-2 rounded-lg bg-slate-50 border border-slate-100">
+    <span class="text-[10px] uppercase font-semibold text-slate-400 block">Total Boarders</span>
+    <span class="text-base font-bold text-slate-800">{{ current_session.total_students }}</span>
+  </div>
+  <div class="p-2 rounded-lg bg-emerald-50/60 border border-emerald-100">
+    <span class="text-[10px] uppercase font-semibold text-emerald-600 block">Present Rate</span>
+    <span class="text-base font-bold text-emerald-700">{{ current_session.attendance_rate }}%</span>
+  </div>
+  <div class="p-2 rounded-lg bg-emerald-50/60 border border-emerald-100">
+    <span class="text-[10px] uppercase font-semibold text-emerald-600 block">Present</span>
+    <span class="text-base font-bold text-emerald-700">{{ current_session.present_count }}</span>
+  </div>
+  <div class="p-2 rounded-lg bg-rose-50/60 border border-rose-100">
+    <span class="text-[10px] uppercase font-semibold text-rose-600 block">Absent</span>
+    <span class="text-base font-bold text-rose-700">{{ current_session.absent_count }}</span>
+  </div>
+  <div class="p-2 rounded-lg bg-purple-50/60 border border-purple-100">
+    <span class="text-[10px] uppercase font-semibold text-purple-600 block">Exeat / Infirmary</span>
+    <span class="text-base font-bold text-purple-700">{{ current_session.on_exeat_count|add:current_session.infirmary_count }}</span>
+  </div>
+  <div class="p-2 rounded-lg bg-amber-50/60 border border-amber-100">
+    <span class="text-[10px] uppercase font-semibold text-amber-600 block">Unmarked</span>
+    <span class="text-base font-bold text-amber-700">{{ current_session.unmarked_count }}</span>
+  </div>
+</div>

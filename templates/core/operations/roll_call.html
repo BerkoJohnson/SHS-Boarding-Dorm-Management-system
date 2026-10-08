@@ -89,7 +89,7 @@
                 <div class="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                   <div class="h-full bg-emerald-500 rounded-full" style="width: {{ session.attendance_rate }}%"></div>
                 </div>
-                <span class="text-[10px] font-mono text-slate-400">{{ session.present_count }}/{{ session.total_students }}</span>
+                <span class="text-[10px] font-mono text-slate-400">{{ session.present_count }}/{{ session.total_students }} present</span>
               </div>
             </a>
           {% empty %}
@@ -182,7 +182,7 @@
               </div>
 
               <div class="p-3 bg-blue-50/60 rounded-lg border border-blue-100 text-slate-600 text-[11px]">
-                Students currently out on active, approved gate exeats will automatically be reconciled and marked as <strong>On Exeat</strong>.
+                Students start as <strong>Unmarked</strong> and must be verified before finalizing. Students currently out on active gate exeats will automatically be marked as <strong>On Exeat</strong>.
               </div>
             </div>
           </div>
