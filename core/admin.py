@@ -36,6 +36,13 @@ class HouseMasterAdmin(admin.ModelAdmin):
     search_fields = ('staff_id', 'full_name', 'user__username', 'phone_number')
 
 
+@admin.register(House)
+class HouseAdmin(admin.ModelAdmin):
+    list_display = ('name', 'display_order', 'motto')
+    search_fields = ('name', 'motto')
+    ordering = ('display_order', 'name')
+
+
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
     list_display = ('admission_no', 'full_name', 'gender', 'residency', 'status', 'house', 'dormitory', 'class_group')
@@ -157,7 +164,6 @@ class RollCallEntryAdmin(admin.ModelAdmin):
 admin.site.register(
     [
         Programme,
-        House,
         Dormitory,
         ClassGroup,
         Guardian,

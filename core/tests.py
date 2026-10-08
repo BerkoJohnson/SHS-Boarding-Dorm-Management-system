@@ -55,7 +55,7 @@ class DashboardViewTests(TestCase):
 
         # Programme & House
         self.programme = Programme.objects.create(name='General Science', code='GSCI')
-        self.house = House.objects.create(name='Red House', number=House.HouseNumber.ONE)
+        self.house = House.objects.create(name='Red House')
         self.dormitory = Dormitory.objects.create(
             house=self.house,
             name='House 1 Block A',
@@ -165,8 +165,8 @@ class HouseOperationsViewTests(TestCase):
         self.client.force_login(self.user)
         self.programme = Programme.objects.create(name='Agriculture', code='AGRIC')
         self.house = House.objects.create(
-            name='Red House',
-            number=House.HouseNumber.ONE,
+            name='Kwame Nkrumah House',
+            display_order=1,
         )
         self.dormitory = Dormitory.objects.create(
             house=self.house,
@@ -209,6 +209,24 @@ class HouseOperationsViewTests(TestCase):
         self.assertEqual(house.health_label, 'Healthy')
         self.assertContains(response, 'House health')
         self.assertContains(response, 'Inspect dormitories and staff')
+
+    def test_house_overview_supports_named_houses_without_numeric_identifiers(self):
+        self.house.display_order = 2
+        self.house.save()
+        second_house = House.objects.create(
+            name='Akwapim House',
+            display_order=1,
+        )
+
+        response = self.client.get('/houses/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [house.name for house in response.context['houses']],
+            ['Akwapim House', 'Kwame Nkrumah House'],
+        )
+        self.assertContains(response, 'Kwame Nkrumah House')
+        self.assertEqual(str(second_house), 'Akwapim House')
 
     def test_house_operations_flags_over_capacity_and_missing_placements(self):
         self.create_boarder('002')
@@ -253,7 +271,7 @@ class ExeatCreateViewTests(TestCase):
         )
 
         self.programme = Programme.objects.create(name='General Arts', code='GART')
-        self.house = House.objects.create(name='Blue House', number=House.HouseNumber.TWO)
+        self.house = House.objects.create(name='Blue House')
         self.dormitory = Dormitory.objects.create(
             house=self.house,
             name='Blue Block 1',
@@ -707,7 +725,7 @@ class ConductViewTests(TestCase):
         )
 
         self.programme = Programme.objects.create(name='General Arts', code='GART')
-        self.house = House.objects.create(name='Blue House', number=House.HouseNumber.TWO)
+        self.house = House.objects.create(name='Blue House')
         self.dormitory = Dormitory.objects.create(
             house=self.house,
             name='Blue Block 1',
@@ -917,7 +935,7 @@ class HeaderComponentsTests(TestCase):
         )
 
         self.programme = Programme.objects.create(name='General Arts', code='GART')
-        self.house = House.objects.create(name='Green House', number=House.HouseNumber.THREE)
+        self.house = House.objects.create(name='Green House')
         self.dormitory = Dormitory.objects.create(
             house=self.house,
             name='Green Block 1',
@@ -1078,14 +1096,14 @@ class UserRolesAndPermissionsTests(TestCase):
         )
 
         # Houses & Dormitories
-        self.house1 = House.objects.create(name='Red House', number=House.HouseNumber.ONE)
+        self.house1 = House.objects.create(name='Red House')
         self.dorm1 = Dormitory.objects.create(
             house=self.house1,
             name='Block A',
             gender=Dormitory.GenderBlock.MALE,
             capacity=60
         )
-        self.house2 = House.objects.create(name='Blue House', number=House.HouseNumber.TWO)
+        self.house2 = House.objects.create(name='Blue House')
         self.dorm2 = Dormitory.objects.create(
             house=self.house2,
             name='Block B',
@@ -1287,7 +1305,7 @@ class GlobalSearchTests(TestCase):
         )
 
         # 2. Housing & Programme
-        self.house = House.objects.create(name='Aggrey House', number=House.HouseNumber.ONE)
+        self.house = House.objects.create(name='Aggrey House')
         self.dorm = Dormitory.objects.create(
             house=self.house,
             name='Alpha Dormitory',
@@ -1462,7 +1480,7 @@ class RollCallAndGateTests(TestCase):
         )
 
         # 2. House & Dormitory
-        self.house = House.objects.create(name='Volta House', number=House.HouseNumber.TWO)
+        self.house = House.objects.create(name='Volta House')
         self.dorm = Dormitory.objects.create(
             house=self.house,
             name='Volta Block A',
@@ -1917,14 +1935,14 @@ class HouseScopedAccessTests(TestCase):
             is_current=True,
         )
         self.programme = Programme.objects.create(name='Science', code='SCI')
-        self.house_a = House.objects.create(name='Amber House', number=House.HouseNumber.ONE)
+        self.house_a = House.objects.create(name='Amber House')
         self.dorm_a = Dormitory.objects.create(
             house=self.house_a,
             name='Amber Block',
             gender=Dormitory.GenderBlock.MALE,
             capacity=10,
         )
-        self.house_b = House.objects.create(name='Cobalt House', number=House.HouseNumber.TWO)
+        self.house_b = House.objects.create(name='Cobalt House')
         self.dorm_b = Dormitory.objects.create(
             house=self.house_b,
             name='Cobalt Block',

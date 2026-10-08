@@ -13,7 +13,6 @@ class HouseOverviewAccessTests(TestCase):
     def setUpTestData(cls):
         cls.house = House.objects.create(
             name="Northfield House",
-            number=House.HouseNumber.ONE,
         )
         Dormitory.objects.create(
             house=cls.house,

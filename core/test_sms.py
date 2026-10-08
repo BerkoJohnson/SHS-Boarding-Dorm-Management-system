@@ -32,7 +32,7 @@ User = get_user_model()
 
 class ExeatSMSTests(TestCase):
     def setUp(self):
-        self.house = House.objects.create(name="Red House", number=House.HouseNumber.ONE)
+        self.house = House.objects.create(name="Red House")
         self.dormitory = Dormitory.objects.create(
             house=self.house,
             name="Block A",

@@ -124,7 +124,7 @@ def get_dashboard_metrics(house_id=None):
 def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None, term_id=None):
     """Build a scoped, printable detail report as column labels and row values."""
     if report_type == "housing":
-        houses = House.objects.all().order_by("number")
+        houses = House.objects.all().order_by("display_order", "name")
         if house_id is not None:
             houses = houses.filter(pk=house_id)
         houses = houses.annotate(
@@ -163,7 +163,7 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
             )
         ).values(
             "house_id", "house__name", "name", "gender", "capacity", "occupied"
-        ).order_by("house__number", "gender", "name")
+        ).order_by("house__display_order", "house__name", "gender", "name")
         if house_id is not None:
             dormitories = dormitories.filter(house_id=house_id)
         dormitories_by_house = {}
