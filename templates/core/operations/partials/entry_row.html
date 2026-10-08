@@ -97,7 +97,7 @@
   </div>
 
   <!-- Interactive Attendance Marking Actions -->
-  <div class="sm:col-span-6 min-w-0 flex flex-wrap sm:flex-nowrap items-center gap-1 sm:gap-0.5 w-full sm:w-auto">
+  <div class="sm:col-span-6 min-w-0 flex flex-wrap items-center gap-1 w-full sm:w-auto">
     {% if entry.session.status == 'In Progress' %}
       <!-- Mark Present -->
       <button type="button"
@@ -105,7 +105,7 @@
               hx-vals='{"status": "Present", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
+              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'Present' %}bg-emerald-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-emerald-50 text-slate-600 hover:text-emerald-700{% endif %}"
               title="Mark Present">
@@ -118,7 +118,7 @@
               hx-vals='{"status": "Absent", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
+              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'Absent' %}bg-rose-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700{% endif %}"
               title="Mark Absent">
@@ -131,7 +131,7 @@
               hx-vals='{"status": "Infirmary", "remarks": "Reported to sick bay", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
+              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'Infirmary' %}bg-sky-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-sky-50 text-slate-600 hover:text-sky-700{% endif %}"
               title="Reported to Sick Bay / Infirmary">
@@ -144,7 +144,7 @@
               hx-vals='{"status": "On Exeat", "remarks": "Excused on Exeat", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
               hx-target="#entry-row-{{ entry.id }}"
               hx-swap="outerHTML"
-              class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-medium rounded transition text-center whitespace-nowrap
+              class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-medium rounded transition text-center whitespace-nowrap
                 {% if entry.status == 'On Exeat' %}bg-purple-600 text-white shadow-xs
                 {% else %}bg-slate-100 hover:bg-purple-50 text-slate-600 hover:text-purple-700{% endif %}"
               title="Excused Leave / Exeat">
@@ -158,7 +158,7 @@
                 hx-vals='{"status": "Absent", "flag_infraction": "true", "csrfmiddlewaretoken": "{{ csrf_token }}"}'
                 hx-target="#entry-row-{{ entry.id }}"
                 hx-swap="outerHTML"
-                class="flex-1 sm:flex-none px-1.5 py-1 sm:py-0.5 text-[10px] sm:text-[9px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition text-center whitespace-nowrap"
+                class="flex-1 sm:flex-none px-1 py-1 sm:py-0.5 text-[10px] sm:text-[8px] font-semibold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs transition text-center whitespace-nowrap"
                 title="Flag and Log Disciplinary Infraction for Missing Roll Call">
           Flag & Log
         </button>
