@@ -853,7 +853,35 @@ def public_student_exeat_view(request, token):
         Student.objects.select_related("programme", "house", "class_group"),
         public_token=token,
     )
-    exeat = student.exeats.order_by("-created_at", "-pk").first()
+    now = timezone.now()
+    active_exeat = (
+        student.exeats.filter(
+            status=Exeat.Status.APPROVED,
+        )
+        .filter(
+            Q(
+                expected_departure__lte=now,
+                expected_return__gt=now,
+            )
+            | Q(
+                movement__actual_departure__isnull=False,
+                movement__actual_return__isnull=True,
+            )
+            | Q(
+                reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+            )
+        )
+        .exclude(movement__actual_return__isnull=False)
+        .exclude(
+            reconciliation__outcome__in=(
+                ExeatReconciliation.Outcome.UNUSED,
+                ExeatReconciliation.Outcome.RETURNED,
+            )
+        )
+        .order_by("-expected_departure", "-created_at", "-pk")
+        .first()
+    )
+    exeat = active_exeat or student.exeats.order_by("-created_at", "-pk").first()
     movement = (
         ExeatMovement.objects.filter(exeat=exeat).first()
         if exeat and exeat.status == Exeat.Status.APPROVED
