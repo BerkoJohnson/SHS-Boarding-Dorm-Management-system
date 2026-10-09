@@ -46,7 +46,11 @@
                 <td class="px-3 py-2">
 
                     <div class="font-medium text-slate-800">
+                        {% if can_view_student_records %}
+                        <a href="{% url 'core:student_record' exeat.student.pk %}" class="hover:text-brand-700">{{ exeat.student.full_name }}</a>
+                        {% else %}
                         {{ exeat.student.full_name }}
+                        {% endif %}
                     </div>
 
                     <div class="text-2xs text-slate-400">

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Student Registry - Eden High School{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <header class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="text-base font-bold text-slate-900">Student Registry</h1>
+      <p class="mt-1 text-xs text-slate-500">Register students, maintain boarding placement, and manage student photos.</p>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <a href="{% url 'core:student_import' %}" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Import CSV / Excel</a>
+      <a href="{% url 'core:student_create' %}" class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800">Register Student</a>
+    </div>
+  </header>
+
+  <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+    <form method="get" class="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/60 p-3 sm:flex-row">
+      <label class="sr-only" for="student-search">Search students</label>
+      <input id="student-search" type="search" name="q" value="{{ query }}" placeholder="Name, admission/index number, programme, or house" class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+      <label class="sr-only" for="student-residency">Residency</label>
+      <select id="student-residency" name="residency" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All residency types</option>
+        <option value="Boarding" {% if selected_residency == "Boarding" %}selected{% endif %}>Boarding</option>
+        <option value="Day" {% if selected_residency == "Day" %}selected{% endif %}>Day</option>
+      </select>
+      <button class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100" type="submit">Search</button>
+    </form>
+
+    <div class="divide-y divide-slate-100">
+      {% for student in students_page %}
+      <article class="flex flex-wrap items-center gap-3 px-4 py-3">
+        {% if student.photo %}
+          <img src="{{ student.photo.url }}" alt="Photo of {{ student.full_name }}" class="h-12 w-10 shrink-0 rounded-md border border-slate-200 object-cover">
+        {% else %}
+          <span class="flex h-12 w-10 shrink-0 items-center justify-center rounded-md bg-slate-100 text-sm font-bold text-slate-500">{{ student.full_name|slice:":1" }}</span>
+        {% endif %}
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-center gap-x-2">
+            <a href="{% url 'core:student_record' student.pk %}" class="text-xs font-bold text-slate-900 hover:text-brand-700">{{ student.full_name }}</a>
+            <span class="font-mono text-[10px] text-slate-500">{{ student.admission_no }}</span>
+            <span class="font-mono text-[10px] text-slate-400">{{ student.index_number }}</span>
+          </div>
+          <p class="mt-0.5 text-[11px] text-slate-500">
+            {{ student.get_residency_display }} · {{ student.programme.name }}
+            {% if student.class_group %} · {{ student.class_group.name }}{% endif %}
+            {% if student.house %} · {{ student.house.name }}{% endif %}
+            {% if student.dormitory %} / {{ student.dormitory.name }}{% endif %}
+          </p>
+        </div>
+        <a href="{% url 'core:student_record' student.pk %}" class="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] font-semibold text-sky-700 hover:bg-sky-100">View Record</a>
+        <a href="{% url 'core:student_edit' student.pk %}" class="rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">Edit</a>
+      </article>
+      {% empty %}
+      <div class="px-4 py-12 text-center">
+        <h2 class="text-sm font-semibold text-slate-800">No students found</h2>
+        <p class="mt-1 text-xs text-slate-500">Register an individual student or import a roster.</p>
+      </div>
+      {% endfor %}
+    </div>
+    {% include "core/partials/pagination_controls.html" with pagination_page=students_page pagination_query=pagination_query pagination_parameter="page" %}
+  </section>
+</div>
+{% endblock %}

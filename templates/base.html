@@ -103,6 +103,19 @@
       </a>
       {% endif %}
 
+      {% if can_manage_students %}
+      <a href="{% url 'core:student_registry' %}"
+         class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg text-slate-300 hover:bg-slate-800/70 hover:text-white font-medium transition-all relative {% if request.resolver_match.url_name in 'student_registry student_create student_edit student_import' %}bg-slate-800 text-white font-semibold shadow-sm{% endif %}">
+        {% if request.resolver_match.url_name in 'student_registry student_create student_edit student_import' %}
+          <span class="absolute left-0 top-1.5 bottom-1.5 w-1 bg-brand-500 rounded-r"></span>
+        {% endif %}
+        <svg class="w-4 h-4 shrink-0 transition-colors {% if request.resolver_match.url_name in 'student_registry student_create student_edit student_import' %}text-sky-400{% else %}text-slate-400 group-hover:text-slate-200{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 20a6 6 0 00-12 0m12 0h3v-1a4 4 0 00-5.2-3.8M18 20H6m12 0v-1a6 6 0 00-12 0v1m12-10a4 4 0 11-8 0 4 4 0 018 0zm3 2a4 4 0 10-3-6.7"/>
+        </svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Student Registry</span>
+      </a>
+      {% endif %}
+
       <!-- Exeats & Movement -->
       {% if can_view_exeats %}
       <a href="{% url 'core:exeat_list' %}" 

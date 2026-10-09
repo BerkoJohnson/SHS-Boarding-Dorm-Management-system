@@ -10,6 +10,8 @@ from core.models import (
 )
 from core.permissions import (
     ADMIN_ROLES,
+    STUDENT_MANAGEMENT_ROLES,
+    STUDENT_RECORD_ROLES,
     ROLL_CALL_ROLES,
     GATE_ROLES,
     EXEAT_ROLES,
@@ -69,6 +71,8 @@ def header_context(request) -> Dict[str, Any]:
             "can_view_exeats": False,
             "can_view_reports": False,
             "can_view_config": False,
+            "can_manage_students": False,
+            "can_view_student_records": False,
             "can_create_exeat": False,
             "can_approve_exeat": False,
             "can_access_gate": False,
@@ -254,6 +258,10 @@ def header_context(request) -> Dict[str, Any]:
     can_view_exeats = is_super or (has_house_scope and role in EXEAT_ROLES)
     can_view_reports = is_super or (has_house_scope and role in REPORT_ROLES)
     can_view_config = is_super or role in ADMIN_ROLES
+    can_manage_students = is_super or role in STUDENT_MANAGEMENT_ROLES
+    can_view_student_records = is_super or (
+        has_house_scope and role in STUDENT_RECORD_ROLES
+    )
     can_create_exeat = is_super or (has_house_scope and role in EXEAT_CREATE_ROLES)
     can_approve_exeat = is_super or (has_house_scope and role in EXEAT_APPROVAL_ROLES)
     can_access_gate = is_super or role in GATE_ROLES
@@ -283,6 +291,8 @@ def header_context(request) -> Dict[str, Any]:
         "can_view_exeats": can_view_exeats,
         "can_view_reports": can_view_reports,
         "can_view_config": can_view_config,
+        "can_manage_students": can_manage_students,
+        "can_view_student_records": can_view_student_records,
         "can_create_exeat": can_create_exeat,
         "can_approve_exeat": can_approve_exeat,
         "can_access_gate": can_access_gate,

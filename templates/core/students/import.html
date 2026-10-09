@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Import Student Roster - Eden High School{% endblock %}
+
+{% block extra_head %}
+<style>
+  .student-form-control {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: .5rem;
+    background: #fff;
+    padding: .5rem .75rem;
+    color: #1e293b;
+    font-size: .75rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-4">
+  <header>
+    <a href="{% url 'core:student_registry' %}" class="text-xs font-medium text-brand-700 hover:text-brand-900">← Student Registry</a>
+    <h1 class="mt-2 text-base font-bold text-slate-900">Import Student Roster</h1>
+    <p class="mt-1 text-xs text-slate-500">Upload CSV or modern Excel (.xlsx); all rows and worksheets are validated before any student records are created.</p>
+  </header>
+
+  <section class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:p-6">
+    <div class="rounded-lg border border-sky-100 bg-sky-50/70 p-3 text-xs text-slate-700">
+      <p class="font-semibold text-sky-900">Import rules</p>
+      <ul class="mt-2 list-disc space-y-1 pl-5">
+        <li>Download the <a class="font-semibold text-sky-800 underline" href="{% url 'core:student_import_template' %}">CSV template</a> for supported column headings.</li>
+        <li>Required columns: Admission No., Index Number, Full Name, Gender, and Programme.</li>
+        <li>Boarding students need an existing House and compatible Dormitory. If only one compatible dormitory exists in the house, it may be inferred.</li>
+        <li>Programme, class, house, and dormitory values must match records already configured in the system. Unknown names are reported, not auto-created.</li>
+        <li>Repeated or already-used admission/index numbers, or any invalid row, reject the entire file. No partial import occurs.</li>
+        <li>Dates: YYYY-MM-DD or DD/MM/YYYY. Set admission/index/phone spreadsheet cells to text to preserve leading zeros.</li>
+        <li>Photos are uploaded individually from each student’s record, not embedded in the roster.</li>
+        <li>Maximum 2,000 students and 10 MB per upload. Excel workbooks are read from each worksheet.</li>
+      </ul>
+    </div>
+
+    {% if form.non_field_errors %}
+    <div role="alert" class="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+      {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post" enctype="multipart/form-data" class="mt-4 space-y-3">
+      {% csrf_token %}
+      <div>
+        <label for="{{ form.roster_file.id_for_label }}" class="mb-1 block text-xs font-semibold text-slate-700">{{ form.roster_file.label }}</label>
+        {{ form.roster_file }}
+        {% for error in form.roster_file.errors %}<p class="mt-1 text-[10px] text-rose-700">{{ error }}</p>{% endfor %}
+      </div>
+      <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800">Validate and Import</button>
+    </form>
+  </section>
+
+  {% if error_count %}
+  <section role="alert" class="rounded-xl border border-rose-200 bg-white shadow-xs">
+    <div class="border-b border-rose-100 bg-rose-50 px-4 py-3">
+      <h2 class="text-xs font-bold text-rose-900">Nothing imported — fix {{ error_count }} issue(s) and upload again</h2>
+    </div>
+    <ul class="max-h-96 list-inside list-disc space-y-1 overflow-y-auto px-4 py-3 text-xs text-rose-800">
+      {% for error in errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+    {% if omitted_error_count %}<p class="border-t border-rose-100 px-4 py-2 text-[11px] text-rose-700">{{ omitted_error_count }} additional issue(s) omitted from this display.</p>{% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}{% if student %}Edit Student{% else %}Register Student{% endif %} - Eden High School{% endblock %}
+
+{% block extra_head %}
+<style>
+  .student-form-control {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: .5rem;
+    background: #fff;
+    padding: .5rem .75rem;
+    color: #1e293b;
+    font-size: .75rem;
+  }
+  .student-form-control:focus {
+    border-color: #0284c7;
+    outline: 2px solid #bae6fd;
+    outline-offset: 1px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-5xl space-y-4">
+  <header>
+    <a href="{% url 'core:student_registry' %}" class="text-xs font-medium text-brand-700 hover:text-brand-900">← Student Registry</a>
+    <h1 class="mt-2 text-base font-bold text-slate-900">{% if student %}Edit Student{% else %}Register Student{% endif %}</h1>
+    <p class="mt-1 text-xs text-slate-500">Student identifiers must be unique. Boarding placement is checked against house and dormitory gender.</p>
+  </header>
+
+  <form method="post" enctype="multipart/form-data" class="space-y-5 rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:p-6">
+    {% csrf_token %}
+    {% if form.non_field_errors %}
+    <div role="alert" class="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+      {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+    </div>
+    {% endif %}
+
+    <section>
+      <h2 class="mb-3 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-slate-600">Student details</h2>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {% for field in form %}
+          {% if field.name != "guardian_name" and field.name != "guardian_phone" and field.name != "guardian_alt_phone" %}
+          <div class="{% if field.name == 'full_name' or field.name == 'photo' %}sm:col-span-2{% endif %}">
+            <label for="{{ field.id_for_label }}" class="mb-1 block text-xs font-semibold text-slate-700">{{ field.label }}{% if field.field.required %} <span class="text-rose-600">*</span>{% endif %}</label>
+            {{ field }}
+            {% if field.help_text %}<p class="mt-1 text-[10px] text-slate-500">{{ field.help_text }}</p>{% endif %}
+            {% for error in field.errors %}<p class="mt-1 text-[10px] text-rose-700">{{ error }}</p>{% endfor %}
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% if student.photo %}
+      <div class="mt-3 flex items-center gap-3">
+        <img src="{{ student.photo.url }}" alt="Current photo of {{ student.full_name }}" class="h-20 w-16 rounded-md border border-slate-200 object-cover">
+        <p class="text-xs text-slate-500">Current photo. Upload a replacement or select “Clear” in the photo control to remove it.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section>
+      <h2 class="mb-3 border-b border-slate-100 pb-2 text-xs font-bold uppercase tracking-wide text-slate-600">Parent / guardian (optional)</h2>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {% for field in form %}
+          {% if field.name == "guardian_name" or field.name == "guardian_phone" or field.name == "guardian_alt_phone" %}
+          <div>
+            <label for="{{ field.id_for_label }}" class="mb-1 block text-xs font-semibold text-slate-700">{{ field.label }}</label>
+            {{ field }}
+            {% for error in field.errors %}<p class="mt-1 text-[10px] text-rose-700">{{ error }}</p>{% endfor %}
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <p class="mt-2 text-[10px] text-slate-500">Enter both the guardian name and primary phone together. Phone numbers may include a leading +.</p>
+    </section>
+
+    <footer class="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
+      <a href="{% url 'core:student_registry' %}" class="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Cancel</a>
+      <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800">Save Student</button>
+    </footer>
+  </form>
+</div>
+{% endblock %}

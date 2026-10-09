@@ -50,3 +50,32 @@ Staff must assign each remaining student a status before finalizing the
 session. Unmarked students remain in the roster and attendance-rate denominator
 but do not count as present. The attendance report also shows the number of
 unmarked entries in sessions still in progress.
+
+## Student registration and roster import
+
+Administrators and Senior Housemasters can register or edit students
+individually, assign configured programme, class, house and dormitory records,
+and upload an optional student portrait. Portraits must be JPEG or PNG, no
+larger than 5 MB or 25 megapixels; the registry displays them as cropped
+portraits. Bulk photo uploads are not supported.
+
+The same roles can import a roster from UTF-8 CSV or modern Excel `.xlsx`
+files, up to 10 MB and 2,000 student rows. Download the CSV template from the
+Student Registry to see the required headers. Admission number, index number,
+full name, gender and programme are required. Placement and guardian columns
+are optional in the file, but boarding students must resolve to an existing
+house and a compatible dormitory. The importer can infer a dormitory only when
+the selected house has exactly one suitable block for that student's gender.
+Programmes, classes, houses and dormitories must already be configured; unknown
+or ambiguous references are reported rather than created automatically.
+
+The importer validates every worksheet/row before writing any records.
+Duplicate admission or index numbers (within the upload or already in the
+system), invalid references, or invalid placements reject the entire upload.
+It never updates an existing student. A roster import does not include photos;
+add photos through an individual student form.
+
+Student record viewing is a separate permission: Administrators and Senior
+Housemasters can view school-wide records, while Housemasters can view records
+for students in their assigned house. Other staff are redirected to the
+dashboard when they try to access those pages.

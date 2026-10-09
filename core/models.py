@@ -2,11 +2,40 @@ import uuid
 from datetime import date
 from django.db import models
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.core.validators import RegexValidator
+from django.core.validators import FileExtensionValidator, RegexValidator
 from django.utils import timezone
 from django.conf import settings
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from PIL import Image, UnidentifiedImageError
+
+
+MAX_STUDENT_PHOTO_SIZE = 5 * 1024 * 1024
+MAX_STUDENT_PHOTO_PIXELS = 25_000_000
+
+
+def validate_student_photo(photo):
+    if photo.size > MAX_STUDENT_PHOTO_SIZE:
+        raise ValidationError("Student photos must be 5 MB or smaller.")
+    try:
+        with Image.open(photo) as image:
+            image_format = image.format
+            if image.width * image.height > MAX_STUDENT_PHOTO_PIXELS:
+                raise ValidationError(
+                    "Student photos must be 25 megapixels or smaller."
+                )
+            image.verify()
+    except (
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+    ) as error:
+        raise ValidationError("Upload a valid JPEG or PNG image.") from error
+    finally:
+        photo.seek(0)
+    if image_format not in {"JPEG", "PNG"}:
+        raise ValidationError("Student photos must be JPEG or PNG images.")
 
 
 class BaseModel(models.Model):
@@ -450,6 +479,17 @@ class Student(BaseModel):
     full_name = models.CharField(max_length=200)
     gender = models.CharField(max_length=10, choices=Gender.choices)
     date_of_birth = models.DateField(null=True, blank=True)
+    photo = models.ImageField(
+        upload_to="students/photos/%Y/%m/",
+        blank=True,
+        validators=[
+            FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"]),
+            validate_student_photo,
+        ],
+        help_text=(
+            "Optional portrait photo. JPEG or PNG, maximum 5 MB and 25 megapixels."
+        ),
+    )
 
     programme = models.ForeignKey(
         Programme, on_delete=models.PROTECT, related_name="students"
@@ -512,6 +552,16 @@ class Student(BaseModel):
                 {
                     "dormitory": f"House & Dormitory Mismatch! Dormitory '{self.dormitory.name}' belongs to "
                     f"'{self.dormitory.house.name}', but student is assigned to '{self.house.name}'."
+                }
+            )
+        if (
+            self.class_group
+            and self.class_group.programme_id
+            and self.programme_id != self.class_group.programme_id
+        ):
+            raise ValidationError(
+                {
+                    "class_group": "The selected class belongs to a different programme."
                 }
             )
         if self.dormitory:

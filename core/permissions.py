@@ -22,6 +22,16 @@ from core.models import StaffRole, get_user_profile
 # Administration: System config, reports, academic term management
 ADMIN_ROLES = (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)
 
+# Student registry: school-wide student records and placement
+STUDENT_MANAGEMENT_ROLES = ADMIN_ROLES
+
+# Student records: school-wide access for senior staff, house-scoped for Housemasters
+STUDENT_RECORD_ROLES = (
+    StaffRole.ADMIN,
+    StaffRole.SENIOR_HOUSEMASTER,
+    StaffRole.HOUSEMASTER,
+)
+
 # Roll Call: Conducting dormitory attendance sessions
 ROLL_CALL_ROLES = (
     StaffRole.ADMIN,

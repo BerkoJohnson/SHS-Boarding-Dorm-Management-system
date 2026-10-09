@@ -2,10 +2,16 @@ from django import forms
 from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from .models import (
     Exeat,
     ExeatReconciliation,
     Student,
+    Programme,
+    House,
+    Dormitory,
+    ClassGroup,
+    Guardian,
     HouseMaster,
     AcademicTerm,
     DisciplinaryRecord,
@@ -357,3 +363,183 @@ class DisciplinaryRecordForm(forms.ModelForm):
             raise ValidationError({'offense': "Please state the offense or infraction title."})
 
         return cleaned_data
+
+
+class StudentRegistrationForm(forms.ModelForm):
+    guardian_name = forms.CharField(
+        max_length=150,
+        required=False,
+        label="Parent / Guardian name",
+        widget=forms.TextInput(attrs={"class": "student-form-control"}),
+    )
+    guardian_phone = forms.CharField(
+        max_length=17,
+        required=False,
+        label="Parent / Guardian phone",
+        widget=forms.TextInput(attrs={"class": "student-form-control"}),
+    )
+    guardian_alt_phone = forms.CharField(
+        max_length=17,
+        required=False,
+        label="Alternative phone",
+        widget=forms.TextInput(attrs={"class": "student-form-control"}),
+    )
+
+    class Meta:
+        model = Student
+        fields = (
+            "admission_no",
+            "index_number",
+            "full_name",
+            "gender",
+            "date_of_birth",
+            "programme",
+            "class_group",
+            "residency",
+            "house",
+            "dormitory",
+            "status",
+            "photo",
+        )
+        widgets = {
+            "admission_no": forms.TextInput(attrs={"class": "student-form-control"}),
+            "index_number": forms.TextInput(attrs={"class": "student-form-control"}),
+            "full_name": forms.TextInput(attrs={"class": "student-form-control"}),
+            "gender": forms.Select(attrs={"class": "student-form-control"}),
+            "date_of_birth": forms.DateInput(
+                attrs={"type": "date", "class": "student-form-control"}
+            ),
+            "programme": forms.Select(attrs={"class": "student-form-control"}),
+            "class_group": forms.Select(attrs={"class": "student-form-control"}),
+            "residency": forms.Select(attrs={"class": "student-form-control"}),
+            "house": forms.Select(attrs={"class": "student-form-control"}),
+            "dormitory": forms.Select(attrs={"class": "student-form-control"}),
+            "status": forms.Select(attrs={"class": "student-form-control"}),
+            "photo": forms.ClearableFileInput(
+                attrs={"accept": "image/jpeg,image/png", "class": "student-form-control"}
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["programme"].queryset = Programme.objects.order_by("name")
+        self.fields["class_group"].queryset = ClassGroup.objects.order_by("name")
+        self.fields["house"].queryset = House.objects.order_by("display_order", "name")
+        self.fields["dormitory"].queryset = Dormitory.objects.select_related(
+            "house"
+        ).order_by("house__display_order", "house__name", "name")
+        self.fields["class_group"].required = False
+        self.fields["house"].required = False
+        self.fields["dormitory"].required = False
+
+        if self.instance and self.instance.pk and self.instance.guardian_id:
+            guardian = self.instance.guardian
+            self.initial.update(
+                {
+                    "guardian_name": guardian.full_name,
+                    "guardian_phone": guardian.phone_number,
+                    "guardian_alt_phone": guardian.alt_phone_number or "",
+                }
+            )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        for field_name in ("admission_no", "index_number"):
+            value = (cleaned_data.get(field_name) or "").strip()
+            matches = Student.objects.filter(
+                **{f"{field_name}__iexact": value}
+            )
+            if self.instance.pk:
+                matches = matches.exclude(pk=self.instance.pk)
+            if value and matches.exists():
+                self.add_error(
+                    field_name,
+                    "This identifier is already assigned to another student.",
+                )
+        guardian_name = (cleaned_data.get("guardian_name") or "").strip()
+        guardian_phone = (cleaned_data.get("guardian_phone") or "").strip()
+        guardian_alt_phone = (cleaned_data.get("guardian_alt_phone") or "").strip()
+
+        if guardian_name and not guardian_phone:
+            self.add_error(
+                "guardian_phone", "Enter a contact number for this guardian."
+            )
+        if guardian_phone and not guardian_name:
+            self.add_error("guardian_name", "Enter the guardian's name.")
+        if guardian_alt_phone and not guardian_phone:
+            self.add_error(
+                "guardian_phone", "Enter the primary contact before an alternative."
+            )
+        if guardian_phone:
+            try:
+                Guardian.phone_regex(guardian_phone)
+            except ValidationError as error:
+                self.add_error("guardian_phone", error)
+        if guardian_alt_phone:
+            try:
+                Guardian.phone_regex(guardian_alt_phone)
+            except ValidationError as error:
+                self.add_error("guardian_alt_phone", error)
+        if guardian_phone:
+            matching_guardians = Guardian.objects.filter(
+                phone_number=guardian_phone
+            ).exclude(pk=self.instance.guardian_id if self.instance.pk else None)
+            if matching_guardians.exists() and not matching_guardians.filter(
+                full_name__iexact=guardian_name
+            ).exists():
+                self.add_error(
+                    "guardian_phone",
+                    "This phone number is already linked to a different guardian.",
+                )
+        return cleaned_data
+
+    def save(self, commit=True):
+        student = super().save(commit=False)
+        if not commit:
+            return student
+
+        guardian_name = self.cleaned_data.get("guardian_name", "").strip()
+        guardian_phone = self.cleaned_data.get("guardian_phone", "").strip()
+        guardian_alt_phone = self.cleaned_data.get("guardian_alt_phone", "").strip()
+        with transaction.atomic():
+            if guardian_name and guardian_phone:
+                guardian = Guardian.objects.filter(
+                    phone_number=guardian_phone,
+                    full_name__iexact=guardian_name,
+                ).first()
+                if guardian is None:
+                    guardian = Guardian.objects.create(
+                        full_name=guardian_name,
+                        phone_number=guardian_phone,
+                        alt_phone_number=guardian_alt_phone or None,
+                    )
+                elif guardian.alt_phone_number != (guardian_alt_phone or None):
+                    guardian.alt_phone_number = guardian_alt_phone or None
+                    guardian.save(update_fields=["alt_phone_number", "updated_at"])
+                student.guardian = guardian
+            else:
+                student.guardian = None
+            student.save()
+            self.save_m2m()
+        return student
+
+
+class StudentRosterUploadForm(forms.Form):
+    roster_file = forms.FileField(
+        label="Student roster file",
+        widget=forms.ClearableFileInput(
+            attrs={
+                "accept": ".csv,.xlsx",
+                "class": "student-form-control",
+            }
+        ),
+    )
+
+    def clean_roster_file(self):
+        roster_file = self.cleaned_data["roster_file"]
+        extension = roster_file.name.rsplit(".", 1)[-1].lower()
+        if extension not in {"csv", "xlsx"}:
+            raise ValidationError("Upload a CSV or Excel .xlsx file.")
+        if roster_file.size > 10 * 1024 * 1024:
+            raise ValidationError("Roster files must be 10 MB or smaller.")
+        return roster_file

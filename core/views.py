@@ -5,7 +5,7 @@ from django.http import HttpResponse, HttpResponseForbidden, HttpResponseBadRequ
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Count, F, Prefetch, Q, Sum, Value
 from django.core.paginator import Paginator
 from django.contrib.auth.decorators import login_required
@@ -40,6 +40,8 @@ from .forms import (
     ExeatReconciliationForm,
     DisciplinaryRecordForm,
     ReportFilterForm,
+    StudentRegistrationForm,
+    StudentRosterUploadForm,
 )
 from .permissions import (
     role_required,
@@ -53,6 +55,8 @@ from .permissions import (
     EXEAT_CREATE_ROLES,
     CONDUCT_ROLES,
     REPORT_ROLES,
+    STUDENT_MANAGEMENT_ROLES,
+    STUDENT_RECORD_ROLES,
     filter_queryset_by_house,
     get_house_scope,
     get_gate_house_scope,
@@ -66,6 +70,7 @@ from .services.roll_call import (
     reconcile_gate_departure_with_roll_calls,
 )
 from .services.sms import enqueue_exeat_event_sms
+from .services.student_import import import_student_roster
 
 
 class RememberMeLoginView(auth_views.LoginView):
@@ -605,6 +610,187 @@ def house_list_view(request):
         'attention_houses': attention_houses,
     }
     return render(request, 'core/houses/list.html', context)
+
+
+@login_required
+@role_required(*STUDENT_MANAGEMENT_ROLES)
+def student_registry_view(request):
+    query = request.GET.get("q", "").strip()
+    residency = request.GET.get("residency", "").strip()
+    students = Student.objects.select_related(
+        "programme", "house", "dormitory", "class_group", "guardian"
+    )
+    if query:
+        students = students.filter(
+            Q(admission_no__icontains=query)
+            | Q(index_number__icontains=query)
+            | Q(full_name__icontains=query)
+            | Q(programme__name__icontains=query)
+            | Q(house__name__icontains=query)
+        )
+    if residency in Student.ResidencyStatus.values:
+        students = students.filter(residency=residency)
+
+    students_page, pagination_query = paginate_queryset(
+        students.order_by("full_name", "admission_no"),
+        request,
+        per_page=50,
+    )
+    return render(
+        request,
+        "core/students/registry.html",
+        {
+            "students_page": students_page,
+            "pagination_query": pagination_query,
+            "query": query,
+            "selected_residency": residency,
+        },
+    )
+
+
+@login_required
+@role_required(*STUDENT_MANAGEMENT_ROLES)
+def student_registration_view(request, student_pk=None):
+    student = (
+        get_object_or_404(
+            Student.objects.select_related("guardian"), pk=student_pk
+        )
+        if student_pk
+        else None
+    )
+    form = StudentRegistrationForm(
+        request.POST or None,
+        request.FILES or None,
+        instance=student,
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            saved_student = form.save()
+        except IntegrityError:
+            form.add_error(
+                None,
+                "A student identifier was just used by another record. "
+                "Refresh the registry and check the admission and index numbers.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Student record saved for {saved_student.full_name}.",
+            )
+            return redirect("core:student_registry")
+    return render(
+        request,
+        "core/students/registration_form.html",
+        {
+            "form": form,
+            "student": student,
+            "houses": House.objects.order_by("display_order", "name"),
+            "dormitories": Dormitory.objects.select_related("house").order_by(
+                "house__display_order", "house__name", "name"
+            ),
+        },
+    )
+
+
+@login_required
+@role_required(*STUDENT_MANAGEMENT_ROLES)
+def student_roster_import_view(request):
+    form = StudentRosterUploadForm(request.POST or None, request.FILES or None)
+    errors = []
+    error_count = 0
+    imported_count = 0
+    if request.method == "POST" and form.is_valid():
+        imported_count, errors = import_student_roster(
+            form.cleaned_data["roster_file"]
+        )
+        error_count = len(errors)
+        if imported_count:
+            messages.success(
+                request,
+                f"Imported {imported_count} student record(s) successfully.",
+            )
+            return redirect("core:student_registry")
+    return render(
+        request,
+        "core/students/import.html",
+        {
+            "form": form,
+            "errors": errors[:200],
+            "error_count": error_count,
+            "omitted_error_count": max(error_count - 200, 0),
+            "imported_count": imported_count,
+        },
+    )
+
+
+@login_required
+@role_required(*STUDENT_MANAGEMENT_ROLES)
+def student_import_template_view(request):
+    response = HttpResponse(
+        "Admission No.,Index Number,Full Name,Gender,Date of Birth,Programme,"
+        "Class,Residency,House,Dormitory,Status,Guardian Name,Guardian Contact,"
+        "Guardian Alt Contact\r\n",
+        content_type="text/csv; charset=utf-8",
+    )
+    response["Content-Disposition"] = (
+        'attachment; filename="student-import-template.csv"'
+    )
+    return response
+
+
+@login_required
+@role_required(*STUDENT_RECORD_ROLES)
+def student_record_view(request, student_pk):
+    students = Student.objects.select_related(
+        "programme",
+        "house",
+        "dormitory",
+        "class_group",
+        "guardian",
+    )
+    students = filter_queryset_by_house(request.user, students, "house_id")
+    student = get_object_or_404(students, pk=student_pk)
+
+    exeats = student.exeats.select_related(
+        "academic_term",
+        "approved_by",
+        "created_by",
+        "movement",
+        "reconciliation",
+    ).order_by("-expected_departure", "-created_at")
+    disciplinary_records = student.disciplinary_records.select_related(
+        "academic_term",
+        "logged_by",
+        "corrected_by",
+        "roll_call_entry",
+        "roll_call_follow_up",
+    ).order_by("-created_at")
+    roll_call_entries = student.roll_call_entries.select_related(
+        "session",
+        "session__house",
+        "session__dormitory",
+        "session__conducted_by",
+        "gate_conflict_reviewed_by",
+    ).prefetch_related(
+        "absence_follow_ups__reported_by",
+        "absence_follow_ups__resolved_by",
+    ).order_by("-session__date", "-created_at")
+
+    context = {
+        "student": student,
+        "exeats": exeats,
+        "disciplinary_records": disciplinary_records,
+        "roll_call_entries": roll_call_entries,
+        "exeat_count": exeats.count(),
+        "disciplinary_record_count": disciplinary_records.count(),
+        "roll_call_entry_count": roll_call_entries.count(),
+        "pending_absence_follow_up_count": RollCallAbsenceFollowUp.objects.filter(
+            entry__student=student,
+            status=RollCallAbsenceFollowUp.Status.PENDING,
+        ).count(),
+    }
+    return render(request, "core/students/record.html", context)
+
 
 @login_required
 @role_required(*CONDUCT_ROLES)

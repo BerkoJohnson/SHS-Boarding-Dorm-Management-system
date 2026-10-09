@@ -25,7 +25,11 @@
                 <!-- Student & Details -->
                 <td class="px-3 py-2.5 whitespace-nowrap">
                     <div class="font-medium text-slate-900 flex items-center gap-1.5">
+                        {% if can_view_student_records %}
+                        <a href="{% url 'core:student_record' record.student.pk %}" class="hover:text-brand-700">{{ record.student.full_name }}</a>
+                        {% else %}
                         <span>{{ record.student.full_name }}</span>
+                        {% endif %}
                         {% if record.student.gender == 'male' %}
                             <span class="text-2xs text-blue-500 font-bold">M</span>
                         {% else %}

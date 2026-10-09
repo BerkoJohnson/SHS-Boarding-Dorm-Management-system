@@ -110,6 +110,13 @@
           </div>
           
           <div class="flex items-center gap-1.5 shrink-0">
+            {% if can_view_student_records %}
+            <a href="{% url 'core:student_record' student.pk %}"
+               class="px-2 py-1 text-[10px] font-semibold rounded bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 transition"
+               title="View full record for {{ student.full_name }}">
+              Record
+            </a>
+            {% endif %}
             <a href="{% url 'core:exeat_create' %}?student_id={{ student.id }}" 
                class="px-2 py-1 text-[10px] font-semibold rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition"
                title="Issue Exeat for {{ student.full_name }}">
