@@ -205,6 +205,26 @@ class ExeatSMSTests(TestCase):
         self.assertIsNotNone(delivery.sent_at)
         send_sms.assert_called_once_with(delivery.phone_number, delivery.message)
 
+    @override_settings(SMS_ENABLED=True, SMS_MAX_ATTEMPTS=2)
+    @patch("core.services.sms.send_sms", return_value=False)
+    def test_failed_delivery_uses_settings_retry_budget(self, send_sms):
+        delivery = SMSDelivery.objects.create(
+            exeat=self.exeat,
+            event_type=SMSDelivery.EventType.APPROVED,
+            recipient_name="Guardian One",
+            phone_number="+233240000000",
+            message="Exeat approved",
+            dedupe_key=f"approved:{self.exeat.pk}:+233240000000:retry-budget",
+        )
+
+        with self.assertRaises(RuntimeError):
+            send_sms_delivery_task.run(str(delivery.pk))
+
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, SMSDelivery.Status.QUEUED)
+        self.assertEqual(delivery.attempts, 1)
+        send_sms.assert_called_once_with(delivery.phone_number, delivery.message)
+
 
 class SMSConfigurationViewTests(TestCase):
     def setUp(self):

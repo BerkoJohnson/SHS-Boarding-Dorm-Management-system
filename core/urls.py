@@ -41,5 +41,7 @@ urlpatterns = [
     path('configuration/', views.configuration_hub_view, name='configuration'),
     path('configuration/term/<uuid:term_id>/set-active/', views.set_active_term_view, name='set_active_term'),
     path('configuration/sms/set-enabled/', views.set_sms_enabled_view, name='set_sms_enabled'),
+    path('configuration/student-id/export/', views.create_student_id_export_view, name='student_id_export_create'),
+    path('configuration/student-id/export/<uuid:export_id>/download/', views.download_student_id_export_view, name='student_id_export_download'),
     path('logout/', views.logout_view, name='logout'),
 ]

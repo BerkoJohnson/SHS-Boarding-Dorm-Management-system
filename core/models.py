@@ -991,7 +991,13 @@ class SchoolConfiguration(models.Model):
     """Singleton public-facing identity and contact details for the school."""
 
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
-    name = models.CharField(max_length=150, default="EDEN HIGH SCHOOL")
+    name = models.CharField(max_length=150, default="ATEBUBU SENIOR HIGH SCHOOL")
+    short_name = models.CharField(
+        max_length=50,
+        default="ATSEC",
+        blank=True,
+        help_text="Short school name used in SMS notifications.",
+    )
     logo = models.ImageField(upload_to="school/logos/", blank=True)
     address = models.TextField(blank=True)
     contact_number = models.CharField(max_length=30, blank=True)
@@ -1011,6 +1017,54 @@ class SchoolConfiguration(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class StudentIDExport(BaseModel):
+    """Tracked background export of active students' ID card images."""
+
+    class Status(models.TextChoices):
+        QUEUED = "Queued", "Queued"
+        PROCESSING = "Processing", "Processing"
+        COMPLETED = "Completed", "Completed"
+        FAILED = "Failed", "Failed"
+
+    class ImageFormat(models.TextChoices):
+        PNG = "PNG", "PNG"
+        JPEG = "JPEG", "JPEG"
+
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="student_id_exports",
+    )
+    layout = models.CharField(max_length=10)
+    image_format = models.CharField(max_length=4, choices=ImageFormat.choices)
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.QUEUED,
+    )
+    total_students = models.PositiveIntegerField(default=0)
+    processed_students = models.PositiveIntegerField(default=0)
+    archive_name = models.CharField(max_length=64, blank=True)
+    error_message = models.TextField(blank=True)
+    expires_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Student ID image export"
+        verbose_name_plural = "Student ID image exports"
+
+    def save(self, *args, **kwargs):
+        if not self.archive_name:
+            timestamp = timezone.now().strftime("%Y%m%d-%H%M%S")
+            self.archive_name = f"student-id-export-{timestamp}-{uuid.uuid4().hex[:8]}.zip"
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timezone.timedelta(days=7)
+        super().save(*args, **kwargs)
 
 
 class DisciplinaryRecord(BaseModel):

@@ -156,7 +156,7 @@ LOGOUT_REDIRECT_URL = "core:login"
 
 # SMS Configuration (SMSOnlineGH)
 SMS_ONLINE_GH_API_KEY = os.getenv("SMS_ONLINE_GH_API_KEY", "")
-SMS_SENDER_ID = os.getenv("SMS_SENDER_ID", "EDENSYS")
+SMS_SENDER_ID = os.getenv("SMS_SENDER_ID", "ATSEC")
 SMS_ENABLED = os.getenv("SMS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 SMS_TIME_ZONE = os.getenv("SMS_TIME_ZONE", TIME_ZONE)
 SMS_HTTP_TIMEOUT = float(os.getenv("SMS_HTTP_TIMEOUT", "10"))

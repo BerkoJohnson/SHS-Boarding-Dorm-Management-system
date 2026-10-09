@@ -1,8 +1,95 @@
-run tailwind watch
--- npx tailwindcss -i ./src/css/input.css -o ./src/css/output.css --watch                    
+# SHS Boarding and Dorm Management System
 
-run development server
--- python .\manage.py runserver --settings=schoolsystem.settings.development
+## Local development startup (Windows PowerShell)
+
+Run commands from the repository root (`C:\RebuildEden\project 1`). Keep the
+server, Celery worker, and Celery Beat running in separate PowerShell terminals.
+
+### First-time setup
+
+1. Install Python 3.12 or newer, PostgreSQL, Node.js, and a Redis server version
+   6 or newer. The Redis server must be reachable at the URL in `REDIS_URL`.
+   Redis 5.0.14 is too old for the Redis client used by Celery.
+2. Create the virtual environment and install the Python requirements:
+
+   ```powershell
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+   ```
+
+   If `.venv` already exists and is working, skip these commands.
+3. Create a `.env` file in the repository root and configure the database
+   connection (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`),
+   `REDIS_URL`, and the SMS settings described under
+   [Exeat SMS notifications](#exeat-sms-notifications). The local Redis URL is
+   `redis://127.0.0.1:6379/0`.
+4. Install the frontend dependencies if you want to run the Tailwind watcher:
+
+   ```powershell
+   npm ci
+   ```
+
+### Each time you start the project
+
+1. Start PostgreSQL and Redis using the Windows Services app or the method used
+   to install them. If they are Windows services, find their service names with:
+
+   ```powershell
+   Get-Service *postgres*
+   Get-Service *redis*
+   ```
+
+   Start a stopped service in an elevated PowerShell with
+   `Start-Service -Name "<service-name>"`. Verify the database is listening on
+   the configured host and port (the defaults are `localhost:5432`), and verify
+   Redis is reachable on the configured host and port (default `127.0.0.1:6379`):
+
+   ```powershell
+   Test-NetConnection -ComputerName localhost -Port 5432
+   Test-NetConnection -ComputerName 127.0.0.1 -Port 6379
+   ```
+
+   If `redis-cli` is installed, confirm the server reports `redis_version` 6 or
+   newer:
+
+   ```powershell
+   redis-cli -h 127.0.0.1 -p 6379 INFO server
+   ```
+
+   If the Redis version is older, upgrade that server or point `REDIS_URL` to a
+   Redis 6+ instance before starting Celery.
+2. Apply database migrations (also do this after pulling changes that add
+   migrations):
+
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.development
+   ```
+3. In **Terminal 1**, start Django:
+
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py runserver --settings=schoolsystem.settings.development
+   ```
+
+4. In **Terminal 2**, start the Celery worker:
+
+   ```powershell
+   .\.venv\Scripts\celery.exe -A schoolsystem worker --pool=solo --concurrency=1 --loglevel=INFO
+   ```
+
+   Keep `--pool=solo --concurrency=1` on Windows. The default prefork pool can
+   fail on Windows with Billiard multiprocessing `PermissionError: [WinError 5]`.
+5. In **Terminal 3**, start Celery Beat for scheduled tasks:
+
+   ```powershell
+   .\.venv\Scripts\celery.exe -A schoolsystem beat --loglevel=INFO
+   ```
+
+6. Optional, in **Terminal 4**, rebuild CSS automatically while editing
+   templates/styles:
+
+   ```powershell
+   npm run dev
+   ```
 
 ## Exeat SMS notifications
 
@@ -15,15 +102,8 @@ record in Django Admin controls the live SMS switch and takes precedence over
 the environment default. Disable it to stop new SMS queueing, queued-message
 dispatch, and overdue reminders; re-enable it to resume processing.
 The SMS outbox records each recipient's delivery state and retry history.
-
-Run Redis, then start the application and its asynchronous workers in separate
-terminals:
-
-```powershell
-.\.venv\Scripts\python.exe .\manage.py runserver --settings=schoolsystem.settings.development
-.\.venv\Scripts\celery.exe -A schoolsystem worker --pool=solo --concurrency=1 --loglevel=INFO
-.\.venv\Scripts\celery.exe -A schoolsystem beat --loglevel=INFO
-```
+Guardian notifications use the configured school short name in the message body,
+for example `ATSEC: Dear Berko J, Your ward 'Student One' ...`.
 
 Exeats generate SMS notifications for request submission, approval or rejection,
 gate departure and return, and overdue status. Guardians and the student's

@@ -9,6 +9,62 @@
     <p class="text-sm text-slate-500 mt-1">Manage academic terms, default settings, and system-wide lists.</p>
   </div>
 
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+      <h3 class="text-sm font-bold text-slate-800">Student ID Export</h3>
+      <p class="text-xs text-slate-500 mt-0.5">Export all enrolled students' front and back cards as high-quality PNG or JPEG files.</p>
+    </div>
+    <div class="p-5">
+      <form method="post" action="{% url 'core:student_id_export_create' %}" class="space-y-4">
+        {% csrf_token %}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label for="layout" class="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-1">Layout</label>
+            <select id="layout" name="layout" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100">
+              {% for option in id_export_layouts %}
+                <option value="{{ option.value }}" {% if option.value == 'crest' %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="image_format" class="block text-xs font-semibold uppercase tracking-wide text-slate-600 mb-1">Format</label>
+            <select id="image_format" name="image_format" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100">
+              {% for option in id_export_formats %}
+                <option value="{{ option.value }}" {% if option.value == 'PNG' %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          <p class="text-xs text-slate-500">The archive is created in the background and stays available for download for 7 days.</p>
+          <button type="submit" class="px-4 py-2 bg-emerald-600 border border-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 transition">
+            Queue Export
+          </button>
+        </div>
+      </form>
+      {% if export_jobs %}
+        <div class="mt-5 border-t border-slate-100 pt-4">
+          <h4 class="text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-2">Recent exports</h4>
+          <div class="space-y-2">
+            {% for export in export_jobs %}
+              <div class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div>
+                  <p class="text-sm font-semibold text-slate-800">{{ export.layout|title }} · {{ export.image_format }}</p>
+                  <p class="text-[11px] text-slate-500">{{ export.status }} · {{ export.processed_students }}/{{ export.total_students }} students</p>
+                </div>
+                {% if export.status == 'Completed' %}
+                  <a href="{% url 'core:student_id_export_download' export.id %}" class="px-2.5 py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-semibold hover:bg-slate-800 transition">Download ZIP</a>
+                {% else %}
+                  <span class="px-2.5 py-1.5 rounded-lg bg-slate-200 text-slate-600 text-[11px] font-semibold">In progress</span>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
     
     <!-- Active Academic Term Settings -->

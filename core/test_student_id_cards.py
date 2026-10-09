@@ -13,6 +13,7 @@ from core.models import (
     House,
     HouseMaster,
     Programme,
+    SchoolConfiguration,
     StaffRole,
     Student,
     UserProfile,
@@ -36,6 +37,11 @@ class StudentIdCardTests(TestCase):
             programme=self.programme,
             house=self.house,
             dormitory=self.dormitory,
+        )
+        SchoolConfiguration.objects.create(
+            name="Atebubu SHS",
+            address="Atebubu, Bono East Region",
+            contact_number="+233 20 000 0000",
         )
         self.admin = get_user_model().objects.create_user(
             username="id-admin",
@@ -77,8 +83,12 @@ class StudentIdCardTests(TestCase):
         self.assertEqual(response.context["selected_layout"], "crest")
         self.assertEqual(len(response.context["layouts"]), 3)
         self.assertContains(response, "layout-crest")
+        self.assertContains(response, "crest-front-header")
+        self.assertContains(response, "crest-back-panel")
         self.assertContains(response, "Kwame Identity")
         self.assertContains(response, "Scan to verify")
+        self.assertContains(response, "Atebubu, Bono East Region")
+        self.assertNotContains(response, "Parent Contact")
         qr_data_uri = response.context["qr_code"]
         self.assertTrue(qr_data_uri.startswith("data:image/svg+xml;base64,"))
         svg = base64.b64decode(qr_data_uri.partition(",")[2])
@@ -90,6 +100,17 @@ class StudentIdCardTests(TestCase):
             ),
             response.context["public_url"],
         )
+
+    def test_school_address_is_shown_on_other_card_layouts(self):
+        self.client.force_login(self.admin)
+        url = reverse("core:student_id_card", args=[self.student.pk])
+
+        for layout in ("classic", "modern"):
+            with self.subTest(layout=layout):
+                response = self.client.get(url, {"layout": layout})
+
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "Atebubu, Bono East Region")
 
     def test_id_card_rejects_unknown_layout(self):
         self.client.force_login(self.admin)

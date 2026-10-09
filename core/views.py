@@ -1,8 +1,9 @@
 import json
 import uuid
+from pathlib import Path
 
 from django.views.decorators.http import require_POST, require_http_methods
-from django.http import HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseForbidden, HttpResponseBadRequest, FileResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
@@ -36,6 +37,7 @@ from .models import (
     RollCallEntry,
     RollCallAbsenceFollowUp,
     SchoolConfiguration,
+    StudentIDExport,
 )
 from .forms import (
     ExeatCreateForm,
@@ -75,6 +77,7 @@ from .services.roll_call import (
 from .services.sms import enqueue_exeat_event_sms
 from .services.student_import import import_student_roster
 from .services.student_id import make_qr_data_uri
+from .tasks import generate_student_id_export
 
 
 STUDENT_ID_LAYOUTS = {
@@ -2638,10 +2641,25 @@ def configuration_hub_view(request):
     Provides quick links to Django admin and inline toggle for Academic Terms.
     """
     academic_terms = AcademicTerm.objects.select_related('academic_year').order_by('-academic_year__start_date', '-term')
-    
+    export_jobs = (
+        StudentIDExport.objects.filter(requested_by=request.user)
+        .order_by('-created_at')[:5]
+        if hasattr(request.user, 'pk') else StudentIDExport.objects.none()
+    )
+
     context = {
         'academic_terms': academic_terms,
         'sms_enabled': SMSConfiguration.is_enabled(),
+        'export_jobs': export_jobs,
+        'id_export_layouts': [
+            {'value': 'classic', 'label': 'Classic'},
+            {'value': 'crest', 'label': 'Crest'},
+            {'value': 'modern', 'label': 'Modern'},
+        ],
+        'id_export_formats': [
+            {'value': 'PNG', 'label': 'PNG'},
+            {'value': 'JPEG', 'label': 'JPEG'},
+        ],
         'active_tab': 'configuration'
     }
     return render(request, 'core/config/hub.html', context)
@@ -2683,3 +2701,52 @@ def set_sms_enabled_view(request):
     state_label = "enabled" if configuration.enabled else "disabled"
     messages.success(request, f"SMS notifications are now {state_label}.")
     return redirect("core:configuration")
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+@require_POST
+def create_student_id_export_view(request):
+    """Queue a background export of all enrolled students' card images."""
+    layout = request.POST.get("layout", "crest").strip().lower()
+    image_format = request.POST.get("image_format", "PNG").strip().upper()
+
+    if layout not in {"classic", "crest", "modern"}:
+        messages.error(request, "Choose a supported student ID card layout.")
+        return redirect("core:configuration")
+    if image_format not in {StudentIDExport.ImageFormat.PNG, StudentIDExport.ImageFormat.JPEG}:
+        messages.error(request, "Choose PNG or JPEG format for the export.")
+        return redirect("core:configuration")
+
+    export = StudentIDExport.objects.create(
+        requested_by=request.user,
+        layout=layout,
+        image_format=image_format,
+        status=StudentIDExport.Status.QUEUED,
+        expires_at=timezone.now() + timezone.timedelta(days=7),
+    )
+
+    public_origin = request.build_absolute_uri('/').rstrip('/')
+    generate_student_id_export.delay(str(export.pk), public_origin)
+    messages.success(request, "Student ID export queued. It will be generated in the background.")
+    return redirect("core:configuration")
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+def download_student_id_export_view(request, export_id):
+    """Serve the generated student ID export ZIP for the admin user."""
+    export = get_object_or_404(StudentIDExport, pk=export_id, requested_by=request.user)
+    if export.status != StudentIDExport.Status.COMPLETED:
+        messages.error(request, "The selected export is not ready for download yet.")
+        return redirect("core:configuration")
+
+    archive_path = Path(settings.BASE_DIR) / ".private" / "student_id_exports" / export.archive_name
+    if not archive_path.exists():
+        messages.error(request, "The requested export archive could not be found.")
+        return redirect("core:configuration")
+
+    response = FileResponse(open(archive_path, 'rb'))
+    response["Content-Type"] = "application/zip"
+    response["Content-Disposition"] = f'attachment; filename="{export.archive_name}"'
+    return response

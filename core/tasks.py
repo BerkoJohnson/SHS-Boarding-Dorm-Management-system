@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from celery import shared_task
+from django.conf import settings
 from django.db.models import F, Q
+from django.urls import reverse
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -163,3 +166,115 @@ def enqueue_overdue_exeat_reminders() -> int:
         )
         count += len(deliveries)
     return count
+
+
+@shared_task
+def generate_student_id_export(export_id: str, public_origin: str) -> bool:
+    from core.models import SchoolConfiguration, Student, StudentIDExport
+    from core.services.student_id_images import (
+        private_student_id_export_path,
+        render_student_card_side,
+        safe_student_folder_name,
+    )
+
+    export = StudentIDExport.objects.filter(pk=export_id).first()
+    if export is None:
+        logger.error("Student ID export %s does not exist", export_id)
+        return False
+    if export.status != StudentIDExport.Status.QUEUED:
+        logger.warning(
+            "Student ID export %s was not queued (status: %s)",
+            export_id,
+            export.status,
+        )
+        return False
+
+    students = (
+        Student.objects.filter(status=Student.EnrollmentStatus.ENROLLED)
+        .select_related("programme", "house", "class_group")
+        .order_by("full_name", "admission_no")
+    )
+    total_students = students.count()
+    if not total_students:
+        export.status = StudentIDExport.Status.FAILED
+        export.error_message = "There are no enrolled students to export."
+        export.finished_at = timezone.now()
+        export.save(
+            update_fields=["status", "error_message", "finished_at", "updated_at"]
+        )
+        return False
+
+    configuration = SchoolConfiguration.get_solo()
+    export.status = StudentIDExport.Status.PROCESSING
+    export.total_students = total_students
+    export.processed_students = 0
+    export.save(
+        update_fields=[
+            "status",
+            "total_students",
+            "processed_students",
+            "updated_at",
+        ]
+    )
+
+    archive_path = private_student_id_export_path(export.archive_name)
+    temporary_path = archive_path.with_suffix(".tmp")
+    extension = "png" if export.image_format == StudentIDExport.ImageFormat.PNG else "jpg"
+    try:
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        with ZipFile(temporary_path, "w", compression=ZIP_DEFLATED) as archive:
+            for processed, student in enumerate(students.iterator(chunk_size=100), start=1):
+                folder_name = safe_student_folder_name(student)
+                public_url = (
+                    f"{public_origin.rstrip('/')}"
+                    f"{reverse('core:public_student_exeat', args=[student.public_token])}"
+                )
+                for side in ("front", "back"):
+                    image_bytes = render_student_card_side(
+                        student=student,
+                        school_configuration=configuration,
+                        public_url=public_url,
+                        layout=export.layout,
+                        side=side,
+                        image_format=export.image_format,
+                    )
+                    archive.writestr(
+                        f"{folder_name}/{side}.{extension}",
+                        image_bytes,
+                    )
+                StudentIDExport.objects.filter(pk=export.pk).update(
+                    processed_students=processed,
+                    updated_at=timezone.now(),
+                )
+
+        temporary_path.replace(archive_path)
+        export.status = StudentIDExport.Status.COMPLETED
+        export.processed_students = total_students
+        export.finished_at = timezone.now()
+        export.error_message = ""
+        export.save(
+            update_fields=[
+                "status",
+                "processed_students",
+                "finished_at",
+                "error_message",
+                "updated_at",
+            ]
+        )
+        return True
+    except Exception as error:
+        temporary_path.unlink(missing_ok=True)
+        archive_path.unlink(missing_ok=True)
+        export.status = StudentIDExport.Status.FAILED
+        export.error_message = str(error)
+        export.finished_at = timezone.now()
+        export.save(
+            update_fields=[
+                "status",
+                "error_message",
+                "finished_at",
+                "updated_at",
+            ]
+        )
+        logger.exception("Student ID export %s failed", export_id)
+        raise

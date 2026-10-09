@@ -9,11 +9,17 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from core.models import Exeat, HouseMaster, SMSConfiguration, SMSDelivery
+from core.models import Exeat, HouseMaster, SMSConfiguration, SMSDelivery, SchoolConfiguration
 
 logger = logging.getLogger(__name__)
 GUARDIAN_AUDIENCE = "guardian"
 HOUSEMASTER_AUDIENCE = "housemaster"
+
+
+def _school_short_name() -> str:
+    configuration = SchoolConfiguration.get_solo()
+    short_name = (configuration.short_name or configuration.name or "ATSEC").strip()
+    return short_name.upper() if short_name else "EDENSYS"
 
 
 def normalize_phone_number(value: str | None) -> str:
@@ -69,30 +75,32 @@ def build_exeat_event_message(
     audience: str = GUARDIAN_AUDIENCE,
 ) -> str:
     if audience == GUARDIAN_AUDIENCE:
+        guardian_name = (exeat.student.guardian.full_name or "Guardian").strip() or "Guardian"
         student_name = exeat.student.full_name
+        short_name = _school_short_name()
         return_by = timezone.localtime(
             exeat.expected_return,
             ZoneInfo(getattr(settings, "SMS_TIME_ZONE", settings.TIME_ZONE)),
         ).strftime("%d %b %Y %H:%M")
         guardian_messages = {
             SMSDelivery.EventType.REQUESTED: (
-                f"EDENSYS: Leave request for {student_name} is awaiting school approval."
+                f"{short_name}: Dear {guardian_name}, Your ward '{student_name}' is awaiting school approval."
             ),
             SMSDelivery.EventType.APPROVED: (
-                f"EDENSYS: {student_name}'s leave is approved. Return by {return_by}."
+                f"{short_name}: Dear {guardian_name}, Your ward '{student_name}' leave is approved. Return by {return_by}."
             ),
             SMSDelivery.EventType.REJECTED: (
-                f"EDENSYS: {student_name}'s leave request was not approved. "
+                f"{short_name}: Dear {guardian_name}, Your ward '{student_name}' leave request was not approved. "
                 "Please contact the school."
             ),
             SMSDelivery.EventType.DEPARTURE: (
-                f"EDENSYS: {student_name} has left school. Return by {return_by}."
+                f"{short_name}: Dear {guardian_name}, Your ward '{student_name}' has left school. Return by {return_by}."
             ),
             SMSDelivery.EventType.RETURN: (
-                f"EDENSYS: {student_name} has returned to school."
+                f"{short_name}: Dear {guardian_name}, Your ward '{student_name}' has returned to school."
             ),
             SMSDelivery.EventType.OVERDUE: (
-                f"EDENSYS: {student_name} has not returned on time. "
+                f"{short_name}: Dear {guardian_name}, Your ward '{student_name}' has not returned on time. "
                 "Please contact the school."
             ),
         }
@@ -205,7 +213,7 @@ def send_bulk_sms(phone_numbers: Sequence[str], message: str) -> bool:
         "key": api_key,
         "text": message,
         "type": 0,
-        "sender": getattr(settings, "SMS_SENDER_ID", "EDENSYS"),
+        "sender": getattr(settings, "SMS_SENDER_ID", "ATSEC"),
         "to": ",".join(cleaned_numbers),
     }
     try:

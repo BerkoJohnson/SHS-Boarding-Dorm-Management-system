@@ -19,7 +19,206 @@
     box-shadow: 0 8px 24px rgb(15 23 42 / 12%);
     position: relative;
   }
-  .layout-crest .card-sheet { border-top: 7px solid var(--card-accent); }
+  .layout-crest .card-sheet { border-color: #d1e3d5; }
+  .layout-crest .card-front,
+  .layout-crest .card-back { border-radius: 8px; }
+  .crest-front-header {
+    position: absolute;
+    inset: 0 0 auto;
+    display: flex;
+    height: 48px;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    color: #123b27;
+    background: linear-gradient(135deg, #f5fbf5 0 72%, #d8eed7 72% 82%, #80bc71 82% 91%, #39854d 91%);
+  }
+  .layout-crest .card-school-logo {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    border: 1px solid #d3e7d3;
+    border-radius: 50%;
+    padding: 2px;
+  }
+  .crest-front-copy { min-width: 0; flex: 1; }
+  .crest-front-title {
+    overflow: hidden;
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .crest-front-subtitle {
+    margin-top: 3px;
+    color: #477153;
+    font-size: 7px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+  }
+  .crest-residency {
+    border-radius: 999px;
+    background: #e3f2df;
+    color: #24613b;
+    font-size: 7px;
+    font-weight: 800;
+    padding: 4px 7px;
+    text-transform: uppercase;
+  }
+  .crest-front-body {
+    position: absolute;
+    inset: 58px 12px 13px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .layout-crest .card-student-photo {
+    width: 76px;
+    height: 100px;
+    flex: 0 0 76px;
+    border: 2px solid white;
+    border-radius: 5px;
+    box-shadow: 0 1px 5px rgb(21 75 43 / 18%);
+  }
+  .crest-student-details { min-width: 0; flex: 1; padding-top: 1px; }
+  .crest-student-name {
+    overflow: hidden;
+    color: #102b1c;
+    font-size: 13px;
+    font-weight: 900;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .crest-programme {
+    margin-top: 4px;
+    color: #39834a;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .crest-student-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 10px;
+    margin-top: 13px;
+  }
+  .crest-student-fields dt {
+    color: #668271;
+    font-size: 6.5px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .crest-student-fields dd {
+    overflow: hidden;
+    margin-top: 2px;
+    color: #193625;
+    font-size: 8px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .crest-front-footer {
+    position: absolute;
+    inset: auto 0 0;
+    height: 7px;
+    background: linear-gradient(135deg, #21643a 0 17%, #4d9959 17% 37%, #9bcd76 37% 56%, #e2f1d9 56% 76%, #39854d 76%);
+  }
+  .crest-back-panel {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 68px;
+    overflow: hidden;
+    background-color: #419253;
+    background-image:
+      linear-gradient(135deg, transparent 50%, rgb(255 255 255 / 22%) 50%),
+      linear-gradient(45deg, #246b3c 25%, transparent 25% 75%, #8bc76e 75%);
+    background-size: 38px 38px, 46px 46px;
+  }
+  .crest-back-panel:after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent 75%, rgb(19 76 41 / 12%));
+    content: "";
+  }
+  .crest-back-logo {
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    left: 50%;
+    display: grid;
+    width: 46px;
+    height: 46px;
+    place-items: center;
+    border: 3px solid white;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 8px rgb(15 55 29 / 24%);
+    transform: translate(-50%, -50%);
+  }
+  .crest-back-logo img { width: 36px; height: 36px; object-fit: contain; }
+  .crest-back-content {
+    position: absolute;
+    inset: 0 0 0 68px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px;
+  }
+  .crest-back-copy { min-width: 0; flex: 1; }
+  .crest-back-heading {
+    color: #173b25;
+    font-size: 8px;
+    font-weight: 900;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .crest-back-description {
+    margin-top: 5px;
+    color: #50675a;
+    font-size: 6.5px;
+    line-height: 1.35;
+  }
+  .crest-back-return {
+    margin-top: 10px;
+    border-top: 1px solid #dce8dc;
+    padding-top: 6px;
+  }
+  .crest-back-return-label {
+    color: #6c8573;
+    font-size: 6px;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .crest-back-school {
+    margin-top: 3px;
+    color: #21482e;
+    font-size: 7px;
+    font-weight: 800;
+  }
+  .crest-back-address {
+    margin-top: 2px;
+    color: #50675a;
+    font-size: 6px;
+    line-height: 1.25;
+  }
+  .crest-back-phone { margin-top: 2px; color: #50675a; font-size: 6.5px; }
+  .crest-back-code { flex: 0 0 92px; text-align: center; }
+  .layout-crest .card-qr { width: 88px; height: 88px; }
+  .crest-back-caption {
+    margin-top: 3px;
+    color: #318147;
+    font-size: 6px;
+    font-weight: 900;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
   .layout-modern .card-front { background: linear-gradient(145deg, #eff6ff 0%, white 55%); }
   .card-brand { background: var(--card-ink); color: white; }
   .card-accent { color: var(--card-accent); }
@@ -89,6 +288,64 @@
 
   <main class="card-print-area id-card-preview layout-{{ selected_layout }}">
     <div class="card-preview-grid flex flex-wrap items-start gap-5">
+      {% if selected_layout == "crest" %}
+      <section class="card-sheet card-front" aria-label="Student ID card front">
+        <header class="crest-front-header">
+          {% if school_configuration.logo %}
+          <img class="card-school-logo" src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} crest">
+          {% endif %}
+          <div class="crest-front-copy">
+            <p class="crest-front-title">{{ school_configuration.name }}</p>
+            <p class="crest-front-subtitle">Student Identity Card</p>
+          </div>
+          <span class="crest-residency">{{ student.get_residency_display }}</span>
+        </header>
+        <div class="crest-front-body">
+          {% if student.photo %}
+          <img class="card-student-photo" src="{{ student.photo.url }}" alt="Student portrait">
+          {% else %}
+          <div class="card-student-photo flex items-center justify-center bg-slate-100 text-2xl font-bold text-slate-500">{{ student.full_name|slice:":1" }}</div>
+          {% endif %}
+          <div class="crest-student-details">
+            <p class="crest-student-name">{{ student.full_name }}</p>
+            <p class="crest-programme">{{ student.programme.name }}</p>
+            <dl class="crest-student-fields">
+              <div><dt>Admission No.</dt><dd>{{ student.admission_no }}</dd></div>
+              <div><dt>Index No.</dt><dd>{{ student.index_number }}</dd></div>
+              <div><dt>Class</dt><dd>{{ student.class_group.name|default:"—" }}</dd></div>
+              <div><dt>House</dt><dd>{{ student.house.name|default:"—" }}</dd></div>
+            </dl>
+          </div>
+        </div>
+        <div class="crest-front-footer" aria-hidden="true"></div>
+      </section>
+
+      <section class="card-sheet card-back" aria-label="Student ID card back">
+        <div class="crest-back-panel" aria-hidden="true">
+          {% if school_configuration.logo %}
+          <div class="crest-back-logo">
+            <img src="{{ school_configuration.logo.url }}" alt="">
+          </div>
+          {% endif %}
+        </div>
+        <div class="crest-back-content">
+          <div class="crest-back-copy">
+            <p class="crest-back-heading">Exeat pass verification</p>
+            <p class="crest-back-description">Scan this code to check the student's latest exeat request, approval and recorded gate movements.</p>
+            <div class="crest-back-return">
+              <p class="crest-back-return-label">If found, return to</p>
+              <p class="crest-back-school">{{ school_configuration.name }}</p>
+              {% if school_configuration.address %}<p class="crest-back-address">{{ school_configuration.address|linebreaksbr }}</p>{% endif %}
+              {% if school_configuration.contact_number %}<p class="crest-back-phone">{{ school_configuration.contact_number }}</p>{% endif %}
+            </div>
+          </div>
+          <div class="crest-back-code">
+            <img class="card-qr" src="{{ qr_code }}" alt="QR code for the public exeat verification page">
+            <p class="crest-back-caption">Scan to verify</p>
+          </div>
+        </div>
+      </section>
+      {% else %}
       <section class="card-sheet card-front" aria-label="Student ID card front">
         <div class="card-brand flex h-12 items-center gap-2 px-3">
           {% if school_configuration.logo %}
@@ -127,6 +384,7 @@
           <div class="mt-3 border-t border-slate-200 pt-2">
             <p class="text-[7px] font-bold uppercase tracking-wider text-slate-400">If found, return to</p>
             <p class="mt-0.5 text-[9px] font-bold text-slate-800">{{ school_configuration.name }}</p>
+            {% if school_configuration.address %}<p class="mt-0.5 text-[8px] leading-tight text-slate-600">{{ school_configuration.address|linebreaksbr }}</p>{% endif %}
             {% if school_configuration.contact_number %}<p class="mt-0.5 text-[8px] text-slate-600">{{ school_configuration.contact_number }}</p>{% endif %}
           </div>
         </div>
@@ -135,6 +393,7 @@
           <p class="mt-0.5 text-[7px] font-bold uppercase tracking-wider card-accent">Scan to verify</p>
         </div>
       </section>
+      {% endif %}
     </div>
   </main>
 </div>
