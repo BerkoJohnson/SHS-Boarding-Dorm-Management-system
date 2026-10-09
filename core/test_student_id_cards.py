@@ -1,8 +1,10 @@
 import base64
+import tempfile
 import uuid
+from pathlib import Path
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -16,6 +18,7 @@ from core.models import (
     SchoolConfiguration,
     StaffRole,
     Student,
+    StudentIDExport,
     UserProfile,
 )
 
@@ -121,6 +124,40 @@ class StudentIdCardTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+    def test_completed_student_id_export_can_be_downloaded(self):
+        self.client.force_login(self.admin)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with override_settings(BASE_DIR=Path(temporary_directory)):
+                export = StudentIDExport.objects.create(
+                    requested_by=self.admin,
+                    layout="crest",
+                    image_format=StudentIDExport.ImageFormat.PNG,
+                    status=StudentIDExport.Status.COMPLETED,
+                    expires_at=timezone.now() + timezone.timedelta(days=7),
+                )
+                archive_path = (
+                    Path(temporary_directory)
+                    / ".private"
+                    / "student_id_exports"
+                    / export.archive_name
+                )
+                archive_path.parent.mkdir(parents=True)
+                archive_path.write_bytes(b"test archive")
+
+                response = self.client.get(
+                    reverse(
+                        "core:student_id_export_download",
+                        args=[export.pk],
+                    )
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response["Content-Type"], "application/zip")
+                self.assertEqual(
+                    b"".join(response.streaming_content),
+                    b"test archive",
+                )
 
     def test_replacing_qr_invalidates_the_previous_public_link(self):
         old_token = self.student.public_token
