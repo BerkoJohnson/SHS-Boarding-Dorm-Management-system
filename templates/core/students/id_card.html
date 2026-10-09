@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Student ID Card - {{ student.full_name }}{% endblock %}
+
+{% block extra_head %}
+<style>
+  .id-card-preview { --card-accent: #b45309; --card-ink: #172554; }
+  .id-card-preview.layout-crest { --card-accent: #047857; --card-ink: #064e3b; }
+  .id-card-preview.layout-modern { --card-accent: #2563eb; --card-ink: #172554; }
+  .card-sheet {
+    box-sizing: border-box;
+    width: 340px;
+    height: 214px;
+    overflow: hidden;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    background: white;
+    color: #0f172a;
+    box-shadow: 0 8px 24px rgb(15 23 42 / 12%);
+    position: relative;
+  }
+  .layout-crest .card-sheet { border-top: 7px solid var(--card-accent); }
+  .layout-modern .card-front { background: linear-gradient(145deg, #eff6ff 0%, white 55%); }
+  .card-brand { background: var(--card-ink); color: white; }
+  .card-accent { color: var(--card-accent); }
+  .card-school-logo { width: 32px; height: 32px; object-fit: contain; border-radius: 5px; background: white; }
+  .card-student-photo { width: 72px; height: 94px; object-fit: cover; border: 2px solid white; border-radius: 6px; }
+  .card-qr { width: 104px; height: 104px; object-fit: contain; }
+  .layout-modern .card-front:after {
+    content: "";
+    position: absolute;
+    right: -28px;
+    bottom: -46px;
+    width: 150px;
+    height: 100px;
+    background: var(--card-accent);
+    opacity: .08;
+    transform: rotate(-28deg);
+  }
+  @media print {
+    @page { size: 85.6mm 54mm; margin: 0; }
+    html, body { width: 85.6mm; margin: 0 !important; padding: 0 !important; background: white !important; }
+    body * { visibility: hidden !important; }
+    .card-print-area, .card-print-area * { visibility: visible !important; }
+    .card-print-area { position: absolute; left: 0; top: 0; }
+    .card-preview-grid { display: block !important; }
+    .card-sheet {
+      width: 85.6mm !important;
+      height: 54mm !important;
+      border: 0 !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      break-after: page;
+      page-break-after: always;
+      print-color-adjust: exact;
+      -webkit-print-color-adjust: exact;
+    }
+    .card-sheet:last-child { break-after: auto; page-break-after: auto; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-5xl space-y-5">
+  <header class="page-controls flex flex-wrap items-end justify-between gap-3">
+    <div>
+      <a href="{% url 'core:student_record' student.pk %}" class="text-xs font-medium text-brand-700 hover:text-brand-900">← Student Record</a>
+      <h1 class="mt-2 text-base font-bold text-slate-900">Student ID Card</h1>
+      <p class="mt-1 text-xs text-slate-500">Select a school-branded layout, then print both sides at CR80 card size.</p>
+    </div>
+    <form method="get" class="flex items-end gap-2">
+      <label class="text-xs font-semibold text-slate-700">
+        Layout
+        <select name="layout" class="mt-1 block rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+          {% for value, label in layouts %}
+          <option value="{{ value }}" {% if selected_layout == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50" type="submit">Preview</button>
+      <button class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800" type="button" onclick="window.print()">Print ID</button>
+    </form>
+  </header>
+  <form method="post" action="{% url 'core:student_rotate_public_token' student.pk %}" class="page-controls flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+    {% csrf_token %}
+    <p class="text-xs text-amber-900">Replacing this QR invalidates every previously printed card for this student.</p>
+    <button class="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100" type="submit" onclick="return confirm('Replace the QR link? Previously printed cards will stop working.')">Replace QR link</button>
+  </form>
+
+  <main class="card-print-area id-card-preview layout-{{ selected_layout }}">
+    <div class="card-preview-grid flex flex-wrap items-start gap-5">
+      <section class="card-sheet card-front" aria-label="Student ID card front">
+        <div class="card-brand flex h-12 items-center gap-2 px-3">
+          {% if school_configuration.logo %}
+          <img class="card-school-logo" src="{{ school_configuration.logo.url }}" alt="">
+          {% endif %}
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-[10px] font-black uppercase tracking-wide">{{ school_configuration.name }}</p>
+            <p class="mt-0.5 text-[8px] uppercase tracking-[.2em] text-white/75">Student Identity Card</p>
+          </div>
+          <span class="text-[8px] font-bold uppercase tracking-wide text-white/80">{{ student.get_residency_display }}</span>
+        </div>
+        <div class="relative flex gap-3 px-3 py-2">
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-[14px] font-black leading-tight text-slate-900">{{ student.full_name }}</p>
+            <p class="mt-1 text-[8px] font-semibold uppercase tracking-wider card-accent">{{ student.programme.name }}</p>
+            <dl class="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[8px] leading-tight">
+              <div><dt class="font-bold uppercase text-slate-400">Admission No.</dt><dd class="mt-0.5 font-semibold">{{ student.admission_no }}</dd></div>
+              <div><dt class="font-bold uppercase text-slate-400">Index No.</dt><dd class="mt-0.5 font-semibold">{{ student.index_number }}</dd></div>
+              <div><dt class="font-bold uppercase text-slate-400">Class</dt><dd class="mt-0.5 font-semibold">{{ student.class_group.name|default:"—" }}</dd></div>
+              <div><dt class="font-bold uppercase text-slate-400">House</dt><dd class="mt-0.5 truncate font-semibold">{{ student.house.name|default:"—" }}</dd></div>
+            </dl>
+          </div>
+          {% if student.photo %}
+          <img class="card-student-photo relative z-10" src="{{ student.photo.url }}" alt="Student portrait">
+          {% else %}
+          <div class="card-student-photo relative z-10 flex items-center justify-center bg-slate-100 text-2xl font-bold text-slate-500">{{ student.full_name|slice:":1" }}</div>
+          {% endif %}
+        </div>
+        <div class="absolute bottom-0 left-0 h-1 w-full bg-[var(--card-accent)]"></div>
+      </section>
+
+      <section class="card-sheet card-back flex items-center gap-3 p-3" aria-label="Student ID card back">
+        <div class="min-w-0 flex-1">
+          <p class="text-[9px] font-black uppercase tracking-wide text-slate-900">Exeat pass verification</p>
+          <p class="mt-1 text-[8px] leading-snug text-slate-600">Scan this code to check the student's latest exeat request, approval and recorded gate movements.</p>
+          <div class="mt-3 border-t border-slate-200 pt-2">
+            <p class="text-[7px] font-bold uppercase tracking-wider text-slate-400">If found, return to</p>
+            <p class="mt-0.5 text-[9px] font-bold text-slate-800">{{ school_configuration.name }}</p>
+            {% if school_configuration.contact_number %}<p class="mt-0.5 text-[8px] text-slate-600">{{ school_configuration.contact_number }}</p>{% endif %}
+          </div>
+        </div>
+        <div class="shrink-0 text-center">
+          <img class="card-qr" src="{{ qr_code }}" alt="QR code for the public exeat verification page">
+          <p class="mt-0.5 text-[7px] font-bold uppercase tracking-wider card-accent">Scan to verify</p>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+{% endblock %}

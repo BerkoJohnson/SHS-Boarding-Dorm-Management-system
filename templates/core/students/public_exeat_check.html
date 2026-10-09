@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Exeat Verification - {{ school_configuration.name }}</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #0f172a; background: #f1f5f9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px 14px; }
+    main { width: min(100%, 560px); margin: 0 auto; }
+    header, section { border: 1px solid #e2e8f0; border-radius: 14px; background: white; box-shadow: 0 4px 16px rgb(15 23 42 / 6%); }
+    header { display: flex; align-items: center; gap: 12px; padding: 16px; }
+    header img { width: 48px; height: 48px; border-radius: 8px; background: white; object-fit: contain; }
+    header h1 { margin: 0; font-size: 16px; }
+    header p { margin: 4px 0 0; color: #64748b; font-size: 11px; }
+    section { margin-top: 14px; padding: 16px; }
+    .student { display: flex; align-items: center; gap: 13px; }
+    .student img, .initial { width: 64px; height: 82px; flex: none; border-radius: 8px; border: 1px solid #e2e8f0; object-fit: cover; }
+    .initial { display: grid; place-items: center; background: #f1f5f9; color: #64748b; font-size: 24px; font-weight: 800; }
+    .student h2 { margin: 0; font-size: 18px; line-height: 1.2; }
+    .student p { margin: 5px 0 0; color: #64748b; font-size: 12px; }
+    .badge { display: inline-block; margin-top: 12px; border-radius: 999px; padding: 6px 10px; background: #f1f5f9; color: #334155; font-size: 11px; font-weight: 800; }
+    .badge.approved { background: #dcfce7; color: #166534; }
+    .badge.pending { background: #fef3c7; color: #92400e; }
+    .badge.rejected, .badge.cancelled { background: #fee2e2; color: #991b1b; }
+    dl { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; margin: 16px 0 0; }
+    dt { color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    dd { margin: 4px 0 0; font-size: 13px; font-weight: 650; }
+    .empty { color: #475569; font-size: 13px; line-height: 1.55; }
+    footer { padding: 16px 8px; color: #64748b; text-align: center; font-size: 10px; }
+    @media (max-width: 380px) { dl { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    {% if school_configuration.logo %}<img src="{{ school_configuration.logo.url }}" alt="">{% endif %}
+    <div>
+      <h1>{{ school_configuration.name }}</h1>
+      <p>Student ID · Exeat check</p>
+    </div>
+  </header>
+
+  <section>
+    <div class="student">
+      {% if student.photo %}<img src="{{ student.photo.url }}" alt="Student portrait">
+      {% else %}<div class="initial" aria-hidden="true">{{ student.full_name|slice:":1" }}</div>{% endif %}
+      <div>
+        <h2>{{ student.full_name }}</h2>
+        <p>Admission No. {{ student.admission_no }}</p>
+        <p>{{ student.programme.name }}{% if student.class_group %} · {{ student.class_group.name }}{% endif %}</p>
+        <p>{% if student.house %}{{ student.house.name }}{% else %}Day student{% endif %}</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2 style="margin:0;font-size:14px">Latest exeat request</h2>
+    {% if exeat %}
+      <span class="badge {{ exeat.status|lower }}">{{ exeat.get_status_display }}</span>
+      <dl>
+        <div><dt>Exeat type</dt><dd>{{ exeat.get_exeat_type_display }}</dd></div>
+        <div><dt>Approval</dt><dd>{% if exeat.status == "Approved" %}Approved{% elif exeat.status == "Pending" %}Awaiting decision{% else %}{{ exeat.get_status_display }}{% endif %}</dd></div>
+        {% if exeat.status == "Approved" %}
+        <div><dt>Approved departure</dt><dd>{{ exeat.expected_departure|date:"d M Y, H:i" }} UTC</dd></div>
+        <div><dt>Approved return</dt><dd>{{ exeat.expected_return|date:"d M Y, H:i" }} UTC</dd></div>
+        <div><dt>Gate departure</dt><dd>{% if movement and movement.actual_departure %}Recorded · {{ movement.actual_departure|date:"d M Y, H:i" }} UTC{% else %}Not recorded{% endif %}</dd></div>
+        <div><dt>Gate return</dt><dd>{% if movement and movement.actual_return %}Recorded · {{ movement.actual_return|date:"d M Y, H:i" }} UTC{% else %}Not recorded{% endif %}</dd></div>
+        {% endif %}
+      </dl>
+    {% else %}
+      <p class="empty">No exeat request has been recorded for this student.</p>
+    {% endif %}
+  </section>
+  <footer>This public check shows only the latest request and recorded main-gate movements. It does not replace staff approval or gate verification.</footer>
+</main>
+</body>
+</html>

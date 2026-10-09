@@ -1,4 +1,5 @@
 import json
+import uuid
 
 from django.views.decorators.http import require_POST, require_http_methods
 from django.http import HttpResponse, HttpResponseForbidden, HttpResponseBadRequest
@@ -13,6 +14,7 @@ from django.contrib.auth import views as auth_views
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth import logout
 from django.contrib import messages
+from django.views.decorators.cache import never_cache
 from .models import (
     Student,
     Exeat,
@@ -33,6 +35,7 @@ from .models import (
     RollCallSession,
     RollCallEntry,
     RollCallAbsenceFollowUp,
+    SchoolConfiguration,
 )
 from .forms import (
     ExeatCreateForm,
@@ -71,6 +74,14 @@ from .services.roll_call import (
 )
 from .services.sms import enqueue_exeat_event_sms
 from .services.student_import import import_student_roster
+from .services.student_id import make_qr_data_uri
+
+
+STUDENT_ID_LAYOUTS = {
+    "classic": "Classic",
+    "crest": "Crest",
+    "modern": "Modern",
+}
 
 
 class RememberMeLoginView(auth_views.LoginView):
@@ -790,6 +801,76 @@ def student_record_view(request, student_pk):
         ).count(),
     }
     return render(request, "core/students/record.html", context)
+
+
+@login_required
+@role_required(*STUDENT_MANAGEMENT_ROLES)
+def student_id_card_view(request, student_pk):
+    layout = request.GET.get("layout", "classic")
+    if layout not in STUDENT_ID_LAYOUTS:
+        return HttpResponseBadRequest("Choose a supported student ID layout.")
+
+    student = get_object_or_404(
+        Student.objects.select_related(
+            "programme", "house", "dormitory", "class_group"
+        ),
+        pk=student_pk,
+    )
+    public_url = request.build_absolute_uri(
+        reverse("core:public_student_exeat", args=[student.public_token])
+    )
+    return render(
+        request,
+        "core/students/id_card.html",
+        {
+            "student": student,
+            "school_configuration": SchoolConfiguration.get_solo(),
+            "public_url": public_url,
+            "qr_code": make_qr_data_uri(public_url),
+            "layouts": STUDENT_ID_LAYOUTS.items(),
+            "selected_layout": layout,
+        },
+    )
+
+
+@login_required
+@role_required(*STUDENT_MANAGEMENT_ROLES)
+@require_POST
+def student_rotate_public_token_view(request, student_pk):
+    student = get_object_or_404(Student, pk=student_pk)
+    student.public_token = uuid.uuid4()
+    student.save(update_fields=["public_token", "updated_at"])
+    messages.success(
+        request,
+        "The student's QR link was replaced. Previously printed QR codes no longer work.",
+    )
+    return redirect("core:student_id_card", student_pk=student.pk)
+
+
+@never_cache
+def public_student_exeat_view(request, token):
+    student = get_object_or_404(
+        Student.objects.select_related("programme", "house", "class_group"),
+        public_token=token,
+    )
+    exeat = student.exeats.order_by("-created_at", "-pk").first()
+    movement = (
+        ExeatMovement.objects.filter(exeat=exeat).first()
+        if exeat and exeat.status == Exeat.Status.APPROVED
+        else None
+    )
+    response = render(
+        request,
+        "core/students/public_exeat_check.html",
+        {
+            "student": student,
+            "exeat": exeat,
+            "movement": movement,
+            "school_configuration": SchoolConfiguration.get_solo(),
+        },
+    )
+    response["X-Robots-Tag"] = "noindex, nofollow"
+    return response
 
 
 @login_required

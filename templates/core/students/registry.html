@@ -50,6 +50,7 @@
           </p>
         </div>
         <a href="{% url 'core:student_record' student.pk %}" class="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] font-semibold text-sky-700 hover:bg-sky-100">View Record</a>
+        <a href="{% url 'core:student_id_card' student.pk %}" class="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100">ID Card</a>
         <a href="{% url 'core:student_edit' student.pk %}" class="rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">Edit</a>
       </article>
       {% empty %}

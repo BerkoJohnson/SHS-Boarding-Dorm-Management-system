@@ -476,6 +476,12 @@ class Student(BaseModel):
 
     admission_no = models.CharField(max_length=30, unique=True, db_index=True)
     index_number = models.CharField(max_length=20, unique=True, db_index=True)
+    public_token = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        editable=False,
+        help_text="Opaque identifier used only for the public student ID QR check.",
+    )
     full_name = models.CharField(max_length=200)
     gender = models.CharField(max_length=10, choices=Gender.choices)
     date_of_birth = models.DateField(null=True, blank=True)

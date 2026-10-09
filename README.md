@@ -79,3 +79,22 @@ Student record viewing is a separate permission: Administrators and Senior
 Housemasters can view school-wide records, while Housemasters can view records
 for students in their assigned house. Other staff are redirected to the
 dashboard when they try to access those pages.
+
+## Student ID cards and public exeat checks
+
+Administrators and Senior Housemasters can print a student's ID from the
+Student Registry or student record. Choose one of three fixed, school-branded
+layouts; the school's configured name and logo are used when available. Cards
+are laid out at CR80 dimensions with front and back on separate print pages.
+The front includes the student's portrait (or initials), name, admission and
+index numbers, programme, class, house, and residency.
+
+The back contains a permanent QR link for that student. Anyone scanning it can
+open the public check without signing in. The page shows the student's identity
+and only the latest exeat request, including its type, approval state, approved
+departure/return times, and actual gate departure/return records. It never
+shows the request reason, destination, guardian contact details, or older
+requests. When there is no request, the check says so. Public check pages are
+not cached or indexed by search engines; the QR is a bearer link, so treat a
+lost ID as exposed. Administrators and Senior Housemasters can replace the QR
+link from the ID card page; previously printed cards then stop working.
