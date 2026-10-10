@@ -67,11 +67,13 @@
     </div>
   </section>
 
-  {% if report.summary %}
-    <section aria-labelledby="report-summary-heading">
-      <div class="mb-3">
-        <h2 id="report-summary-heading" class="text-sm font-bold text-slate-900">{{ report.title }} summary</h2>
-        <p class="mt-1 text-xs text-slate-500">
+  <section aria-labelledby="report-summary-heading">
+    <div class="mb-3">
+      <h2 id="report-summary-heading" class="text-sm font-bold text-slate-900">
+        {% if report.summary %}{{ report.title }} summary{% else %}Operational metrics{% endif %}
+      </h2>
+      <p class="mt-1 text-xs text-slate-500">
+        {% if report.summary %}
           {% if user_house_scope %}{{ user_house_scope.name }}{% else %}School-wide{% endif %}
           {% if report.point_in_time %} · Current occupancy snapshot
           {% else %}
@@ -79,70 +81,94 @@
             {% if selected_date_to %} · To {{ selected_date_to|date:"M d, Y" }}{% endif %}
             {% if selected_term %} · {{ selected_term }}{% endif %}
           {% endif %}
-        </p>
-      </div>
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        {% for label, value in report.summary %}
-          <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{{ label }}</p>
-            <p class="mt-1 text-xl font-bold text-slate-900">{{ value }}</p>
-          </div>
-        {% endfor %}
-      </div>
-    </section>
-  {% endif %}
-
-  <!-- Metric Cards -->
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-    <!-- Total Boarders -->
-    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-      <div class="flex items-center gap-3 mb-2">
-        <div class="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
-        </div>
-        <h3 class="text-sm font-semibold text-slate-600">Total Boarders</h3>
-      </div>
-      <div class="text-3xl font-bold text-slate-900">{{ metrics.total_boarders }}</div>
+        {% else %}
+          {% if user_house_scope %}{{ user_house_scope.name }}{% else %}School-wide{% endif %}
+        {% endif %}
+      </p>
     </div>
-
-    <!-- Average Attendance -->
-    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-      <div class="flex items-center gap-3 mb-2">
-        <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-        </div>
-        <h3 class="text-sm font-semibold text-slate-600">Avg. Attendance (7d)</h3>
-      </div>
-      <div class="text-3xl font-bold text-slate-900">{{ metrics.avg_attendance }}%</div>
-    </div>
-
-    <!-- Active Exeats -->
-    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-      <div class="flex items-center justify-between mb-2">
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-amber-50 text-amber-600 rounded-lg">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+    <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+      {% for label, value in report.summary %}
+        <div class="flex min-w-0 items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          {% if label == "Boarders" or label == "Placed boarders" %}
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2m16-10a4 4 0 010 8m-9-8a4 4 0 100-8 4 4 0 000 8zm10 0V3m-3 3h6"/></svg>
+            </span>
+          {% elif label == "Configured beds" %}
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21V5a2 2 0 012-2h14a2 2 0 012 2v16M3 8h18M7 12h.01M7 16h.01M12 12h.01M12 16h.01M17 12h.01M17 16h.01"/></svg>
+            </span>
+          {% elif label == "Awaiting dorm placement" or label == "Incomplete sessions" or label == "Students not yet marked" %}
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </span>
+          {% elif label == "Occupied capacity" %}
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3v18h18M18 17V9m-5 8V5m-5 12v-4"/></svg>
+            </span>
+          {% elif label == "Over-capacity dormitories" or label == "Overdue" or label == "Critical" %}
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </span>
+          {% else %}
+            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </span>
+          {% endif %}
+          <div class="min-w-0">
+            <p class="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{{ label }}</p>
+            <p class="mt-0.5 text-lg font-bold leading-5 text-slate-900">{{ value }}</p>
           </div>
-          <h3 class="text-sm font-semibold text-slate-600">Active Exeats</h3>
+        </div>
+      {% endfor %}
+
+      {% if not report.point_in_time %}
+        <div class="flex min-w-0 items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          </span>
+          <div class="min-w-0">
+            <p class="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">Total Boarders</p>
+            <p class="mt-0.5 text-lg font-bold leading-5 text-slate-900">{{ metrics.total_boarders }}</p>
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="flex min-w-0 items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </span>
+        <div class="min-w-0">
+          <p class="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">Avg. Attendance (7d)</p>
+          <p class="mt-0.5 text-lg font-bold leading-5 text-slate-900">{{ metrics.avg_attendance }}%</p>
+        </div>
+      </div>
+
+      <div class="flex min-w-0 items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <div class="flex min-w-0 items-center gap-2.5">
+          <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+          </span>
+          <div class="min-w-0">
+            <p class="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">Active Exeats</p>
+            <p class="mt-0.5 text-lg font-bold leading-5 text-slate-900">{{ metrics.active_exeats }}</p>
+          </div>
         </div>
         {% if metrics.overdue_exeats > 0 %}
-          <span class="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded-full animate-pulse">{{ metrics.overdue_exeats }} Overdue</span>
+          <span class="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">{{ metrics.overdue_exeats }} overdue</span>
         {% endif %}
       </div>
-      <div class="text-3xl font-bold text-slate-900">{{ metrics.active_exeats }}</div>
-    </div>
 
-    <!-- Term Infractions -->
-    <div class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
-      <div class="flex items-center gap-3 mb-2">
-        <div class="p-2 bg-rose-50 text-rose-600 rounded-lg">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+      <div class="flex min-w-0 items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        </span>
+        <div class="min-w-0">
+          <p class="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">Term Infractions</p>
+          <p class="mt-0.5 text-lg font-bold leading-5 text-slate-900">{{ metrics.total_infractions }}</p>
         </div>
-        <h3 class="text-sm font-semibold text-slate-600">Term Infractions</h3>
       </div>
-      <div class="text-3xl font-bold text-slate-900">{{ metrics.total_infractions }}</div>
     </div>
-  </div>
+  </section>
 
   <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
     <div class="flex flex-col gap-2 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -166,20 +192,74 @@
       </ul>
     {% endif %}
     <div class="overflow-x-auto">
-      <table class="min-w-full text-left text-xs">
-        <thead class="bg-white text-[10px] uppercase tracking-wide text-slate-500">
-          <tr>{% for heading in report.headers %}<th class="whitespace-nowrap border-b border-slate-200 px-3 py-2.5 font-semibold">{{ heading }}</th>{% endfor %}</tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          {% for row in report.rows %}
-            <tr class="hover:bg-slate-50">
-              {% for value in row %}<td class="max-w-xs whitespace-nowrap px-3 py-2.5 text-slate-700">{{ value|default:"—" }}</td>{% endfor %}
+      {% if report.title == "Boarding Occupancy & Placement" %}
+        <table class="w-full text-left text-[11px]" style="table-layout: fixed;">
+          <colgroup>
+            <col style="width: 17%">
+            <col style="width: 22%">
+            <col style="width: 13%">
+            <col style="width: 8%">
+            <col style="width: 8%">
+            <col style="width: 8%">
+            <col style="width: 10%">
+            <col style="width: 14%">
+          </colgroup>
+          <thead class="bg-white text-[10px] uppercase tracking-wide text-slate-500">
+            <tr>
+              {% for heading in report.headers %}
+                <th class="border-b border-slate-200 px-2 py-2.5 font-semibold {% if forloop.counter > 3 and forloop.counter < 8 %}text-right{% endif %}">
+                  {% if forloop.counter == 8 %}Status{% else %}{{ heading }}{% endif %}
+                </th>
+              {% endfor %}
             </tr>
-          {% empty %}
-            <tr><td colspan="{{ report.headers|length }}" class="px-4 py-10 text-center text-slate-500">No records match this report and scope.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for row in report.rows %}
+              <tr class="{% if row.1 == 'House total' %}border-t-2 border-slate-200 bg-slate-50{% else %}hover:bg-slate-50{% endif %}">
+                {% for value in row %}
+                  <td class="px-2 py-2 text-slate-700 {% if forloop.counter > 3 and forloop.counter < 8 %}text-right tabular-nums{% endif %} {% if forloop.counter == 8 %}whitespace-normal break-words{% else %}whitespace-nowrap{% endif %}">
+                    {% if forloop.counter == 1 and row.1 != "House total" %}
+                      <span class="sr-only">{{ value }}</span>
+                    {% elif forloop.counter == 2 and row.1 != "House total" %}
+                      <span class="pl-3">{{ value }}</span>
+                    {% elif forloop.counter == 2 %}
+                      <span class="font-semibold text-slate-900">{{ value }}</span>
+                    {% elif forloop.counter == 7 and value != "—" %}
+                      <div class="ml-auto w-14">
+                        <span class="block text-right {% if row.1 == 'House total' %}font-semibold text-slate-900{% endif %}">{{ value }}</span>
+                        <span class="mt-1 block h-1 overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-label="{{ row.0 }} {{ row.1 }} occupancy" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ value|cut:'%' }}">
+                          <span class="block h-full rounded-full bg-indigo-500" style="width: {{ value }}; max-width: 100%;"></span>
+                        </span>
+                      </div>
+                    {% elif row.1 == "House total" %}
+                      <span class="font-semibold text-slate-900">{{ value }}</span>
+                    {% else %}
+                      {{ value }}
+                    {% endif %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% empty %}
+              <tr><td colspan="{{ report.headers|length }}" class="px-4 py-10 text-center text-slate-500">No records match this report and scope.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <table class="min-w-full text-left text-xs">
+          <thead class="bg-white text-[10px] uppercase tracking-wide text-slate-500">
+            <tr>{% for heading in report.headers %}<th class="whitespace-nowrap border-b border-slate-200 px-3 py-2.5 font-semibold">{{ heading }}</th>{% endfor %}</tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for row in report.rows %}
+              <tr class="hover:bg-slate-50">
+                {% for value in row %}<td class="max-w-xs whitespace-nowrap px-3 py-2.5 text-slate-700">{{ value|default:"—" }}</td>{% endfor %}
+              </tr>
+            {% empty %}
+              <tr><td colspan="{{ report.headers|length }}" class="px-4 py-10 text-center text-slate-500">No records match this report and scope.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
     </div>
     {% for section in report.sections %}
       <div class="border-t border-slate-200">

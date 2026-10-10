@@ -2668,10 +2668,12 @@ class HouseScopedAccessTests(TestCase):
         self.assertContains(response, 'action="/reports/"')
         self.assertContains(response, 'method="get"')
         self.assertContains(response, 'name="report"')
+        self.assertNotContains(response, 'Total Boarders')
 
         response = self.client.get('/reports/', {'report': 'attendance'})
         self.assertEqual(response.context['report_filters']['report'].value(), 'attendance')
         self.assertEqual(response.context['report']['title'], 'Roll-call Attendance & Follow-up')
+        self.assertContains(response, 'Total Boarders')
 
     def test_reports_are_denied_to_gate_officer_and_tutor(self):
         self.client.force_login(self.gate_user)
