@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django import forms
 from .models import (
     Student,
     Programme,
@@ -22,6 +23,7 @@ from .models import (
     RollCallEntry,
     RollCallAbsenceFollowUp,
 )
+from .widgets import PrivateStudentPhotoInput
 
 
 @admin.register(UserProfile)
@@ -47,6 +49,13 @@ class HouseAdmin(admin.ModelAdmin):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
+    class StudentForm(forms.ModelForm):
+        class Meta:
+            model = Student
+            fields = "__all__"
+            widgets = {"photo": PrivateStudentPhotoInput}
+
+    form = StudentForm
     list_display = ('admission_no', 'full_name', 'gender', 'residency', 'status', 'house', 'dormitory', 'room', 'class_group')
     list_filter = ('residency', 'status', 'gender', 'house', 'dormitory')
     search_fields = ('admission_no', 'full_name', 'index_number')

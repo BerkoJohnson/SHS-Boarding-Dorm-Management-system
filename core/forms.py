@@ -18,6 +18,7 @@ from .models import (
     AcademicTerm,
     DisciplinaryRecord,
 )
+from .widgets import PrivateStudentPhotoInput
 
 
 class ReportFilterForm(forms.Form):
@@ -419,7 +420,7 @@ class StudentRegistrationForm(forms.ModelForm):
             "dormitory": forms.Select(attrs={"class": "student-form-control"}),
             "room": forms.Select(attrs={"class": "student-form-control"}),
             "status": forms.Select(attrs={"class": "student-form-control"}),
-            "photo": forms.ClearableFileInput(
+            "photo": PrivateStudentPhotoInput(
                 attrs={"accept": "image/jpeg,image/png", "class": "student-form-control"}
             ),
         }

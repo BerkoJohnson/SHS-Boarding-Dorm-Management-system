@@ -237,6 +237,22 @@ class StudentPhotoAuthorizationTests(TransactionTestCase):
         self.assertEqual(unknown_token_response.status_code, 404)
         response.close()
 
+    def test_admin_student_change_form_does_not_request_private_photo_url(self):
+        administrator = User.objects.create_superuser(
+            username="photo-admin",
+            email="photo-admin@example.test",
+            password="test-password",
+        )
+        self.client.force_login(administrator)
+
+        response = self.client.get(
+            reverse("admin:core_student_change", args=[self.student.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Current photo is stored privately.")
+        self.assertNotContains(response, self.student.photo.name)
+
 
 class HouseScopedWriteAuthorizationTests(TestCase):
     def test_housemaster_cannot_approve_an_exeat_for_another_house(self):
