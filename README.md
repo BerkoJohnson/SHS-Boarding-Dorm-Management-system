@@ -133,11 +133,23 @@ unmarked entries in sessions still in progress.
 
 ## Student registration and roster import
 
+Staff accounts have no institutional access until an administrator assigns a
+role. A Housemaster role is provisioned only when the account is linked to a
+Housemaster record. Django Admin additionally requires an active staff account,
+an Administrator or Senior Housemaster role, and the relevant Django model
+permission.
+
 Administrators and Senior Housemasters can register or edit students
 individually, assign configured programme, class, house and dormitory records,
 and upload an optional student portrait. Portraits must be JPEG or PNG, no
 larger than 5 MB or 25 megapixels; the registry displays them as cropped
-portraits. Bulk photo uploads are not supported.
+portraits. Portrait files are stored outside `MEDIA_ROOT` and delivered only
+through an authenticated, role- and house-scoped endpoint. Bulk photo uploads
+are not supported. The privacy migration moves existing portraits from the
+public media directory into `.private/student_photos`; back up media files and
+ensure this private directory is writable and not web-served before migrating.
+In development, only school logos are served from `MEDIA_ROOT`; keep student
+rosters and other sensitive files out of any web-served media directory.
 
 The same roles can import a roster from UTF-8 CSV or modern Excel `.xlsx`
 files, up to 10 MB and 2,000 student rows. Download the CSV template from the
@@ -184,11 +196,12 @@ The front includes the student's portrait (or initials), name, admission and
 index numbers, programme, class, house, and residency.
 
 The back contains a permanent QR link for that student. Anyone scanning it can
-open the public check without signing in. The page shows the student's identity
-and only the latest exeat request, including its type, approval state, approved
-departure/return times, and actual gate departure/return records. It never
-shows the request reason, destination, guardian contact details, or older
-requests. When there is no request, the check says so. Public check pages are
-not cached or indexed by search engines; the QR is a bearer link, so treat a
-lost ID as exposed. Administrators and Senior Housemasters can replace the QR
-link from the ID card page; previously printed cards then stop working.
+open the public check without signing in. The QR is a bearer link: anyone with
+it can see the student's identity and portrait, plus only the latest exeat
+request, including its type, approval state, approved departure/return times,
+and actual gate departure/return records. It never shows the request reason,
+destination, guardian contact details, or older requests. When there is no
+request, the check says so. Public check pages are not cached or indexed by
+search engines; treat a lost ID as exposed. Administrators and Senior
+Housemasters can replace the QR link from the ID card page; previously printed
+cards then stop working.

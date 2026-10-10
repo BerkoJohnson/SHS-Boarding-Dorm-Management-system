@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 # Application definition
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    "core.admin_apps.InstitutionalAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -124,6 +124,7 @@ STATICFILES_DIRS = [
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+PRIVATE_STUDENT_PHOTO_ROOT = BASE_DIR / ".private" / "student_photos"
 
 
 # Email

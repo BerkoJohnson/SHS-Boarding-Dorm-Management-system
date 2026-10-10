@@ -215,9 +215,9 @@
           </thead>
           <tbody class="divide-y divide-slate-100">
             {% for row in report.rows %}
-              <tr class="{% if row.1 == 'House total' %}border-t-2 border-slate-200 bg-slate-50{% else %}hover:bg-slate-50{% endif %}">
+              <tr class="{% if row.1 == 'House total' %}border-t border-slate-200 bg-slate-50{% else %}hover:bg-slate-50{% endif %}">
                 {% for value in row %}
-                  <td class="px-2 py-2 text-slate-700 {% if forloop.counter > 3 and forloop.counter < 8 %}text-right tabular-nums{% endif %} {% if forloop.counter == 8 %}whitespace-normal break-words{% else %}whitespace-nowrap{% endif %}">
+                  <td class="px-2 py-2 text-slate-700 {% if forloop.counter > 3 and forloop.counter < 8 %}text-right{% endif %} {% if forloop.counter == 8 %}break-words{% else %}whitespace-nowrap{% endif %}">
                     {% if forloop.counter == 1 and row.1 != "House total" %}
                       <span class="sr-only">{{ value }}</span>
                     {% elif forloop.counter == 2 and row.1 != "House total" %}

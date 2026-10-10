@@ -103,6 +103,7 @@ ENV/
 .DS_Store
 *.sqlite3
 media/
+.private/
 *.pyc
 *.db
 *.pid

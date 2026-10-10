@@ -53,7 +53,7 @@
       </div>
       {% if student.photo %}
       <div class="mt-3 flex items-center gap-3">
-        <img src="{{ student.photo.url }}" alt="Current photo of {{ student.full_name }}" class="h-20 w-16 rounded-md border border-slate-200 object-cover">
+        <img src="{% url 'core:student_photo' student.pk %}" alt="Current photo of {{ student.full_name }}" class="h-20 w-16 rounded-md border border-slate-200 object-cover">
         <p class="text-xs text-slate-500">Current photo. Upload a replacement or select “Clear” in the photo control to remove it.</p>
       </div>
       {% endif %}

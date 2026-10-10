@@ -51,7 +51,6 @@ EXEAT_ROLES = (
     StaffRole.SENIOR_HOUSEMASTER,
     StaffRole.HOUSEMASTER,
     StaffRole.HOUSE_TUTOR,
-    StaffRole.GATE_OFFICER,
 )
 
 # Exeat Approval: Only senior staff can approve/reject

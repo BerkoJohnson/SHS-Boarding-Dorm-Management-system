@@ -302,7 +302,7 @@
         </header>
         <div class="crest-front-body">
           {% if student.photo %}
-          <img class="card-student-photo" src="{{ student.photo.url }}" alt="Student portrait">
+          <img class="card-student-photo" src="{% url 'core:student_photo' student.pk %}" alt="Student portrait">
           {% else %}
           <div class="card-student-photo flex items-center justify-center bg-slate-100 text-2xl font-bold text-slate-500">{{ student.full_name|slice:":1" }}</div>
           {% endif %}
@@ -369,7 +369,7 @@
             </dl>
           </div>
           {% if student.photo %}
-          <img class="card-student-photo relative z-10" src="{{ student.photo.url }}" alt="Student portrait">
+          <img class="card-student-photo relative z-10" src="{% url 'core:student_photo' student.pk %}" alt="Student portrait">
           {% else %}
           <div class="card-student-photo relative z-10 flex items-center justify-center bg-slate-100 text-2xl font-bold text-slate-500">{{ student.full_name|slice:":1" }}</div>
           {% endif %}

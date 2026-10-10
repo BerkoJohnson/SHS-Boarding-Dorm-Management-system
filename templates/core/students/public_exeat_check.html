@@ -45,7 +45,7 @@
 
   <section>
     <div class="student">
-      {% if student.photo %}<img src="{{ student.photo.url }}" alt="Student portrait">
+      {% if student.photo %}<img src="{% url 'core:public_student_photo' student.public_token %}" alt="Student portrait">
       {% else %}<div class="initial" aria-hidden="true">{{ student.full_name|slice:":1" }}</div>{% endif %}
       <div>
         <h2>{{ student.full_name }}</h2>

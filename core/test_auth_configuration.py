@@ -52,6 +52,11 @@ class RememberMeLoginTests(TestCase):
 
 
 class SchoolConfigurationTests(TestCase):
+    def test_development_media_route_does_not_serve_roster_files(self):
+        response = self.client.get("/media/admissions_roster.xlsx")
+
+        self.assertEqual(response.status_code, 404)
+
     def test_login_page_uses_configured_school_identity_and_contact(self):
         SchoolConfiguration.objects.update_or_create(
             pk=1,

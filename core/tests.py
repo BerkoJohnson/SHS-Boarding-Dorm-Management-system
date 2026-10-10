@@ -133,6 +133,10 @@ class DashboardViewTests(TestCase):
             )
             for index in range(6)
         ]
+        for index, exeat in enumerate(created_exeats):
+            Exeat.objects.filter(pk=exeat.pk).update(
+                created_at=now + timezone.timedelta(seconds=index)
+            )
 
         response = self.client.get('/')
 
@@ -396,9 +400,19 @@ class ExeatCreateViewTests(TestCase):
             approved_by=self.housemaster
         )
 
-        # 1. Log Gate Departure
+        # Housemasters cannot perform gate movement actions.
         dep_resp = self.client.post(f'/exeats/{exeat.pk}/action/departure/')
         self.assertEqual(dep_resp.status_code, 302)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
+
+        profile = get_user_profile(self.user)
+        profile.role = StaffRole.GATE_OFFICER
+        profile.save(update_fields=['role'])
+        dep_resp = self.client.post(
+            f'/operations/gate/{exeat.pk}/departure/',
+            follow=True,
+        )
+        self.assertEqual(dep_resp.status_code, 200)
         exeat.refresh_from_db()
         self.assertIsNotNone(exeat.movement.actual_departure)
         self.assertIsNone(exeat.movement.actual_return)
@@ -414,8 +428,11 @@ class ExeatCreateViewTests(TestCase):
         self.assertNotIn(b'<span>Cancel Pass</span>', list_resp.content)
 
         # 2. Log Gate Return
-        ret_resp = self.client.post(f'/exeats/{exeat.pk}/action/return/')
-        self.assertEqual(ret_resp.status_code, 302)
+        ret_resp = self.client.post(
+            f'/operations/gate/{exeat.pk}/return/',
+            follow=True,
+        )
+        self.assertEqual(ret_resp.status_code, 200)
         exeat.refresh_from_db()
         self.assertIsNotNone(exeat.movement.actual_return)
         self.assertEqual(exeat.movement.state_display, "Returned")
@@ -434,20 +451,26 @@ class ExeatCreateViewTests(TestCase):
             approved_by=self.housemaster,
         )
 
-        response = self.client.get('/exeats/')
-        self.assertNotIn(b'Log Gate Departure', response.content)
-        self.assertIn(b'Departure available', response.content)
+        profile = get_user_profile(self.user)
+        profile.role = StaffRole.GATE_OFFICER
+        profile.save(update_fields=['role'])
 
-        early_response = self.client.post(f'/exeats/{exeat.pk}/action/departure/')
+        early_response = self.client.post(
+            f'/operations/gate/{exeat.pk}/departure/',
+            follow=True,
+        )
 
-        self.assertEqual(early_response.status_code, 302)
+        self.assertEqual(early_response.status_code, 200)
         self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
 
         exeat.expected_departure = now - timezone.timedelta(minutes=1)
         exeat.save(update_fields=['expected_departure'])
-        departure_response = self.client.post(f'/exeats/{exeat.pk}/action/departure/')
+        departure_response = self.client.post(
+            f'/operations/gate/{exeat.pk}/departure/',
+            follow=True,
+        )
 
-        self.assertEqual(departure_response.status_code, 302)
+        self.assertEqual(departure_response.status_code, 200)
         movement = ExeatMovement.objects.get(exeat=exeat)
         self.assertIsNotNone(movement.actual_departure)
 
@@ -823,11 +846,21 @@ class ConductViewTests(TestCase):
         self.assertEqual(first_page.context['records'].paginator.count, 16)
         self.assertEqual(len(first_page.context['records']), 10)
         self.assertContains(first_page, 'Showing <strong>10</strong> of <strong>16</strong> incident logs')
+        first_page_offenses = {
+            record.offense for record in first_page.context['records']
+        }
 
         second_page = self.client.get('/conduct/?severity=Major&page=2')
         self.assertEqual(second_page.status_code, 200)
         self.assertEqual(len(second_page.context['records']), 6)
-        self.assertContains(second_page, 'Pagination incident 00')
+        second_page_offenses = {
+            record.offense for record in second_page.context['records']
+        }
+        self.assertTrue(first_page_offenses.isdisjoint(second_page_offenses))
+        self.assertEqual(
+            first_page_offenses | second_page_offenses,
+            {f'Pagination incident {index:02d}' for index in range(16)},
+        )
         self.assertContains(second_page, 'severity=Major&page=1')
 
     def test_incident_create_view_get(self):
@@ -843,6 +876,13 @@ class ConductViewTests(TestCase):
         """House tutors do not see or choose the reporting Housemaster field."""
         tutor = User.objects.create_user(username='conduct_tutor', password='password123')
         UserProfile.objects.filter(user=tutor).update(role=StaffRole.HOUSE_TUTOR)
+        HouseMaster.objects.create(
+            user=tutor,
+            full_name='Conduct Tutor',
+            staff_id='CONDUCT-TUTOR-1',
+            phone_number='+233200000004',
+            house=self.house,
+        )
         self.client.force_login(tutor)
 
         response = self.client.get(f'/conduct/new/?student_id={self.student.id}')
@@ -1180,7 +1220,7 @@ class UserRolesAndPermissionsTests(TestCase):
         user = User.objects.create_user(username='new_staff', password='password123')
         profile = get_user_profile(user)
         self.assertIsNotNone(profile)
-        self.assertEqual(profile.role, StaffRole.HOUSEMASTER)
+        self.assertEqual(profile.role, StaffRole.UNASSIGNED)
 
         admin_user = User.objects.create_superuser(username='admin_boss', password='password123', email='admin@eden.edu')
         admin_profile = get_user_profile(admin_user)
@@ -1247,8 +1287,8 @@ class UserRolesAndPermissionsTests(TestCase):
 
     def test_gate_officer_permissions(self):
         """
-        Gate Officer can log gate departure and return on approved exeats,
-        but cannot approve pending exeats.
+        Gate Officers cannot approve exeats and use only the gate terminal
+        to log departures.
         """
         now = timezone.now()
         exeat = Exeat.objects.create(
@@ -1267,7 +1307,8 @@ class UserRolesAndPermissionsTests(TestCase):
         resp_approve = self.client.post(f'/exeats/{exeat.pk}/action/approve/', follow=True)
         exeat.refresh_from_db()
         self.assertEqual(exeat.status, Exeat.Status.PENDING)
-        self.assertIn(b'Permission denied', resp_approve.content)
+        self.assertEqual(resp_approve.redirect_chain[0][0], reverse('core:dashboard'))
+        self.assertContains(resp_approve, 'Access denied')
 
         # Housemaster approves first
         exeat.status = Exeat.Status.APPROVED
@@ -1275,9 +1316,12 @@ class UserRolesAndPermissionsTests(TestCase):
         exeat.save()
 
         # Gate officer logs departure -> Allowed
-        resp_dep = self.client.post(f'/exeats/{exeat.pk}/action/departure/', follow=True)
+        resp_dep = self.client.post(
+            f'/operations/gate/{exeat.pk}/departure/',
+            follow=True,
+        )
         self.assertEqual(resp_dep.status_code, 200)
-        self.assertIn(b'Gate departure recorded', resp_dep.content)
+        self.assertIn(b'Gate EXIT logged', resp_dep.content)
         movement = ExeatMovement.objects.get(exeat=exeat)
         self.assertIsNotNone(movement.actual_departure)
 
@@ -1333,6 +1377,7 @@ class GlobalSearchTests(TestCase):
 
         # 4. User & Housemaster
         self.user = User.objects.create_user(username='search_user', password='password123')
+        UserProfile.objects.filter(user=self.user).update(role=StaffRole.ADMIN)
         self.user_housemaster = HouseMaster.objects.create(
             user=self.user,
             full_name='Search User Housemaster',

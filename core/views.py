@@ -1,10 +1,11 @@
 import json
+import mimetypes
 import uuid
 from pathlib import Path
 
 from django.conf import settings
 from django.views.decorators.http import require_POST, require_http_methods
-from django.http import HttpResponse, HttpResponseForbidden, HttpResponseBadRequest, FileResponse
+from django.http import Http404, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest, FileResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
@@ -808,6 +809,38 @@ def student_record_view(request, student_pk):
     return render(request, "core/students/record.html", context)
 
 
+def _student_photo_response(student):
+    response = FileResponse(
+        student.photo.open("rb"),
+        content_type=mimetypes.guess_type(student.photo.name)[0]
+        or "application/octet-stream",
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    response["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
+@never_cache
+@login_required
+@role_required(*STUDENT_RECORD_ROLES)
+def student_photo_view(request, student_pk):
+    student = get_object_or_404(
+        filter_queryset_by_house(request.user, Student.objects.all(), "house_id"),
+        pk=student_pk,
+    )
+    if not student.photo:
+        raise Http404("No student photo is available.")
+    return _student_photo_response(student)
+
+
+@never_cache
+def public_student_photo_view(request, token):
+    student = get_object_or_404(Student, public_token=token)
+    if not student.photo:
+        raise Http404("No student photo is available.")
+    return _student_photo_response(student)
+
+
 @login_required
 @role_required(*STUDENT_MANAGEMENT_ROLES)
 def student_id_card_view(request, student_pk):
@@ -1457,6 +1490,7 @@ def exeat_reconcile_view(request, pk):
 
 @login_required
 @role_required(*EXEAT_ROLES)
+@require_POST
 def exeat_action_view(request, pk, action):
     """
     Processes quick workflow actions from the table 3-dots context menu:
@@ -2669,6 +2703,7 @@ def configuration_hub_view(request):
 
 @login_required
 @role_required(*ADMIN_ROLES)
+@require_POST
 def set_active_term_view(request, term_id):
     """
     HTMX endpoint to toggle the active academic term.

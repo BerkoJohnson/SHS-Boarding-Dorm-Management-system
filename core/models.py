@@ -8,6 +8,7 @@ from django.conf import settings
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from PIL import Image, UnidentifiedImageError
+from .storage import PrivateStudentPhotoStorage
 
 
 MAX_STUDENT_PHOTO_SIZE = 5 * 1024 * 1024
@@ -307,6 +308,7 @@ class DormitoryRoom(BaseModel):
 
 class StaffRole(models.TextChoices):
     """Institutional system user roles for Eden High School."""
+    UNASSIGNED = "UNASSIGNED", "Unassigned"
     ADMIN = "ADMIN", "System Administrator"
     SENIOR_HOUSEMASTER = "SENIOR_HOUSEMASTER", "Senior Housemaster"
     HOUSEMASTER = "HOUSEMASTER", "Housemaster / Housemistress"
@@ -328,7 +330,7 @@ class UserProfile(BaseModel):
     role = models.CharField(
         max_length=30,
         choices=StaffRole.choices,
-        default=StaffRole.HOUSEMASTER,
+        default=StaffRole.UNASSIGNED,
         help_text="Institutional operational role governing permissions."
     )
     phone_number = models.CharField(max_length=17, blank=True)
@@ -474,7 +476,15 @@ class HouseMaster(BaseModel):
         if self.user:
             profile, _ = UserProfile.objects.get_or_create(user=self.user)
             target_role = StaffRole.SENIOR_HOUSEMASTER if self.is_senior_housemaster else StaffRole.HOUSEMASTER
-            if profile.role not in (StaffRole.GATE_OFFICER, StaffRole.HOUSE_TUTOR) and profile.role != target_role:
+            if (
+                profile.role
+                in (
+                    StaffRole.UNASSIGNED,
+                    StaffRole.HOUSEMASTER,
+                    StaffRole.SENIOR_HOUSEMASTER,
+                )
+                and profile.role != target_role
+            ):
                 profile.role = target_role
                 profile.save(update_fields=['role'])
 
@@ -555,6 +565,7 @@ class Student(BaseModel):
     gender = models.CharField(max_length=10, choices=Gender.choices)
     date_of_birth = models.DateField(null=True, blank=True)
     photo = models.ImageField(
+        storage=PrivateStudentPhotoStorage(),
         upload_to="students/photos/%Y/%m/",
         blank=True,
         validators=[
@@ -687,7 +698,8 @@ class Student(BaseModel):
                 ).exists()
             self.full_clean()
             super().save(*args, **kwargs)
-
+        
+        
     @property
     def level(self):
         """Extracts level string (SHS1, SHS2, SHS3) from assigned class group name."""
@@ -1472,7 +1484,7 @@ class RollCallAbsenceFollowUp(BaseModel):
 def ensure_user_profile(sender, instance, created, **kwargs):
     """Automatically provisions a UserProfile whenever a new User is registered."""
     if created:
-        role = StaffRole.ADMIN if instance.is_superuser else StaffRole.HOUSEMASTER
+        role = StaffRole.ADMIN if instance.is_superuser else StaffRole.UNASSIGNED
         UserProfile.objects.get_or_create(user=instance, defaults={'role': role})
 
 
@@ -1483,14 +1495,18 @@ def get_user_profile(user):
     try:
         profile = UserProfile.objects.get(user=user)
     except UserProfile.DoesNotExist:
-        role = StaffRole.ADMIN if user.is_superuser else StaffRole.HOUSEMASTER
+        role = StaffRole.ADMIN if user.is_superuser else StaffRole.UNASSIGNED
         profile, _ = UserProfile.objects.get_or_create(user=user, defaults={'role': role})
 
     # Keep role in sync if linked to a HouseMaster
     hm = getattr(user, 'housemaster', None)
-    if hm:
+    if hm and profile.role in (
+        StaffRole.UNASSIGNED,
+        StaffRole.HOUSEMASTER,
+        StaffRole.SENIOR_HOUSEMASTER,
+    ):
         target_role = StaffRole.SENIOR_HOUSEMASTER if hm.is_senior_housemaster else StaffRole.HOUSEMASTER
-        if profile.role not in (StaffRole.GATE_OFFICER, StaffRole.HOUSE_TUTOR) and profile.role != target_role:
+        if profile.role != target_role:
             profile.role = target_role
             profile.save(update_fields=['role'])
 

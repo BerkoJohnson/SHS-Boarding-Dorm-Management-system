@@ -5,7 +5,7 @@ from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from openpyxl import Workbook
 from PIL import Image
@@ -29,7 +29,8 @@ class StudentRegistryTests(TestCase):
         self.media_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.media_directory.cleanup)
         self.media_settings = override_settings(
-            MEDIA_ROOT=self.media_directory.name
+            MEDIA_ROOT=self.media_directory.name,
+            PRIVATE_STUDENT_PHOTO_ROOT=self.media_directory.name,
         )
         self.media_settings.enable()
         self.addCleanup(self.media_settings.disable)
@@ -442,10 +443,13 @@ class StudentRegistryTests(TestCase):
         self.assertContains(response, "Upload a CSV or Excel .xlsx file.")
 
 
-class TemporaryStudentMediaTests(TestCase):
+class TemporaryStudentMediaTests(TransactionTestCase):
     def test_registry_displays_student_photo_as_a_cropped_portrait(self):
         with tempfile.TemporaryDirectory() as media_dir:
-            with override_settings(MEDIA_ROOT=media_dir):
+            with override_settings(
+                MEDIA_ROOT=media_dir,
+                PRIVATE_STUDENT_PHOTO_ROOT=media_dir,
+            ):
                 user = get_user_model().objects.create_user(
                     username="photo-admin",
                     password="password123",
@@ -483,6 +487,17 @@ class TemporaryStudentMediaTests(TestCase):
                 response = self.client.get(reverse("core:student_registry"))
 
                 self.assertEqual(response.status_code, 200)
-                self.assertContains(response, student.photo.url)
+                self.assertContains(
+                    response,
+                    reverse("core:student_photo", args=[student.pk]),
+                )
                 self.assertContains(response, "object-cover")
                 self.assertTrue(Path(media_dir, student.photo.name).exists())
+                photo_response = self.client.get(
+                    reverse("core:student_photo", args=[student.pk])
+                )
+                self.assertEqual(photo_response.status_code, 200)
+                self.assertEqual(photo_response["X-Content-Type-Options"], "nosniff")
+                photo_response.close()
+                with self.assertRaises(ValueError):
+                    student.photo.url

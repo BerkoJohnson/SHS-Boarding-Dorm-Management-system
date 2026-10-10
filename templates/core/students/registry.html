@@ -32,7 +32,7 @@
       {% for student in students_page %}
       <article class="flex flex-wrap items-center gap-3 px-4 py-3">
         {% if student.photo %}
-          <img src="{{ student.photo.url }}" alt="Photo of {{ student.full_name }}" class="h-12 w-10 shrink-0 rounded-md border border-slate-200 object-cover">
+          <img src="{% url 'core:student_photo' student.pk %}" alt="Photo of {{ student.full_name }}" class="h-12 w-10 shrink-0 rounded-md border border-slate-200 object-cover">
         {% else %}
           <span class="flex h-12 w-10 shrink-0 items-center justify-center rounded-md bg-slate-100 text-sm font-bold text-slate-500">{{ student.full_name|slice:":1" }}</span>
         {% endif %}

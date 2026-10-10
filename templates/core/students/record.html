@@ -21,7 +21,7 @@
   <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
     <div class="flex flex-wrap items-center gap-4 border-b border-slate-100 p-4 sm:p-5">
       {% if student.photo %}
-      <img src="{{ student.photo.url }}" alt="Photo of {{ student.full_name }}" class="h-20 w-16 rounded-lg border border-slate-200 object-cover">
+      <img src="{% url 'core:student_photo' student.pk %}" alt="Photo of {{ student.full_name }}" class="h-20 w-16 rounded-lg border border-slate-200 object-cover">
       {% else %}
       <div aria-hidden="true" class="flex h-20 w-16 items-center justify-center rounded-lg bg-slate-100 text-2xl font-bold text-slate-500">{{ student.full_name|slice:":1" }}</div>
       {% endif %}
