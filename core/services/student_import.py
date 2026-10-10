@@ -8,12 +8,14 @@ from zipfile import BadZipFile
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Count, Q
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from core.models import (
     ClassGroup,
     Dormitory,
+    DormitoryRoom,
     Guardian,
     House,
     Programme,
@@ -52,6 +54,8 @@ COLUMN_ALIASES = {
     "dormitory": "dormitory",
     "dorm": "dormitory",
     "block": "dormitory",
+    "room": "room",
+    "roomname": "room",
     "status": "status",
     "enrollmentstatus": "status",
     "guardianname": "guardian_name",
@@ -259,6 +263,14 @@ def import_student_roster(uploaded_file):
     class_index = _reference_index(ClassGroup.objects.all(), "name")
     house_index = _reference_index(House.objects.all(), "name")
     dormitories = list(Dormitory.objects.select_related("house").all())
+    rooms = list(
+        DormitoryRoom.objects.select_related("dormitory").annotate(
+            occupied=Count(
+                "students",
+                filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+            )
+        )
+    )
     dormitory_index = {}
     for dormitory in dormitories:
         dormitory_index.setdefault(
@@ -269,6 +281,15 @@ def import_student_roster(uploaded_file):
         boarding_dormitories.setdefault(
             (dormitory.house_id, dormitory.gender), []
         ).append(dormitory)
+    rooms_by_dormitory = {}
+    room_index = {}
+    room_occupancy = {}
+    for room in rooms:
+        rooms_by_dormitory.setdefault(room.dormitory_id, []).append(room)
+        room_index.setdefault(
+            (room.dormitory_id, room.name.casefold()), []
+        ).append(room)
+        room_occupancy[room.pk] = room.occupied
 
     existing_admission_numbers = {
         value.casefold()
@@ -287,6 +308,7 @@ def import_student_roster(uploaded_file):
     staged = []
     for sheet_name, row_number, row in parsed_rows:
         location = f"{sheet_name}, row {row_number}"
+        row_error_count = len(errors)
         admission_no = row.get("admission_no", "").strip()
         index_number = row.get("index_number", "").strip()
         for value, seen, existing, label in (
@@ -383,6 +405,39 @@ def import_student_roster(uploaded_file):
                     "blocks for this student's gender."
                 )
 
+        room_value = row.get("room", "").strip()
+        room = None
+        if room_value:
+            possible_rooms = room_index.get(
+                (dormitory.pk, room_value.casefold()), []
+            ) if dormitory else []
+            if len(possible_rooms) == 1:
+                room = possible_rooms[0]
+            elif not dormitory:
+                errors.append(
+                    f"{location}: select a dormitory before specifying a room."
+                )
+            elif not possible_rooms:
+                errors.append(
+                    f"{location}: unknown room '{room_value}' in {dormitory.name}."
+                )
+            else:
+                errors.append(
+                    f"{location}: room '{room_value}' is ambiguous in {dormitory.name}."
+                )
+        elif dormitory:
+            possible_rooms = rooms_by_dormitory.get(dormitory.pk, [])
+            if len(possible_rooms) == 1:
+                room = possible_rooms[0]
+
+        if room and residency == Student.ResidencyStatus.BOARDING:
+            occupied = room_occupancy.get(room.pk, 0)
+            if occupied >= room.capacity:
+                errors.append(
+                    f"{location}: room '{room.name}' is at its capacity of "
+                    f"{room.capacity}."
+                )
+
         dob = _parse_date(row.get("date_of_birth"), location, errors)
         guardian_name = row.get("guardian_name", "").strip()
         guardian_phone = row.get("guardian_phone", "").strip()
@@ -443,6 +498,7 @@ def import_student_roster(uploaded_file):
             programme=programme,
             house=house,
             dormitory=dormitory,
+            room=room,
             class_group=class_group,
             guardian=guardian,
             residency=residency,
@@ -456,6 +512,12 @@ def import_student_roster(uploaded_file):
                 for field, messages in error.message_dict.items()
                 for message in messages
             )
+        if (
+            room
+            and residency == Student.ResidencyStatus.BOARDING
+            and len(errors) == row_error_count
+        ):
+            room_occupancy[room.pk] += 1
         staged.append(
             StagedStudent(
                 student=student,

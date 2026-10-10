@@ -13,6 +13,7 @@ from core.models import (
     AcademicTerm,
     House,
     Dormitory,
+    DormitoryRoom,
 )
 
 _DORMITORY_GENDER_LABELS = {"M": "Boys Dormitory", "F": "Girls Dormitory"}
@@ -154,13 +155,22 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                     students__residency=Student.ResidencyStatus.BOARDING,
                     students__dormitory__isnull=True,
                 ),
-            )
+            ),
+            room_unassigned_count=Count(
+                "students",
+                distinct=True,
+                filter=Q(
+                    students__residency=Student.ResidencyStatus.BOARDING,
+                    students__room__isnull=True,
+                ),
+            ),
         ).values(
             "id",
             "name",
             "unassigned_count",
             "boarder_count",
             "assigned_boarder_count",
+            "room_unassigned_count",
         )
         dormitories = Dormitory.objects.all().annotate(
             occupied=Count(
@@ -168,6 +178,7 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                 filter=Q(boarders__residency=Student.ResidencyStatus.BOARDING),
             )
         ).values(
+            "id",
             "house_id", "house__name", "name", "gender", "capacity", "occupied"
         ).order_by("house__display_order", "house__name", "gender", "name")
         if house_id is not None:
@@ -176,21 +187,47 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
         for dormitory in dormitories:
             dormitories_by_house.setdefault(dormitory["house_id"], []).append(dormitory)
 
+        rooms = DormitoryRoom.objects.select_related(
+            "dormitory", "dormitory__house"
+        ).annotate(
+            occupied=Count(
+                "students",
+                filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+            )
+        ).order_by(
+            "dormitory__house__display_order",
+            "dormitory__house__name",
+            "dormitory__name",
+            "name",
+        )
+        if house_id is not None:
+            rooms = rooms.filter(dormitory__house_id=house_id)
+        rooms_by_dormitory = {}
+        total_room_capacity = 0
+        total_room_occupied = 0
+        for room in rooms:
+            rooms_by_dormitory.setdefault(room.dormitory_id, []).append(room)
+            total_room_capacity += room.capacity
+            total_room_occupied += room.occupied
+
         rows = []
         total_boarders = 0
         total_assigned = 0
         total_unassigned = 0
         total_capacity = 0
         over_capacity_dormitories = 0
+        total_room_unassigned = 0
         for house in houses:
             boarder_count = house["boarder_count"]
             assigned_count = house["assigned_boarder_count"]
             unassigned_count = house["unassigned_count"]
+            room_unassigned_count = house["room_unassigned_count"]
             house_dormitories = dormitories_by_house.get(house["id"], [])
             house_capacity = sum(dormitory["capacity"] for dormitory in house_dormitories)
             total_boarders += boarder_count
             total_assigned += assigned_count
             total_unassigned += unassigned_count
+            total_room_unassigned += room_unassigned_count
             total_capacity += house_capacity
             house_occupancy = (
                 round(assigned_count * 100 / house_capacity, 1)
@@ -229,6 +266,26 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                     f"{occupancy}%",
                     f"Over capacity by {excess}" if excess else f"{max(0, capacity - occupied)} spaces available",
                 ))
+                for room in rooms_by_dormitory.get(dormitory["id"], []):
+                    room_occupancy = (
+                        round(room.occupied * 100 / room.capacity, 1)
+                        if room.capacity
+                        else 0
+                    )
+                    rows.append((
+                        room.dormitory.house.name,
+                        room.dormitory.name,
+                        room.name,
+                        room.capacity,
+                        room.occupied,
+                        max(0, room.capacity - room.occupied),
+                        f"{room_occupancy}%",
+                        (
+                            "At capacity"
+                            if room.occupied == room.capacity
+                            else f"{room.capacity - room.occupied} spaces available"
+                        ),
+                    ))
             if unassigned_count:
                 rows.append((
                     house["name"],
@@ -243,7 +300,16 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
         occupancy = round(total_assigned * 100 / total_capacity, 1) if total_capacity else 0
         return {
             "title": "Boarding Occupancy & Placement",
-            "headers": ("House", "Dormitory", "Block", "Capacity", "Placed", "Vacant", "Occupancy", "Capacity / Placement"),
+            "headers": (
+                "House",
+                "Dormitory",
+                "Block / Room",
+                "Capacity",
+                "Placed",
+                "Vacant",
+                "Occupancy",
+                "Capacity / Placement",
+            ),
             "rows": rows,
             "summary": (
                 ("Boarders", total_boarders),
@@ -252,10 +318,15 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                 ("Awaiting dorm placement", total_unassigned),
                 ("Occupied capacity", f"{occupancy}%"),
                 ("Over-capacity dormitories", over_capacity_dormitories),
+                ("Configured rooms", len(rooms)),
+                ("Total room capacity", total_room_capacity),
+                ("Boarders assigned to rooms", total_room_occupied),
+                ("Awaiting room placement", total_room_unassigned),
             ),
             "highlights": (
                 "Capacity is based on configured dormitory capacity and cannot include beds not recorded in the system.",
                 "Unassigned boarders need a dormitory placement review.",
+                "Room occupancy is enforced against each room's configured capacity.",
             ),
             "point_in_time": True,
         }

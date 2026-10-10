@@ -47,6 +47,7 @@
             {% if student.class_group %} · {{ student.class_group.name }}{% endif %}
             {% if student.house %} · {{ student.house.name }}{% endif %}
             {% if student.dormitory %} / {{ student.dormitory.name }}{% endif %}
+            {% if student.room %} / {{ student.room.name }}{% endif %}
           </p>
         </div>
         <a href="{% url 'core:student_record' student.pk %}" class="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] font-semibold text-sky-700 hover:bg-sky-100">View Record</a>

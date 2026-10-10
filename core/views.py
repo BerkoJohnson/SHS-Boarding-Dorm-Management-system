@@ -633,7 +633,7 @@ def student_registry_view(request):
     query = request.GET.get("q", "").strip()
     residency = request.GET.get("residency", "").strip()
     students = Student.objects.select_related(
-        "programme", "house", "dormitory", "class_group", "guardian"
+        "programme", "house", "dormitory", "room", "class_group", "guardian"
     )
     if query:
         students = students.filter(
@@ -668,7 +668,7 @@ def student_registry_view(request):
 def student_registration_view(request, student_pk=None):
     student = (
         get_object_or_404(
-            Student.objects.select_related("guardian"), pk=student_pk
+            Student.objects.select_related("guardian", "room"), pk=student_pk
         )
         if student_pk
         else None
@@ -743,7 +743,7 @@ def student_roster_import_view(request):
 def student_import_template_view(request):
     response = HttpResponse(
         "Admission No.,Index Number,Full Name,Gender,Date of Birth,Programme,"
-        "Class,Residency,House,Dormitory,Status,Guardian Name,Guardian Contact,"
+        "Class,Residency,House,Dormitory,Room,Status,Guardian Name,Guardian Contact,"
         "Guardian Alt Contact\r\n",
         content_type="text/csv; charset=utf-8",
     )
@@ -760,6 +760,7 @@ def student_record_view(request, student_pk):
         "programme",
         "house",
         "dormitory",
+        "room",
         "class_group",
         "guardian",
     )

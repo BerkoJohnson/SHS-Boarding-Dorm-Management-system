@@ -1,5 +1,6 @@
 from django import forms
 from django.db import models
+from django.db.models import Count, F, Q
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -10,6 +11,7 @@ from .models import (
     Programme,
     House,
     Dormitory,
+    DormitoryRoom,
     ClassGroup,
     Guardian,
     HouseMaster,
@@ -398,6 +400,7 @@ class StudentRegistrationForm(forms.ModelForm):
             "residency",
             "house",
             "dormitory",
+            "room",
             "status",
             "photo",
         )
@@ -414,6 +417,7 @@ class StudentRegistrationForm(forms.ModelForm):
             "residency": forms.Select(attrs={"class": "student-form-control"}),
             "house": forms.Select(attrs={"class": "student-form-control"}),
             "dormitory": forms.Select(attrs={"class": "student-form-control"}),
+            "room": forms.Select(attrs={"class": "student-form-control"}),
             "status": forms.Select(attrs={"class": "student-form-control"}),
             "photo": forms.ClearableFileInput(
                 attrs={"accept": "image/jpeg,image/png", "class": "student-form-control"}
@@ -428,9 +432,38 @@ class StudentRegistrationForm(forms.ModelForm):
         self.fields["dormitory"].queryset = Dormitory.objects.select_related(
             "house"
         ).order_by("house__display_order", "house__name", "name")
+        room_queryset = DormitoryRoom.objects.select_related(
+            "dormitory", "dormitory__house"
+        ).annotate(
+            occupied=Count(
+                "students",
+                filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+            )
+        )
+        available_rooms = Q(occupied__lt=F("capacity"))
+        if self.instance and self.instance.pk and self.instance.room_id:
+            available_rooms |= Q(pk=self.instance.room_id)
+        selected_dormitory = (
+            self.data.get("dormitory")
+            or self.initial.get("dormitory")
+            or getattr(self.instance, "dormitory_id", None)
+        )
+        if selected_dormitory:
+            room_queryset = room_queryset.filter(
+                dormitory_id=selected_dormitory
+            )
+        self.fields["room"].queryset = room_queryset.filter(
+            available_rooms
+        ).order_by(
+            "dormitory__house__display_order",
+            "dormitory__house__name",
+            "dormitory__name",
+            "name",
+        )
         self.fields["class_group"].required = False
         self.fields["house"].required = False
         self.fields["dormitory"].required = False
+        self.fields["room"].required = False
 
         if self.instance and self.instance.pk and self.instance.guardian_id:
             guardian = self.instance.guardian
@@ -444,6 +477,19 @@ class StudentRegistrationForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        residency = cleaned_data.get("residency")
+        dormitory = cleaned_data.get("dormitory")
+        room = cleaned_data.get("room")
+        if (
+            residency == Student.ResidencyStatus.BOARDING
+            and dormitory
+            and DormitoryRoom.objects.filter(dormitory=dormitory).exists()
+            and not room
+        ):
+            self.add_error(
+                "room",
+                "Assign this boarding student to a room in the selected dormitory.",
+            )
         for field_name in ("admission_no", "index_number"):
             value = (cleaned_data.get(field_name) or "").strip()
             matches = Student.objects.filter(

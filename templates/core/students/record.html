@@ -33,6 +33,7 @@
           {% if student.class_group %} · {{ student.class_group.name }}{% endif %}
           {% if student.house %} · {{ student.house.name }}{% endif %}
           {% if student.dormitory %} / {{ student.dormitory.name }}{% endif %}
+          {% if student.room %} / {{ student.room.name }}{% endif %}
         </p>
       </div>
       <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700">{{ student.get_status_display }}</span>
@@ -83,6 +84,7 @@
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Class</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.class_group.name|default:"Not assigned" }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">House</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.house.name|default:"Not assigned" }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Dormitory</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.dormitory.name|default:"Not assigned" }}</dd></div>
+          <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Room</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.room.name|default:"Not assigned" }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Record created</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.created_at|date:"d M Y H:i" }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Last updated</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.updated_at|date:"d M Y H:i" }}</dd></div>
         </dl>

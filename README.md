@@ -155,6 +155,20 @@ system), invalid references, or invalid placements reject the entire upload.
 It never updates an existing student. A roster import does not include photos;
 add photos through an individual student form.
 
+Dormitory blocks can be divided into named rooms with a positive room capacity.
+Manage room inventory in Django Admin before assigning students. Once rooms are
+configured for a block, individual boarding registration requires a room and
+offers rooms with available capacity. A room cannot exceed its configured
+capacity, and its capacity cannot be reduced below current occupancy. Existing
+boarders without rooms remain valid during rollout and appear in the housing
+report as awaiting room placement.
+
+The roster template includes an optional `Room` column. When a room is given,
+it must exist in the selected dormitory and have available capacity. If the
+column is omitted, the importer assigns a room only when that dormitory has
+exactly one configured room; ambiguous placements remain unassigned for later
+review.
+
 Student record viewing is a separate permission: Administrators and Senior
 Housemasters can view school-wide records, while Housemasters can view records
 for students in their assigned house. Other staff are redirected to the

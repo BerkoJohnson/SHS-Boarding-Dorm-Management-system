@@ -1,6 +1,6 @@
 import uuid
 from datetime import date
-from django.db import models
+from django.db import models, transaction
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import FileExtensionValidator, RegexValidator
 from django.utils import timezone
@@ -234,6 +234,75 @@ class Dormitory(BaseModel):
 
     def __str__(self):
         return f"{self.house.name} - {self.name} ({self.get_gender_display()})"
+
+
+class DormitoryRoom(BaseModel):
+    """A room inside a dormitory block with a hard boarder capacity."""
+
+    dormitory = models.ForeignKey(
+        Dormitory, on_delete=models.CASCADE, related_name="rooms"
+    )
+    name = models.CharField(max_length=100)
+    capacity = models.PositiveSmallIntegerField(
+        help_text="Maximum number of boarding students assigned to this room."
+    )
+
+    class Meta:
+        ordering = ["dormitory__house", "dormitory", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dormitory", "name"],
+                name="unique_room_name_per_dormitory",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(capacity__gt=0),
+                name="dormitory_room_capacity_positive",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).values(
+                "dormitory_id"
+            ).first()
+            occupied = Student.objects.filter(
+                room_id=self.pk,
+                residency=Student.ResidencyStatus.BOARDING,
+            ).count()
+            if (
+                occupied
+                and previous
+                and previous["dormitory_id"] != self.dormitory_id
+            ):
+                raise ValidationError(
+                    {
+                        "dormitory": (
+                            "A room with assigned boarding students cannot be "
+                            "moved to another dormitory."
+                        )
+                    }
+                )
+            if occupied > self.capacity:
+                raise ValidationError(
+                    {
+                        "capacity": (
+                            f"Capacity cannot be lower than the {occupied} "
+                            "boarding student(s) currently assigned to this room."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            if self.pk:
+                # Serialize room-capacity changes with student placements.
+                type(self).objects.select_for_update().filter(pk=self.pk).exists()
+            self.full_clean()
+            super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.dormitory} - {self.name}"
 
 
 class StaffRole(models.TextChoices):
@@ -510,6 +579,13 @@ class Student(BaseModel):
         blank=True,
         related_name="boarders",
     )
+    room = models.ForeignKey(
+        DormitoryRoom,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="students",
+    )
     class_group = models.ForeignKey(
         ClassGroup,
         on_delete=models.SET_NULL,
@@ -543,6 +619,10 @@ class Student(BaseModel):
             raise ValidationError(
                 {"dormitory": "Day students cannot be assigned to a dormitory block."}
             )
+        if self.residency == self.ResidencyStatus.DAY and self.room is not None:
+            raise ValidationError(
+                {"room": "Day students cannot be assigned to a dormitory room."}
+            )
         if self.residency == self.ResidencyStatus.BOARDING and self.house is None:
             raise ValidationError(
                 {"house": "Boarding students must be assigned to a House."}
@@ -560,6 +640,21 @@ class Student(BaseModel):
                     f"'{self.dormitory.house.name}', but student is assigned to '{self.house.name}'."
                 }
             )
+        if self.room and self.room.dormitory_id != self.dormitory_id:
+            raise ValidationError(
+                {"room": "The selected room must belong to the assigned dormitory."}
+            )
+        if self.room:
+            room_occupancy = Student.objects.filter(
+                room_id=self.room_id,
+                residency=self.ResidencyStatus.BOARDING,
+            )
+            if self.pk:
+                room_occupancy = room_occupancy.exclude(pk=self.pk)
+            if room_occupancy.count() >= self.room.capacity:
+                raise ValidationError(
+                    {"room": f"{self.room} is at its capacity of {self.room.capacity}."}
+                )
         if (
             self.class_group
             and self.class_group.programme_id
@@ -584,10 +679,15 @@ class Student(BaseModel):
                 )
 
     def save(self, *args, **kwargs):
-        self.full_clean()
-        super().save(*args, **kwargs)
-        
-        
+        with transaction.atomic():
+            if self.room_id:
+                # Lock the target room so concurrent saves cannot overfill it.
+                DormitoryRoom.objects.select_for_update().filter(
+                    pk=self.room_id
+                ).exists()
+            self.full_clean()
+            super().save(*args, **kwargs)
+
     @property
     def level(self):
         """Extracts level string (SHS1, SHS2, SHS3) from assigned class group name."""

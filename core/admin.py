@@ -4,6 +4,7 @@ from .models import (
     Programme,
     House,
     Dormitory,
+    DormitoryRoom,
     ClassGroup,
     Guardian,
     AcademicYear,
@@ -46,8 +47,8 @@ class HouseAdmin(admin.ModelAdmin):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ('admission_no', 'full_name', 'gender', 'residency', 'status', 'house', 'dormitory', 'class_group')
-    list_filter = ('residency', 'status', 'gender', 'house')
+    list_display = ('admission_no', 'full_name', 'gender', 'residency', 'status', 'house', 'dormitory', 'room', 'class_group')
+    list_filter = ('residency', 'status', 'gender', 'house', 'dormitory')
     search_fields = ('admission_no', 'full_name', 'index_number')
 
 
@@ -198,6 +199,7 @@ admin.site.register(
     [
         Programme,
         Dormitory,
+        DormitoryRoom,
         ClassGroup,
         Guardian,
         AcademicYear,
