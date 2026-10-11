@@ -696,7 +696,6 @@ def student_registry_view(request):
     students_page, pagination_query = paginate_queryset(
         students.order_by("full_name", "admission_no"),
         request,
-        per_page=50,
     )
     context = {
         "students_page": students_page,

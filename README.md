@@ -155,7 +155,7 @@ The Student Registry search updates as you type (after a two-character
 minimum), matching names, admission/index numbers, programme, class, house,
 dormitory and room. Combine it with residency, gender, enrollment status,
 house, dormitory, room, programme or class filters. The registry table shows
-50 results per page and preserves the active search and filters when paging.
+10 results per page and preserves the active search and filters when paging.
 Django Admin student search covers the same student and placement details and
 provides corresponding list filters with 50 records per page.
 

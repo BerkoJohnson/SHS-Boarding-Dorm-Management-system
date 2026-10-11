@@ -276,9 +276,22 @@ class StudentRegistryTests(TestCase):
         )
 
         self.assertContains(response, "of 51")
-        self.assertContains(response, "Page 1 of 2")
+        self.assertContains(response, "Page 1 of 6")
         self.assertContains(response, "q=Paged+Student")
         self.assertContains(response, "residency=Boarding")
+        self.assertEqual(response.context["students_page"].paginator.per_page, 10)
+
+        next_page = self.client.get(
+            reverse("core:student_registry"),
+            {
+                "q": "Paged Student",
+                "residency": Student.ResidencyStatus.BOARDING,
+                "page": 2,
+            },
+        )
+        self.assertContains(next_page, "Paged Student 010")
+        self.assertNotContains(next_page, "Paged Student 009")
+        self.assertContains(next_page, "Page 2 of 6")
 
     def test_admin_student_search_filters_and_pagination(self):
         room = DormitoryRoom.objects.create(
