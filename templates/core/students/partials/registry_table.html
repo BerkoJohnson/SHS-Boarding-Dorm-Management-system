@@ -12,7 +12,6 @@
         <th class="px-4 py-3">Identifiers</th>
         <th class="px-4 py-3">Residency</th>
         <th class="px-4 py-3">Programme / Class</th>
-        <th class="px-4 py-3">Boarding placement</th>
         <th class="px-4 py-3 text-right">Actions</th>
       </tr>
     </thead>
@@ -40,10 +39,6 @@
         <td class="px-4 py-3 text-slate-600">
           {{ student.programme.name }}
           <div class="mt-1 text-[10px] text-slate-400">{{ student.class_group.name|default:"No class assigned" }}</div>
-        </td>
-        <td class="px-4 py-3 text-slate-600">
-          {% if student.house %}{{ student.house.name }}{% else %}No house{% endif %}
-          {% if student.dormitory %}<div class="mt-1 text-[10px] text-slate-500">{{ student.dormitory.name }}{% if student.room %} / {{ student.room.name }}{% endif %}</div>{% endif %}
         </td>
         <td class="px-4 py-3">
           <div class="flex justify-end gap-1.5">
