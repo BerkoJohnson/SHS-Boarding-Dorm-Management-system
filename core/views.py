@@ -27,6 +27,9 @@ from .models import (
     SMSDelivery,
     House,
     Dormitory,
+    DormitoryRoom,
+    Programme,
+    ClassGroup,
     DisciplinaryRecord,
     AcademicTerm,
     HouseMaster,
@@ -632,36 +635,86 @@ def house_list_view(request):
 @role_required(*STUDENT_MANAGEMENT_ROLES)
 def student_registry_view(request):
     query = request.GET.get("q", "").strip()
-    residency = request.GET.get("residency", "").strip()
+    filter_values = {
+        name: request.GET.get(name, "").strip()
+        for name in (
+            "residency",
+            "gender",
+            "status",
+            "house",
+            "dormitory",
+            "room",
+            "programme",
+            "class_group",
+        )
+    }
     students = Student.objects.select_related(
         "programme", "house", "dormitory", "room", "class_group", "guardian"
     )
     if query:
-        students = students.filter(
-            Q(admission_no__icontains=query)
-            | Q(index_number__icontains=query)
-            | Q(full_name__icontains=query)
-            | Q(programme__name__icontains=query)
-            | Q(house__name__icontains=query)
-        )
-    if residency in Student.ResidencyStatus.values:
-        students = students.filter(residency=residency)
+        if len(query) < 2:
+            students = students.none()
+        else:
+            students = students.filter(
+                Q(full_name__icontains=query)
+                | Q(admission_no__icontains=query)
+                | Q(index_number__icontains=query)
+                | Q(programme__name__icontains=query)
+                | Q(house__name__icontains=query)
+                | Q(dormitory__name__icontains=query)
+                | Q(room__name__icontains=query)
+                | Q(class_group__name__icontains=query)
+            )
+    if filter_values["residency"] in Student.ResidencyStatus.values:
+        students = students.filter(residency=filter_values["residency"])
+    if filter_values["gender"] in Student.Gender.values:
+        students = students.filter(gender=filter_values["gender"])
+    if filter_values["status"] in Student.EnrollmentStatus.values:
+        students = students.filter(status=filter_values["status"])
+
+    relation_filters = {
+        "house": ("house_id", House.objects.all()),
+        "dormitory": ("dormitory_id", Dormitory.objects.all()),
+        "room": ("room_id", DormitoryRoom.objects.all()),
+        "programme": ("programme_id", Programme.objects.all()),
+        "class_group": ("class_group_id", ClassGroup.objects.all()),
+    }
+    filter_options = {}
+    for name, (field_name, options) in relation_filters.items():
+        selected_value = filter_values[name]
+        try:
+            selected_id = uuid.UUID(selected_value)
+        except ValueError:
+            filter_values[name] = ""
+        else:
+            if options.filter(pk=selected_id).exists():
+                students = students.filter(**{field_name: selected_id})
+            else:
+                filter_values[name] = ""
+        filter_options[name] = options
 
     students_page, pagination_query = paginate_queryset(
         students.order_by("full_name", "admission_no"),
         request,
         per_page=50,
     )
-    return render(
-        request,
-        "core/students/registry.html",
-        {
-            "students_page": students_page,
-            "pagination_query": pagination_query,
-            "query": query,
-            "selected_residency": residency,
-        },
+    context = {
+        "students_page": students_page,
+        "pagination_query": pagination_query,
+        "query": query,
+        "filter_values": filter_values,
+        "filter_options": filter_options,
+        "gender_choices": Student.Gender.choices,
+        "residency_choices": Student.ResidencyStatus.choices,
+        "status_choices": Student.EnrollmentStatus.choices,
+        "search_too_short": 0 < len(query) < 2,
+    }
+    template = (
+        "core/students/partials/registry_table.html"
+        if request.headers.get("HX-Request") == "true"
+        else "core/students/registry.html"
     )
+    return render(request, template, context)
 
 
 @login_required

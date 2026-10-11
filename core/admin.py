@@ -57,8 +57,27 @@ class StudentAdmin(admin.ModelAdmin):
 
     form = StudentForm
     list_display = ('admission_no', 'full_name', 'gender', 'residency', 'status', 'house', 'dormitory', 'room', 'class_group')
-    list_filter = ('residency', 'status', 'gender', 'house', 'dormitory')
-    search_fields = ('admission_no', 'full_name', 'index_number')
+    list_filter = (
+        'residency',
+        'status',
+        'gender',
+        'house',
+        'dormitory',
+        'room',
+        'programme',
+        'class_group',
+    )
+    search_fields = (
+        'admission_no',
+        'full_name',
+        'index_number',
+        'programme__name',
+        'class_group__name',
+        'house__name',
+        'dormitory__name',
+        'room__name',
+    )
+    list_per_page = 50
 
 
 @admin.register(Exeat)

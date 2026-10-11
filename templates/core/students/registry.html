@@ -16,52 +16,92 @@
   </header>
 
   <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
-    <form method="get" class="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/60 p-3 sm:flex-row">
+    <form method="get"
+          action="{% url 'core:student_registry' %}"
+          hx-get="{% url 'core:student_registry' %}"
+          hx-trigger="input changed delay:200ms, search, change"
+          hx-target="#student-results"
+          hx-indicator="#student-search-spinner"
+          hx-push-url="true"
+          class="grid grid-cols-1 gap-2 border-b border-slate-200 bg-slate-50/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
       <label class="sr-only" for="student-search">Search students</label>
-      <input id="student-search" type="search" name="q" value="{{ query }}" placeholder="Name, admission/index number, programme, or house" class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+      <div class="relative sm:col-span-2">
+        <input id="student-search"
+               type="search"
+               name="q"
+               value="{{ query }}"
+               placeholder="Search student, admission no, house, dormitory..."
+               autocomplete="off"
+               spellcheck="false"
+               class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-9 text-xs text-slate-800 placeholder-slate-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100">
+        <span id="student-search-spinner" class="htmx-indicator absolute right-3 top-2.5 text-xs text-slate-400">Searching…</span>
+      </div>
       <label class="sr-only" for="student-residency">Residency</label>
       <select id="student-residency" name="residency" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
         <option value="">All residency types</option>
-        <option value="Boarding" {% if selected_residency == "Boarding" %}selected{% endif %}>Boarding</option>
-        <option value="Day" {% if selected_residency == "Day" %}selected{% endif %}>Day</option>
+        {% for value, label in residency_choices %}
+        <option value="{{ value }}" {% if filter_values.residency == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
       </select>
-      <button class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100" type="submit">Search</button>
+      <label class="sr-only" for="student-gender">Gender</label>
+      <select id="student-gender" name="gender" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All genders</option>
+        {% for value, label in gender_choices %}
+        <option value="{{ value }}" {% if filter_values.gender == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <label class="sr-only" for="student-status">Enrollment status</label>
+      <select id="student-status" name="status" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All enrollment statuses</option>
+        {% for value, label in status_choices %}
+        <option value="{{ value }}" {% if filter_values.status == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <label class="sr-only" for="student-house">House</label>
+      <select id="student-house" name="house" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All houses</option>
+        {% for option in filter_options.house %}
+        <option value="{{ option.pk }}" {% if filter_values.house == option.pk|stringformat:"s" %}selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
+      </select>
+      <label class="sr-only" for="student-dormitory">Dormitory</label>
+      <select id="student-dormitory" name="dormitory" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All dormitories</option>
+        {% for option in filter_options.dormitory %}
+        <option value="{{ option.pk }}" {% if filter_values.dormitory == option.pk|stringformat:"s" %}selected{% endif %}>{{ option.house.name }} / {{ option.name }}</option>
+        {% endfor %}
+      </select>
+      <label class="sr-only" for="student-room">Room</label>
+      <select id="student-room" name="room" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All rooms</option>
+        {% for option in filter_options.room %}
+        <option value="{{ option.pk }}" {% if filter_values.room == option.pk|stringformat:"s" %}selected{% endif %}>{{ option.dormitory.name }} / {{ option.name }}</option>
+        {% endfor %}
+      </select>
+      <label class="sr-only" for="student-programme">Programme</label>
+      <select id="student-programme" name="programme" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All programmes</option>
+        {% for option in filter_options.programme %}
+        <option value="{{ option.pk }}" {% if filter_values.programme == option.pk|stringformat:"s" %}selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
+      </select>
+      <label class="sr-only" for="student-class-group">Class</label>
+      <select id="student-class-group" name="class_group" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">All classes</option>
+        {% for option in filter_options.class_group %}
+        <option value="{{ option.pk }}" {% if filter_values.class_group == option.pk|stringformat:"s" %}selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="flex items-center gap-2 sm:col-span-2 lg:col-span-4">
+        <button class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100" type="submit">Search</button>
+        <a href="{% url 'core:student_registry' %}" class="rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 hover:bg-white hover:text-slate-800">Clear filters</a>
+        <span class="text-[11px] text-slate-400">Search starts at 2 characters; filters update automatically.</span>
+      </div>
     </form>
 
-    <div class="divide-y divide-slate-100">
-      {% for student in students_page %}
-      <article class="flex flex-wrap items-center gap-3 px-4 py-3">
-        {% if student.photo %}
-          <img src="{% url 'core:student_photo' student.pk %}" alt="Photo of {{ student.full_name }}" class="h-12 w-10 shrink-0 rounded-md border border-slate-200 object-cover">
-        {% else %}
-          <span class="flex h-12 w-10 shrink-0 items-center justify-center rounded-md bg-slate-100 text-sm font-bold text-slate-500">{{ student.full_name|slice:":1" }}</span>
-        {% endif %}
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-x-2">
-            <a href="{% url 'core:student_record' student.pk %}" class="text-xs font-bold text-slate-900 hover:text-brand-700">{{ student.full_name }}</a>
-            <span class="font-mono text-[10px] text-slate-500">{{ student.admission_no }}</span>
-            <span class="font-mono text-[10px] text-slate-400">{{ student.index_number }}</span>
-          </div>
-          <p class="mt-0.5 text-[11px] text-slate-500">
-            {{ student.get_residency_display }} · {{ student.programme.name }}
-            {% if student.class_group %} · {{ student.class_group.name }}{% endif %}
-            {% if student.house %} · {{ student.house.name }}{% endif %}
-            {% if student.dormitory %} / {{ student.dormitory.name }}{% endif %}
-            {% if student.room %} / {{ student.room.name }}{% endif %}
-          </p>
-        </div>
-        <a href="{% url 'core:student_record' student.pk %}" class="rounded-md border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-[11px] font-semibold text-sky-700 hover:bg-sky-100">View Record</a>
-        <a href="{% url 'core:student_id_card' student.pk %}" class="rounded-md border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100">ID Card</a>
-        <a href="{% url 'core:student_edit' student.pk %}" class="rounded-md border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50">Edit</a>
-      </article>
-      {% empty %}
-      <div class="px-4 py-12 text-center">
-        <h2 class="text-sm font-semibold text-slate-800">No students found</h2>
-        <p class="mt-1 text-xs text-slate-500">Register an individual student or import a roster.</p>
-      </div>
-      {% endfor %}
+    <div id="student-results" aria-live="polite">
+      {% include "core/students/partials/registry_table.html" %}
     </div>
-    {% include "core/partials/pagination_controls.html" with pagination_page=students_page pagination_query=pagination_query pagination_parameter="page" %}
   </section>
 </div>
 {% endblock %}

@@ -151,6 +151,14 @@ ensure this private directory is writable and not web-served before migrating.
 In development, only school logos are served from `MEDIA_ROOT`; keep student
 rosters and other sensitive files out of any web-served media directory.
 
+The Student Registry search updates as you type (after a two-character
+minimum), matching names, admission/index numbers, programme, class, house,
+dormitory and room. Combine it with residency, gender, enrollment status,
+house, dormitory, room, programme or class filters. The registry table shows
+50 results per page and preserves the active search and filters when paging.
+Django Admin student search covers the same student and placement details and
+provides corresponding list filters with 50 records per page.
+
 The same roles can import a roster from UTF-8 CSV or modern Excel `.xlsx`
 files, up to 10 MB and 2,000 student rows. Download the CSV template from the
 Student Registry to see the required headers. Admission number, index number,

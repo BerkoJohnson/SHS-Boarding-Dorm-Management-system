@@ -14,6 +14,7 @@ from core.forms import StudentRegistrationForm
 from core.models import (
     ClassGroup,
     Dormitory,
+    DormitoryRoom,
     Guardian,
     House,
     Programme,
@@ -142,6 +143,188 @@ class StudentRegistryTests(TestCase):
             self.client.get(reverse("core:student_registry")).status_code,
             200,
         )
+
+    def create_boarding_student(
+        self,
+        admission_no,
+        *,
+        full_name="Registry Student",
+        gender=Student.Gender.MALE,
+        dormitory=None,
+        room=None,
+        status=Student.EnrollmentStatus.ENROLLED,
+    ):
+        dormitory = dormitory or self.male_dorm
+        return Student.objects.create(
+            admission_no=admission_no,
+            index_number=f"IDX-{admission_no}",
+            full_name=full_name,
+            gender=gender,
+            programme=self.programme,
+            class_group=self.class_group,
+            house=dormitory.house,
+            dormitory=dormitory,
+            room=room,
+            status=status,
+        )
+
+    def test_registry_search_matches_student_and_boarding_details(self):
+        room = DormitoryRoom.objects.create(
+            dormitory=self.male_dorm,
+            name="North Wing 12",
+            capacity=2,
+        )
+        student = self.create_boarding_student(
+            "SEARCH-001",
+            full_name="Kwame Search",
+            room=room,
+        )
+
+        for term in ("Kwame Search", "SEARCH-001", "IDX-SEARCH-001", "Boys Block", "North Wing"):
+            with self.subTest(term=term):
+                response = self.client.get(
+                    reverse("core:student_registry"),
+                    {"q": term},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, student.full_name)
+
+    def test_registry_search_requires_two_characters_and_returns_htmx_partial(self):
+        student = self.create_boarding_student("HTMX-001", full_name="Htmx Student")
+
+        short_response = self.client.get(
+            reverse("core:student_registry"),
+            {"q": "H"},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertContains(short_response, "Type at least 2 characters to search")
+        self.assertNotContains(short_response, student.full_name)
+
+        response = self.client.get(
+            reverse("core:student_registry"),
+            {"q": "Htmx"},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, student.full_name)
+        self.assertNotContains(response, "Student Registry")
+
+    def test_registry_filters_can_be_combined(self):
+        room = DormitoryRoom.objects.create(
+            dormitory=self.female_dorm,
+            name="Filtered Room",
+            capacity=2,
+        )
+        female_student = self.create_boarding_student(
+            "FILTER-001",
+            full_name="Filtered Female",
+            gender=Student.Gender.FEMALE,
+            dormitory=self.female_dorm,
+            room=room,
+            status=Student.EnrollmentStatus.APPROVED,
+        )
+        self.create_boarding_student("FILTER-002", full_name="Other Male")
+
+        response = self.client.get(
+            reverse("core:student_registry"),
+            {
+                "gender": Student.Gender.FEMALE,
+                "status": Student.EnrollmentStatus.APPROVED,
+                "residency": Student.ResidencyStatus.BOARDING,
+                "house": str(self.house.pk),
+                "dormitory": str(self.female_dorm.pk),
+                "room": str(room.pk),
+                "programme": str(self.programme.pk),
+                "class_group": str(self.class_group.pk),
+            },
+        )
+
+        self.assertContains(response, female_student.full_name)
+        self.assertNotContains(response, "Other Male")
+
+    def test_registry_paginates_and_keeps_search_and_filter_parameters(self):
+        students = [
+            Student(
+                admission_no=f"PAGE-{number:03}",
+                index_number=f"IDX-PAGE-{number:03}",
+                full_name=f"Paged Student {number:03}",
+                gender=Student.Gender.MALE,
+                programme=self.programme,
+                class_group=self.class_group,
+                house=self.house,
+                dormitory=self.male_dorm,
+            )
+            for number in range(51)
+        ]
+        Student.objects.bulk_create(students)
+
+        response = self.client.get(
+            reverse("core:student_registry"),
+            {"q": "Paged Student", "residency": Student.ResidencyStatus.BOARDING},
+        )
+
+        self.assertContains(response, "of 51")
+        self.assertContains(response, "Page 1 of 2")
+        self.assertContains(response, "q=Paged+Student")
+        self.assertContains(response, "residency=Boarding")
+
+    def test_admin_student_search_filters_and_pagination(self):
+        room = DormitoryRoom.objects.create(
+            dormitory=self.male_dorm,
+            name="Admin Search Room",
+            capacity=2,
+        )
+        student = self.create_boarding_student(
+            "ADMIN-SEARCH-001",
+            full_name="Admin Search Student",
+            room=room,
+        )
+        administrator = get_user_model().objects.create_superuser(
+            username="registry-admin",
+            email="registry-admin@example.test",
+            password="test-password",
+        )
+        self.client.force_login(administrator)
+
+        for term in (
+            "Admin Search Student",
+            student.admission_no,
+            student.index_number,
+            "General Science",
+            "1A1",
+            "Red House",
+            "Boys Block",
+            "Admin Search Room",
+        ):
+            with self.subTest(term=term):
+                search_response = self.client.get(
+                    reverse("admin:core_student_changelist"),
+                    {"q": term},
+                )
+                self.assertContains(search_response, student.full_name)
+        self.assertContains(search_response, "Room")
+        self.assertContains(search_response, "Programme")
+
+        students = [
+            Student(
+                admission_no=f"ADMIN-PAGE-{number:03}",
+                index_number=f"IDX-ADMIN-PAGE-{number:03}",
+                full_name=f"Admin Paged Student {number:03}",
+                gender=Student.Gender.MALE,
+                programme=self.programme,
+                class_group=self.class_group,
+                house=self.house,
+                dormitory=self.male_dorm,
+            )
+            for number in range(51)
+        ]
+        Student.objects.bulk_create(students)
+        page_response = self.client.get(reverse("admin:core_student_changelist"))
+
+        changelist = page_response.context["cl"]
+        self.assertEqual(changelist.result_count, 52)
+        self.assertEqual(changelist.paginator.per_page, 50)
+        self.assertEqual(changelist.paginator.num_pages, 2)
 
     def test_individual_registration_creates_student_guardian_and_photo(self):
         image = Image.new("RGB", (160, 220), color="navy")

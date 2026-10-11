@@ -1,0 +1,68 @@
+<div class="overflow-x-auto">
+  {% if search_too_short %}
+  <div class="px-4 py-10 text-center">
+    <h2 class="text-sm font-semibold text-slate-800">Type at least 2 characters to search</h2>
+    <p class="mt-1 text-xs text-slate-500">Search by student name, admission/index number, programme, house, dormitory, room, or class.</p>
+  </div>
+  {% elif students_page %}
+  <table class="w-full min-w-[900px] border-collapse text-left">
+    <thead class="bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+      <tr>
+        <th class="px-4 py-3">Student</th>
+        <th class="px-4 py-3">Identifiers</th>
+        <th class="px-4 py-3">Residency</th>
+        <th class="px-4 py-3">Programme / Class</th>
+        <th class="px-4 py-3">Boarding placement</th>
+        <th class="px-4 py-3 text-right">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100 text-xs">
+      {% for student in students_page %}
+      <tr class="hover:bg-slate-50/70">
+        <td class="px-4 py-3">
+          <div class="flex items-center gap-2.5">
+            {% if student.photo %}
+            <img src="{% url 'core:student_photo' student.pk %}" alt="" class="h-10 w-8 shrink-0 rounded border border-slate-200 object-cover">
+            {% else %}
+            <span class="flex h-10 w-8 shrink-0 items-center justify-center rounded bg-slate-100 text-xs font-bold text-slate-500">{{ student.full_name|slice:":1" }}</span>
+            {% endif %}
+            <div>
+              <a href="{% url 'core:student_record' student.pk %}" class="font-semibold text-slate-900 hover:text-brand-700">{{ student.full_name }}</a>
+              <div class="mt-1 text-[10px] text-slate-500">{{ student.get_gender_display }} · {{ student.get_status_display }}</div>
+            </div>
+          </div>
+        </td>
+        <td class="px-4 py-3">
+          <div class="font-mono text-[11px] text-slate-700">{{ student.admission_no }}</div>
+          <div class="mt-1 font-mono text-[10px] text-slate-400">{{ student.index_number }}</div>
+        </td>
+        <td class="px-4 py-3 text-slate-600">{{ student.get_residency_display }}</td>
+        <td class="px-4 py-3 text-slate-600">
+          {{ student.programme.name }}
+          <div class="mt-1 text-[10px] text-slate-400">{{ student.class_group.name|default:"No class assigned" }}</div>
+        </td>
+        <td class="px-4 py-3 text-slate-600">
+          {% if student.house %}{{ student.house.name }}{% else %}No house{% endif %}
+          {% if student.dormitory %}<div class="mt-1 text-[10px] text-slate-500">{{ student.dormitory.name }}{% if student.room %} / {{ student.room.name }}{% endif %}</div>{% endif %}
+        </td>
+        <td class="px-4 py-3">
+          <div class="flex justify-end gap-1.5">
+            <a href="{% url 'core:student_record' student.pk %}" class="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-semibold text-sky-700 hover:bg-sky-100">View</a>
+            <a href="{% url 'core:student_id_card' student.pk %}" class="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100">ID Card</a>
+            <a href="{% url 'core:student_edit' student.pk %}" class="rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 hover:bg-slate-50">Edit</a>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="px-4 py-12 text-center">
+    <h2 class="text-sm font-semibold text-slate-800">No students found</h2>
+    <p class="mt-1 text-xs text-slate-500">Try a different search term or adjust the filters.</p>
+  </div>
+  {% endif %}
+</div>
+{% if not search_too_short %}
+{% include "core/partials/pagination_controls.html" with pagination_page=students_page pagination_query=pagination_query pagination_parameter="page" pagination_target="#student-results" %}
+{% endif %}
