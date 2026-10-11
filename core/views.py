@@ -708,6 +708,7 @@ def student_registry_view(request):
         "residency_choices": Student.ResidencyStatus.choices,
         "status_choices": Student.EnrollmentStatus.choices,
         "search_too_short": 0 < len(query) < 2,
+        "active_filters_count": sum(bool(value) for value in filter_values.values()),
     }
     template = (
         "core/students/partials/registry_table.html"

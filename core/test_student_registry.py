@@ -192,6 +192,18 @@ class StudentRegistryTests(TestCase):
     def test_registry_search_requires_two_characters_and_returns_htmx_partial(self):
         student = self.create_boarding_student("HTMX-001", full_name="Htmx Student")
 
+        page_response = self.client.get(reverse("core:student_registry"))
+        self.assertContains(page_response, 'showFilters: false')
+        self.assertContains(page_response, 'x-show="showFilters"')
+        self.assertContains(page_response, ">Filters</span>")
+
+        filtered_response = self.client.get(
+            reverse("core:student_registry"),
+            {"gender": Student.Gender.MALE},
+        )
+        self.assertContains(filtered_response, 'showFilters: true')
+        self.assertContains(filtered_response, "All genders")
+
         short_response = self.client.get(
             reverse("core:student_registry"),
             {"q": "H"},
