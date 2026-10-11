@@ -91,6 +91,42 @@ server, Celery worker, and Celery Beat running in separate PowerShell terminals.
    npm run dev
    ```
 
+## Production deployment and school-trial checklist
+
+The commands above are for local development, not a production deployment.
+Before using real student or guardian data:
+
+1. Configure the production environment with a randomly generated
+   `DJANGO_SECRET_KEY` of at least 50 characters, a comma-separated
+   `ALLOWED_HOSTS` containing only the deployed hostnames, and the database and
+   `REDIS_URL` values. Keep these values in the deployment secret store; do not
+   commit them or reuse a development key. Production settings fail at startup
+   if the key or allowed hosts are missing.
+2. Run checks and migrations with production settings:
+
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py check --deploy --settings=schoolsystem.settings.production
+   .\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.production
+   .\.venv\Scripts\python.exe .\manage.py collectstatic --noinput --settings=schoolsystem.settings.production
+   ```
+
+   Run Django behind a production-grade WSGI server and HTTPS-terminating
+   reverse proxy. Configure that server or a trusted static-file service to
+   serve `STATIC_ROOT`; do not expose `MEDIA_ROOT` or `.private`.
+3. Keep the web process, Celery worker, and Celery Beat running under a process
+   manager. Confirm Redis 6 or newer, task execution, scheduled overdue checks,
+   and SMS delivery using test recipients before enabling school-wide SMS.
+4. Back up PostgreSQL and required private files, including
+   `.private/student_photos` and `.private/student_id_exports`, using encrypted,
+   access-controlled storage. Test a restore before the trial and define
+   retention and incident-response procedures. Keep real roster and export
+   files out of Git, shared development machines, and public file storage.
+5. Start with synthetic data. Before loading real records, verify staff roles
+   and house scoping, account provisioning and recovery, gate and attendance
+   workflows, and the school's approval of the public student-ID QR contents.
+   A QR link is a bearer link: anyone who obtains it can view the data described
+   in [Student ID cards and public exeat checks](#student-id-cards-and-public-exeat-checks).
+
 ## Exeat SMS notifications
 
 Configure `SMS_ENABLED`, `SMS_ONLINE_GH_API_KEY`, `SMS_SENDER_ID`, `SMS_TIME_ZONE`,
