@@ -23,6 +23,11 @@ server, Celery worker, and Celery Beat running in separate PowerShell terminals.
    `REDIS_URL`, and the SMS settings described under
    [Exeat SMS notifications](#exeat-sms-notifications). The local Redis URL is
    `redis://127.0.0.1:6379/0`.
+   Keep the `DB_*` values for local PostgreSQL. To switch to Neon without
+   replacing them, set `DATABASE_PROFILE=neon` and configure `PGHOST`,
+   `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and optionally `PGPORT` (defaults to
+   `5432`). The Neon profile requires TLS by default; override it only with
+   `PGSSLMODE` if needed. Set `DATABASE_PROFILE=local` to switch back.
 4. Install the frontend dependencies if you want to run the Tailwind watcher:
 
    ```powershell
@@ -101,7 +106,9 @@ Before using real student or guardian data:
    `ALLOWED_HOSTS` containing only the deployed hostnames, and the database and
    `REDIS_URL` values. Keep these values in the deployment secret store; do not
    commit them or reuse a development key. Production settings fail at startup
-   if the key or allowed hosts are missing.
+   if the key or allowed hosts are missing. When connecting to Neon, use the
+   `DATABASE_PROFILE=neon` connection variables described above; TLS is enabled
+   by default for that profile.
 2. Run checks and migrations with production settings:
 
    ```powershell
@@ -126,6 +133,28 @@ Before using real student or guardian data:
    workflows, and the school's approval of the public student-ID QR contents.
    A QR link is a bearer link: anyone who obtains it can view the data described
    in [Student ID cards and public exeat checks](#student-id-cards-and-public-exeat-checks).
+
+### Render staging preview
+
+The repository includes a `Procfile` web process for Render. Connect the
+GitHub repository to a Render **Web Service**, select the branch containing the
+deployment changes, and configure:
+
+- Build command: `pip install -r requirements.txt && python manage.py collectstatic --noinput --settings=schoolsystem.settings.production`
+- Start command: `gunicorn schoolsystem.wsgi:application --bind 0.0.0.0:$PORT`
+- Environment: `DJANGO_SETTINGS_MODULE=schoolsystem.settings.production`,
+  `DATABASE_PROFILE=neon`, a newly generated `DJANGO_SECRET_KEY`,
+  `ALLOWED_HOSTS` containing the exact Render hostname, and
+  `CSRF_TRUSTED_ORIGINS` containing its HTTPS origin. Add the separate
+  staging database's `PGHOST`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD`;
+  `PGPORT=5432` and `PGSSLMODE=require`.
+
+Do not point a staging service at a Neon database that contains real student
+records. Create an isolated empty staging database and use synthetic data.
+Render free web services use ephemeral storage, sleep when idle, and are
+intended for testing rather than production. This initial web-only preview does
+not provide the Celery worker/Beat services or durable private media storage;
+test those separately before considering the deployment a school trial.
 
 ## Exeat SMS notifications
 
@@ -204,6 +233,10 @@ house and a compatible dormitory. The importer can infer a dormitory only when
 the selected house has exactly one suitable block for that student's gender.
 Programmes, classes, houses and dormitories must already be configured; unknown
 or ambiguous references are reported rather than created automatically.
+Use an empty class cell or `Unallocated` when no class has been assigned.
+Colored numbered house values such as `Blue House(M), TWO` resolve to a
+configured house named `House Two (Blue)`; the compatible dormitory must also
+be configured for the student's gender.
 
 The importer validates every worksheet/row before writing any records.
 Duplicate admission or index numbers (within the upload or already in the

@@ -21,6 +21,7 @@ from core.models import (
     Programme,
     Student,
 )
+from core.services.roster import normalize_roster_house_name
 
 
 MAX_ROSTER_ROWS = 2000
@@ -360,12 +361,18 @@ def import_student_roster(uploaded_file):
             programme_value, programme_index, "programme", location, errors
         )
         class_value = row.get("class_group", "").strip()
+        if class_value.casefold() == "unallocated":
+            class_value = ""
         class_group = _reference(
             class_value, class_index, "class", location, errors
         ) if class_value else None
         house_value = row.get("house", "").strip()
         house = _reference(
-            house_value, house_index, "house", location, errors
+            normalize_roster_house_name(house_value),
+            house_index,
+            "house",
+            location,
+            errors,
         ) if house_value else None
         dormitory_value = row.get("dormitory", "").strip()
         dormitory = None

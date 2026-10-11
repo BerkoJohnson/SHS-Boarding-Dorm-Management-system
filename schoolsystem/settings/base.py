@@ -8,6 +8,36 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_PATH = BASE_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
+DATABASE_PROFILE = os.getenv("DATABASE_PROFILE", "local").strip().lower() or "local"
+if DATABASE_PROFILE not in {"local", "neon"}:
+    raise ValueError("DATABASE_PROFILE must be either 'local' or 'neon'")
+
+if DATABASE_PROFILE == "neon":
+    required_neon_settings = ("PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD")
+    missing_neon_settings = [
+        name for name in required_neon_settings if not os.getenv(name, "").strip()
+    ]
+    if missing_neon_settings:
+        missing_settings = ", ".join(missing_neon_settings)
+        raise ValueError(
+            f"DATABASE_PROFILE='neon' requires these environment variables: "
+            f"{missing_settings}"
+        )
+
+    DB_NAME = os.environ["PGDATABASE"]
+    DB_USER = os.environ["PGUSER"]
+    DB_PASSWORD = os.environ["PGPASSWORD"]
+    DB_HOST = os.environ["PGHOST"]
+    DB_PORT = os.getenv("PGPORT", "5432").strip() or "5432"
+    DB_SSLMODE = os.getenv("PGSSLMODE", "require").strip() or "require"
+else:
+    DB_NAME = os.getenv("DB_NAME", "schoolsystem_db")
+    DB_USER = os.getenv("DB_USER", "postgres")
+    DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+    DB_HOST = os.getenv("DB_HOST", "localhost")
+    DB_PORT = os.getenv("DB_PORT", "5432")
+    DB_SSLMODE = os.getenv("DB_SSLMODE", "").strip()
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -24,6 +54,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -58,15 +89,16 @@ WSGI_APPLICATION = "schoolsystem.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME", "schoolsystem_db"),
-        "USER": os.getenv("DB_USER", "postgres"),
-        "PASSWORD": os.getenv("DB_PASSWORD", "postgres"),
-        "HOST": os.getenv("DB_HOST", "localhost"),
-        "PORT": os.getenv("DB_PORT", "5432"),
+        "NAME": DB_NAME,
+        "USER": DB_USER,
+        "PASSWORD": DB_PASSWORD,
+        "HOST": DB_HOST,
+        "PORT": DB_PORT,
         "CONN_MAX_AGE": 600,
         "CONN_HEALTH_CHECKS": True,
         "OPTIONS": {
             "options": "-c statement_timeout=30000ms",
+            **({"sslmode": DB_SSLMODE} if DB_SSLMODE else {}),
         },
     }
 }
@@ -82,7 +114,7 @@ AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
         "OPTIONS": {
-            "min_length": 12,
+            "min_length": 8,
         }
     },
     {

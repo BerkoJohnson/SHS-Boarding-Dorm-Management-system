@@ -26,6 +26,12 @@ if "*" in ALLOWED_HOSTS:
         "ALLOWED_HOSTS must list explicit production hostnames; '*' is not allowed."
     )
 
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 # --- SECURITY HARDENING ---
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = True

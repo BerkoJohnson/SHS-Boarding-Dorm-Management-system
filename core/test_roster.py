@@ -1,7 +1,10 @@
 from django.test import SimpleTestCase
 
 from core.models import Dormitory
-from core.services.roster import get_roster_house_identity
+from core.services.roster import (
+    get_roster_house_identity,
+    normalize_roster_house_name,
+)
 
 
 class RosterHouseIdentityTests(SimpleTestCase):
@@ -28,6 +31,16 @@ class RosterHouseIdentityTests(SimpleTestCase):
         self.assertEqual(
             get_roster_house_identity("Akwapim House", "male"),
             ("Akwapim House", Dormitory.GenderBlock.MALE),
+        )
+
+    def test_colored_numbered_house_is_normalized_to_canonical_name(self):
+        self.assertEqual(
+            normalize_roster_house_name("Blue House(M), TWO"),
+            "House Two (Blue)",
+        )
+        self.assertEqual(
+            normalize_roster_house_name("RED HOUSE(F), ONE"),
+            "House One (Red)",
         )
 
     def test_unsupported_student_gender_is_rejected(self):

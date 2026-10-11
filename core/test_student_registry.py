@@ -488,6 +488,43 @@ class StudentRegistryTests(TestCase):
         self.assertEqual(female_student.dormitory, self.female_dorm)
         self.assertEqual(male_student.residency, Student.ResidencyStatus.BOARDING)
 
+    def test_xlsx_import_normalizes_house_and_treats_unallocated_class_as_blank(self):
+        uploaded_file = self._xlsx_upload(
+            [
+                [
+                    "ADM-UNALLOCATED",
+                    "IDX-UNALLOCATED",
+                    "Unallocated Student",
+                    "Male",
+                    "GSCI",
+                    "Blue House(M), TWO",
+                    "Unallocated",
+                ],
+            ]
+        )
+        blue_house = House.objects.create(name="House Two (Blue)")
+        blue_male_dorm = Dormitory.objects.create(
+            house=blue_house,
+            name="Boys Block",
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=80,
+        )
+        Dormitory.objects.create(
+            house=blue_house,
+            name="Girls Block",
+            gender=Dormitory.GenderBlock.FEMALE,
+            capacity=80,
+        )
+
+        imported, errors = import_student_roster(uploaded_file)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(imported, 1)
+        student = Student.objects.get(admission_no="ADM-UNALLOCATED")
+        self.assertIsNone(student.class_group)
+        self.assertEqual(student.house, blue_house)
+        self.assertEqual(student.dormitory, blue_male_dorm)
+
     def test_excel_import_reads_each_worksheet(self):
         headers = [
             "Admission No.",
