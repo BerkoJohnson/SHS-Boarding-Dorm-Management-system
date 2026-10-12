@@ -52,6 +52,29 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("DJANGO_SECRET_KEY must be at least 50 characters", result.stderr)
 
+    def test_render_defaults_to_production_settings(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import os; os.environ.pop('DJANGO_SETTINGS_MODULE', None); "
+                "os.environ['RENDER'] = 'true'; import schoolsystem.wsgi; "
+                "print(os.environ['DJANGO_SETTINGS_MODULE'])",
+            ],
+            cwd=PROJECT_ROOT,
+            env={
+                **os.environ,
+                "DJANGO_SECRET_KEY": TEST_SECRET_KEY,
+                "ALLOWED_HOSTS": "school.example.org",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("schoolsystem.settings.production", result.stdout)
+
     def test_production_settings_require_allowed_hosts(self):
         result = self.run_settings_import(secret_key=TEST_SECRET_KEY, allowed_hosts=" , ")
 

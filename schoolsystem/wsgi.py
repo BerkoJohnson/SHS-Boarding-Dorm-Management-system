@@ -11,6 +11,10 @@ import os
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'schoolsystem.settings.development')
+if not os.getenv('DJANGO_SETTINGS_MODULE'):
+    if os.getenv('RENDER') == 'true' or os.getenv('PORT'):
+        os.environ['DJANGO_SETTINGS_MODULE'] = 'schoolsystem.settings.production'
+    else:
+        os.environ['DJANGO_SETTINGS_MODULE'] = 'schoolsystem.settings.development'
 
 application = get_wsgi_application()

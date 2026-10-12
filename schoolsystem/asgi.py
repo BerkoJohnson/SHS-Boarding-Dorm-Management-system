@@ -11,6 +11,10 @@ import os
 
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'schoolsystem.settings')
+if not os.getenv('DJANGO_SETTINGS_MODULE'):
+    if os.getenv('RENDER') == 'true' or os.getenv('PORT'):
+        os.environ['DJANGO_SETTINGS_MODULE'] = 'schoolsystem.settings.production'
+    else:
+        os.environ['DJANGO_SETTINGS_MODULE'] = 'schoolsystem.settings.development'
 
 application = get_asgi_application()

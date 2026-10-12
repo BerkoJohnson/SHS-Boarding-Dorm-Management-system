@@ -6,7 +6,11 @@ import sys
 
 def main():
     """Run administrative tasks."""
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'schoolsystem.settings.development')
+    if not os.getenv('DJANGO_SETTINGS_MODULE'):
+        if os.getenv('RENDER') == 'true' or os.getenv('PORT'):
+            os.environ['DJANGO_SETTINGS_MODULE'] = 'schoolsystem.settings.production'
+        else:
+            os.environ['DJANGO_SETTINGS_MODULE'] = 'schoolsystem.settings.development'
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:
