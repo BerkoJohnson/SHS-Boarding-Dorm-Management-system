@@ -73,6 +73,10 @@ class SchoolConfigurationTests(TestCase):
         self.assertContains(response, "North Campus School")
         self.assertContains(response, "12 School Road")
         self.assertContains(response, "+233 20 000 0000")
+        self.assertContains(response, "Powered by")
+        self.assertContains(response, "Eden Creative Systems")
+        self.assertContains(response, "eden-creative-systems-mark.png")
+        self.assertContains(response, "favicon.ico")
 
     def test_login_page_displays_uploaded_school_logo(self):
         with tempfile.TemporaryDirectory() as media_root:

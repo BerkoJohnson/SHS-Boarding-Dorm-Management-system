@@ -5,6 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - {{ school_configuration.name }}</title>
+    <link rel="icon" href="{% static 'favicons/favicon.ico' %}" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicons/favicon-32x32.png' %}">
+    <link rel="apple-touch-icon" href="{% static 'favicons/apple-touch-icon.png' %}">
     <!-- Tailwind Output & Fonts -->
   <link rel="stylesheet" href="{% static 'css/output.css' %}">
   
@@ -130,7 +133,12 @@
             {% if school_configuration.contact_number %}<span>{{ school_configuration.contact_number }}</span>{% endif %}
         </div>
         {% endif %}
-        
+
+        <div class="mt-5 flex items-center justify-center gap-2 text-xs text-slate-400">
+            <span>Powered by</span>
+            <img src="{% static 'img/eden-creative-systems-mark.png' %}" alt="" class="h-8 w-8 rounded-full bg-white">
+            <span class="font-semibold text-slate-300">Eden Creative Systems</span>
+        </div>
     </div>
     
 </body>
