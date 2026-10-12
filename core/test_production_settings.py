@@ -149,6 +149,71 @@ class ProductionSettingsTests(SimpleTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_neon_object_storage_uses_private_path_style_s3(self):
+        environment = {
+            **os.environ,
+            "DJANGO_SETTINGS_MODULE": "schoolsystem.settings.development",
+            "MEDIA_STORAGE_BACKEND": "neon_s3",
+            "NEON_STORAGE_BUCKET": "school-uploads",
+            "AWS_ENDPOINT_URL_S3": "https://branch.storage.example.neon.tech",
+            "AWS_REGION": "us-east-2",
+            "AWS_ACCESS_KEY_ID": "test-access-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret-key",
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import django; django.setup(); "
+                "from django.core.files.storage import storages; "
+                "from django.urls import get_resolver; "
+                "storage = storages['default']; "
+                "assert storage.bucket_name == 'school-uploads'; "
+                "assert storage.default_acl is None; "
+                "assert storage.querystring_auth; "
+                "assert storage.addressing_style == 'path'; "
+                "assert storage.signature_version == 's3v4'; "
+                "assert 'X-Amz-Signature=' in "
+                "storage.url('school/logos/crest.png'); "
+                "assert 'media/school/logos/<path:path>' not in "
+                "[str(pattern.pattern) for pattern in "
+                "get_resolver().url_patterns]",
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_neon_object_storage_requires_all_connection_settings(self):
+        environment = {
+            **os.environ,
+            "MEDIA_STORAGE_BACKEND": "neon_s3",
+            "NEON_STORAGE_BUCKET": "school-uploads",
+            "AWS_ENDPOINT_URL_S3": "",
+            "AWS_REGION": "us-east-2",
+            "AWS_ACCESS_KEY_ID": "test-access-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret-key",
+        }
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import schoolsystem.settings.base",
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("AWS_ENDPOINT_URL_S3", result.stderr)
+
     def test_neon_profile_reports_missing_connection_settings(self):
         environment = {
             **os.environ,

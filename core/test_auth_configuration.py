@@ -91,6 +91,15 @@ class SchoolConfigurationTests(TestCase):
                 response = self.client.get(reverse("core:login"))
 
                 self.assertContains(response, configuration.logo.url)
+                logo_response = self.client.get(configuration.logo.url)
+                logo_content = b"".join(logo_response.streaming_content)
+
+                self.assertEqual(logo_response.status_code, 200)
+                self.assertEqual(logo_response["Content-Type"], "image/png")
+                self.assertEqual(
+                    logo_content,
+                    image_bytes.getvalue(),
+                )
 
     def test_school_configuration_can_be_added_in_django_admin(self):
         admin_user = User.objects.create_superuser(

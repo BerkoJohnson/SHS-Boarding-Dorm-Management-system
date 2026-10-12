@@ -155,8 +155,15 @@ STATICFILES_DIRS = [
 ]
 
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(BASE_DIR / "media"))).resolve()
 PRIVATE_STUDENT_PHOTO_ROOT = BASE_DIR / ".private" / "student_photos"
+MEDIA_STORAGE_BACKEND = os.getenv(
+    "MEDIA_STORAGE_BACKEND", "filesystem"
+).strip().lower()
+if MEDIA_STORAGE_BACKEND not in {"filesystem", "neon_s3"}:
+    raise ValueError(
+        "MEDIA_STORAGE_BACKEND must be either 'filesystem' or 'neon_s3'"
+    )
 
 
 # Email
@@ -176,6 +183,38 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+
+if MEDIA_STORAGE_BACKEND == "neon_s3":
+    neon_storage_environment = {
+        "NEON_STORAGE_BUCKET": os.getenv("NEON_STORAGE_BUCKET", "").strip(),
+        "AWS_ENDPOINT_URL_S3": os.getenv("AWS_ENDPOINT_URL_S3", "").strip(),
+        "AWS_REGION": os.getenv("AWS_REGION", "").strip(),
+        "AWS_ACCESS_KEY_ID": os.getenv("AWS_ACCESS_KEY_ID", "").strip(),
+        "AWS_SECRET_ACCESS_KEY": os.getenv("AWS_SECRET_ACCESS_KEY", "").strip(),
+    }
+    missing_storage_settings = [
+        name for name, value in neon_storage_environment.items()
+        if not value
+    ]
+    if missing_storage_settings:
+        raise ValueError(
+            "MEDIA_STORAGE_BACKEND='neon_s3' requires: "
+            + ", ".join(missing_storage_settings)
+        )
+
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": neon_storage_environment["NEON_STORAGE_BUCKET"],
+            "endpoint_url": neon_storage_environment["AWS_ENDPOINT_URL_S3"],
+            "region_name": neon_storage_environment["AWS_REGION"],
+            "access_key": neon_storage_environment["AWS_ACCESS_KEY_ID"],
+            "secret_key": neon_storage_environment["AWS_SECRET_ACCESS_KEY"],
+            "addressing_style": "path",
+            "signature_version": "s3v4",
+            "querystring_auth": True,
+        },
+    }
 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

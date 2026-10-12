@@ -147,14 +147,29 @@ deployment changes, and configure:
   `ALLOWED_HOSTS` containing the exact Render hostname, and
   `CSRF_TRUSTED_ORIGINS` containing its HTTPS origin. Add the separate
   staging database's `PGHOST`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD`;
-  `PGPORT=5432` and `PGSSLMODE=require`.
+  `PGPORT=5432` and `PGSSLMODE=require`. For media, create a private Neon
+  Object Storage bucket and set `MEDIA_STORAGE_BACKEND=neon_s3` and
+  `NEON_STORAGE_BUCKET=uploads`. In Neon Console, use **Connect → Storage** for
+  the endpoint, region, and branch credential; the credential must have
+  `storage:read` and `storage:write` scopes. Set those values as
+  `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, and
+  `AWS_SECRET_ACCESS_KEY`. Use the endpoint and region returned for the correct
+  Neon branch, not the database hostname. The S3 client uses path-style
+  addressing and SigV4. Neon buckets are private by default and do not support
+  S3 ACL writes: leave the bucket private and do not configure object ACLs.
+  The school logo is displayed using a temporary signed URL. Never put storage
+  credentials in Git. Re-upload the logo in Django Admin after configuring the
+  bucket. See Neon’s [Object Storage setup](https://neon.com/docs/storage/get-started)
+  and [authentication guide](https://neon.com/docs/storage/authentication).
 
 Do not point a staging service at a Neon database that contains real student
 records. Create an isolated empty staging database and use synthetic data.
 Render free web services use ephemeral storage, sleep when idle, and are
-intended for testing rather than production. This initial web-only preview does
-not provide the Celery worker/Beat services or durable private media storage;
-test those separately before considering the deployment a school trial.
+intended for testing rather than production. This initial web-only preview
+does not provide the Celery worker/Beat services or durable private student
+photos and export storage; student photos remain on protected local storage
+and exports are stored locally. Do not use real student photos or exports until
+durable private storage and backup/restore are set up and verified.
 
 ## Exeat SMS notifications
 
