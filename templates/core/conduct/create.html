@@ -120,7 +120,7 @@
                                        name="q"
                                        placeholder="Type student name (e.g. Kwame) or admission number..." 
                                        hx-get="{% url 'core:student_search' %}"
-                                       hx-trigger="keyup changed delay:250ms"
+                                       hx-trigger="input changed delay:250ms"
                                        hx-target="#student-search-results"
                                        class="w-full pl-9 pr-4 py-2 bg-slate-50/80 text-xs rounded-lg border border-slate-200 focus:outline-none focus:bg-white focus:ring-1 focus:ring-brand-500 transition shadow-2xs">
                                 <svg class="w-4 h-4 text-slate-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -97,7 +97,7 @@
     <!-- SEARCH & FILTER CONTROLS BAR -->
     <form id="conduct-filter-form"
           hx-get="{% url 'core:conduct_list' %}"
-          hx-trigger="submit, change from:select, keyup changed delay:300ms from:input[name='q']"
+          hx-trigger="submit, change from:select, input changed delay:300ms from:input[name='q']"
           hx-target="#conduct-table"
           hx-push-url="true"
           class="p-3 bg-slate-50/80 border-b border-slate-200/80 space-y-3">

@@ -48,7 +48,7 @@
               method="get"
               action="{% url 'core:exeat_approvals' %}"
               hx-get="{% url 'core:exeat_approvals' %}"
-              hx-trigger="keyup changed delay:350ms, submit"
+              hx-trigger="input changed delay:350ms, submit"
               hx-target="#approvals-card-grid-wrapper"
               hx-push-url="true">
           <input type="text" name="q" value="{{ query }}"

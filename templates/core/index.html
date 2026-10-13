@@ -132,13 +132,13 @@
         <div class="flex flex-wrap items-center gap-2.5">
             
             <!-- Table Search Input -->
-            <div class="relative w-64 sm:w-72">
+            <div class="relative w-full sm:w-72">
                 <input type="text" 
                        name="q"
                        value="{{ search_query }}"
                        placeholder="Search student, pass #, house..." 
                        hx-get="{% url 'core:dashboard' %}?table_only=1"
-                       hx-trigger="keyup changed delay:300ms, search"
+                       hx-trigger="input changed delay:300ms, search"
                        hx-target="#dashboard-table-container"
                        hx-include="[name='status']"
                        class="w-full pl-8 pr-3 py-1.5 bg-slate-50/80 text-xs text-slate-800 placeholder-slate-400 rounded-lg border border-slate-200 focus:outline-none focus:bg-white focus:ring-1 focus:ring-brand-500 transition shadow-2xs">
@@ -183,12 +183,13 @@
                     hx-trigger="click"
                     hx-target="#dashboard-table-container"
                     hx-include="[name='q'], [name='status']"
-                    class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 shadow-2xs transition hover:bg-slate-50 hover:text-slate-800"
-                    title="Refresh exeat statuses">
+                    class="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white px-0 text-xs font-medium text-slate-600 shadow-2xs transition hover:bg-slate-50 hover:text-slate-800 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-2.5 sm:py-1.5"
+                    title="Refresh exeat statuses"
+                    aria-label="Refresh exeat statuses">
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7v5h-5M4 17v-5h5m-4.5-3a8 8 0 0113.2-3L20 12M4 12l2.3 2.5A8 8 0 0019.5 14"/>
                 </svg>
-                <span>Refresh</span>
+                <span class="hidden sm:inline">Refresh</span>
             </button>
 
         </div>

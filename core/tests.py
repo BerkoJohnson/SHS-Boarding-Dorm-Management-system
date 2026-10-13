@@ -318,6 +318,7 @@ class ExeatCreateViewTests(TestCase):
         response = self.client.get('/exeats/new/')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Issue Official Exeat Pass', response.content)
+        self.assertContains(response, 'hx-trigger="input changed delay:250ms"')
 
     def test_student_search_autocomplete(self):
         """GET /exeats/search-students/?q=Kofi returns Kofi Badu with select action."""
@@ -794,6 +795,10 @@ class ConductViewTests(TestCase):
         self.assertEqual(response.context['major_count'], 1)
         self.assertEqual(response.context['critical_count'], 0)
         self.assertContains(response, 'Showing <strong>1</strong> of <strong>1</strong> incident logs')
+        self.assertContains(
+            response,
+            'input changed delay:300ms from:input[name=\'q\']',
+        )
 
     def test_conduct_list_filtering_and_htmx(self):
         """GET /conduct/ filters correctly by severity and query, and supports HTMX partials."""
@@ -869,6 +874,7 @@ class ConductViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Record Student Conduct Infraction', response.content)
         self.assertIn(b'Kofi Badu', response.content)
+        self.assertContains(response, 'hx-trigger="input changed delay:250ms"')
         self.assertNotIn(b'Reporting Authority', response.content)
         self.assertNotIn('logged_by', response.context['form'].fields)
 
@@ -1072,12 +1078,15 @@ class HeaderComponentsTests(TestCase):
         self.assertEqual(len(context['notifications']), 3)
 
     def test_dashboard_renders_header_components(self):
-        """Dashboard renders the mobile quick actions and account menu."""
+        """Dashboard renders mobile actions, responsive status search, and account menu."""
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)
 
         self.assertContains(response, 'aria-label="Quick actions"')
         self.assertContains(response, 'New Exeat')
+        self.assertContains(response, 'hx-trigger="input changed delay:300ms, search"')
+        self.assertContains(response, 'aria-label="Refresh exeat statuses"')
+        self.assertContains(response, '<span class="hidden sm:inline">Refresh</span>')
         self.assertContains(response, 'Appearance')
         self.assertContains(response, '<option value="light">Light</option>')
         self.assertContains(response, '<option value="dark">Dark</option>')
