@@ -9,6 +9,42 @@
   <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicons/favicon-32x32.png' %}">
   <link rel="apple-touch-icon" href="{% static 'favicons/apple-touch-icon.png' %}">
 
+  <script>
+    (function () {
+      const savedThemeMode = localStorage.getItem('themeMode');
+      const themeMode = ['light', 'dark', 'system'].includes(savedThemeMode)
+        ? savedThemeMode
+        : 'system';
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+      const applyTheme = function (mode) {
+        const isDark = mode === 'dark' || (mode === 'system' && prefersDark.matches);
+        document.documentElement.dataset.themeMode = mode;
+        document.documentElement.classList.toggle('dark', isDark);
+      };
+
+      applyTheme(themeMode);
+      if (prefersDark.addEventListener) {
+        prefersDark.addEventListener('change', function () {
+          if (document.documentElement.dataset.themeMode === 'system') {
+            applyTheme('system');
+          }
+        });
+      } else {
+        prefersDark.addListener(function () {
+          if (document.documentElement.dataset.themeMode === 'system') {
+            applyTheme('system');
+          }
+        });
+      }
+      window.setThemeMode = function (mode) {
+        if (['light', 'dark', 'system'].includes(mode)) {
+          localStorage.setItem('themeMode', mode);
+          applyTheme(mode);
+        }
+      };
+    })();
+  </script>
+
   <!-- Tailwind Output & Fonts -->
   <link rel="stylesheet" href="{% static 'css/output.css' %}">
   

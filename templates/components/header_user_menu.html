@@ -1,5 +1,5 @@
 <!-- TOP COMMAND BAR: LOGGED-IN USER OPTIONS MENU -->
-<div class="relative" x-data="{ userMenuOpen: false }">
+<div class="relative" x-data="{ userMenuOpen: false, themeMode: document.documentElement.dataset.themeMode || 'system' }">
     
     <!-- User Avatar Trigger matching reference image -->
     <button type="button" 
@@ -34,7 +34,7 @@
          x-transition:leave="transition ease-in duration-100"
          x-transition:leave-start="opacity-100 translate-y-0 scale-100"
          x-transition:leave-end="opacity-0 translate-y-1 scale-95"
-         class="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1 z-50 text-left overflow-hidden">
+         class="absolute right-0 mt-2 w-72 max-h-[calc(100dvh-5rem)] overflow-y-auto bg-white rounded-xl shadow-2xl border border-slate-200/90 py-1 z-50 text-left">
         
         <!-- User Info Identity Banner -->
         <div class="px-4 py-3 bg-slate-50/90 border-b border-slate-200/80">
@@ -143,6 +143,23 @@
             </a>
         </div>
         {% endif %}
+
+        <div class="px-3 py-2.5 border-t border-slate-100">
+            <label for="theme-mode" class="block mb-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                Appearance
+            </label>
+            <select id="theme-mode"
+                    x-model="themeMode"
+                    @change="themeMode = $event.target.value; window.setThemeMode(themeMode)"
+                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100">
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="system">System</option>
+            </select>
+            <p class="mt-1.5 text-[10px] text-slate-500">
+                System follows this device’s appearance setting.
+            </p>
+        </div>
 
         <!-- Section: Logout Action Form -->
         <div class="pt-1 border-t border-slate-100 bg-slate-50/50">

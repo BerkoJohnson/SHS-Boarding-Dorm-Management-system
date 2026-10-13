@@ -1078,6 +1078,11 @@ class HeaderComponentsTests(TestCase):
 
         self.assertContains(response, 'aria-label="Quick actions"')
         self.assertContains(response, 'New Exeat')
+        self.assertContains(response, 'Appearance')
+        self.assertContains(response, '<option value="light">Light</option>')
+        self.assertContains(response, '<option value="dark">Dark</option>')
+        self.assertContains(response, '<option value="system">System</option>')
+        self.assertContains(response, 'prefers-color-scheme: dark')
         # User avatar and monogram initials
         self.assertIn(b'KM', response.content)
         self.assertIn(b'Sign Out', response.content)
