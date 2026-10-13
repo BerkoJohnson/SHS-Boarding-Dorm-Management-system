@@ -6,7 +6,7 @@
             @click="userMenuOpen = !userMenuOpen"
             @click.outside="userMenuOpen = false"
             @keydown.escape.window="userMenuOpen = false"
-            class="flex items-center gap-1.5 focus:outline-none cursor-pointer group"
+            class="flex items-center gap-1.5 min-h-11 min-w-11 justify-center focus:outline-none cursor-pointer group"
             title="{{ request.user.get_full_name|default:request.user.username }} - Account Options"
             aria-label="User menu"
             :aria-expanded="userMenuOpen">

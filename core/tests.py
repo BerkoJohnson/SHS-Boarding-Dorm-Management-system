@@ -1072,10 +1072,12 @@ class HeaderComponentsTests(TestCase):
         self.assertEqual(len(context['notifications']), 3)
 
     def test_dashboard_renders_header_components(self):
-        """Dashboard HTML response contains notification bell, count badge, and user menu."""
+        """Dashboard renders the mobile quick actions and account menu."""
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)
 
+        self.assertContains(response, 'aria-label="Quick actions"')
+        self.assertContains(response, 'New Exeat')
         # User avatar and monogram initials
         self.assertIn(b'KM', response.content)
         self.assertIn(b'Sign Out', response.content)
@@ -2170,10 +2172,19 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'hx-swap-oob="outerHTML"')
         self.assertContains(response, 'disabled title="Mark all students before finalizing"')
-        self.assertContains(response, 'col-span-5 min-w-0 w-full')
+        self.assertContains(response, 'col-span-12 sm:col-span-5 min-w-0 w-full')
         self.assertContains(response, 'grid-cols-12')
         self.assertContains(response, 'break-words')
         self.assertContains(response, 'name="status"')
+        self.assertRegex(
+            response.content.decode(),
+            rf'<form(?=[^>]*method="post")'
+            rf'(?=[^>]*action="/operations/roll-call/entry/{entries[0].id}/")'
+            rf'(?=[^>]*hx-post="/operations/roll-call/entry/{entries[0].id}/")'
+            rf'(?=[^>]*hx-trigger="change")'
+            rf'(?=[^>]*hx-target="#entry-row-{entries[0].id}")'
+            r'[^>]*>',
+        )
         self.assertNotContains(response, 'entry-remarks-')
 
         response = self.client.post(

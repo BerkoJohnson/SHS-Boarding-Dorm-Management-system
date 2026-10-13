@@ -1,5 +1,5 @@
 <!-- System-Wide Command Palette & Global Search Component -->
-<div class="relative flex-1 max-w-lg" 
+<div class="relative flex-1 min-w-0 max-w-lg" 
      x-data="{ 
          isOpen: false, 
          query: '',
@@ -46,7 +46,7 @@
     </svg>
 
     <!-- Right Controls: Spinner, Clear, and ⌘K Badge -->
-    <div class="absolute right-2.5 top-1.5 flex items-center gap-1.5">
+    <div class="absolute right-2.5 top-0 h-full flex items-center gap-1.5">
       <!-- Loading Indicator -->
       <div id="search-spinner" class="htmx-indicator">
         <svg class="animate-spin h-3.5 w-3.5 text-brand-600" fill="none" viewBox="0 0 24 24">
@@ -82,7 +82,7 @@
        x-transition:leave="transition ease-in duration-100"
        x-transition:leave-start="opacity-100 translate-y-0 scale-100"
        x-transition:leave-end="opacity-0 translate-y-1 scale-98"
-       class="absolute top-full left-0 mt-2 w-[580px] max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-2xl border border-slate-200/90 z-50 overflow-hidden">
+       class="absolute top-full left-0 mt-2 w-[580px] max-w-[min(580px,calc(100vw-4.5rem))] sm:max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-2xl border border-slate-200/90 z-50 overflow-hidden">
     <div id="global-search-results" class="max-h-[460px] overflow-y-auto">
       <!-- Search results loaded dynamically via HTMX -->
       <div class="p-6 text-center text-slate-400 text-xs">

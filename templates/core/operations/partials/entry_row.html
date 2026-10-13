@@ -3,7 +3,7 @@
     class="grid grid-cols-12 items-center gap-3 p-3 hover:bg-slate-50/70 transition border-b border-slate-100 last:border-0 lg:gap-2 lg:py-2 lg:px-3 {% if entry.status == 'Absent' %}bg-rose-50/30{% elif entry.status == 'On Exeat' %}bg-purple-50/20{% elif entry.status == 'Unmarked' %}bg-amber-50/30{% endif %}">
   
   <!-- Student Identity Column -->
-  <div class="{% if entry.status == 'Absent' %}col-span-12{% else %}col-span-7{% endif %} min-w-0 flex items-center">
+  <div class="col-span-12 {% if entry.status != 'Absent' %}sm:col-span-7{% endif %} min-w-0 flex items-center">
     <div class="flex items-center gap-2.5 min-w-0">
       <div class="w-8 h-8 sm:w-7 sm:h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0
         {% if entry.status == 'Present' %}bg-emerald-100 text-emerald-800
@@ -39,17 +39,19 @@
   </div>
 
   <!-- Interactive Attendance Marking Actions -->
-  <div class="{% if entry.status == 'Absent' %}col-span-12{% else %}col-span-5{% endif %} min-w-0 w-full">
+  <div class="col-span-12 {% if entry.status != 'Absent' %}sm:col-span-5{% endif %} min-w-0 w-full">
     {% if entry.session.status == 'In Progress' %}
-      <form class="flex items-center w-full">
+      <form class="flex items-center w-full"
+            method="post"
+            action="{% url 'core:roll_call_update_entry' entry.id %}"
+            hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
+            hx-trigger="change"
+            hx-target="#entry-row-{{ entry.id }}"
+            hx-swap="outerHTML">
         {% csrf_token %}
         <label class="sr-only" for="roll-call-status-{{ entry.id }}">Attendance for {{ entry.student.full_name }}</label>
         <select id="roll-call-status-{{ entry.id }}"
                 name="status"
-                hx-post="{% url 'core:roll_call_update_entry' entry.id %}"
-                hx-trigger="change"
-                hx-target="#entry-row-{{ entry.id }}"
-                hx-swap="outerHTML"
                 class="min-w-0 w-full rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
           <option value="Unmarked" {% if entry.status == 'Unmarked' %}selected{% endif %}>Unmarked</option>
           <option value="Present" {% if entry.status == 'Present' %}selected{% endif %}>Present</option>
