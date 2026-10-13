@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Roll Call Sessions - Eden High School{% endblock %}
+{% block title %}Roll Call Sessions - {{ school_configuration.name }}{% endblock %}
 
 {% block content %}
 <div class="space-y-4" x-data="{ isNewSessionOpen: false }">

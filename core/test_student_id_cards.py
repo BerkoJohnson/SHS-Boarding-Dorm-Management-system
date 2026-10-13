@@ -1,12 +1,15 @@
 import base64
 import tempfile
 import uuid
+from io import BytesIO
 from pathlib import Path
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from PIL import Image
 
 from core.models import (
     Dormitory,
@@ -20,6 +23,11 @@ from core.models import (
     Student,
     StudentIDExport,
     UserProfile,
+)
+from core.services.student_id_images import (
+    CARD_HEIGHT,
+    CARD_WIDTH,
+    render_student_card_side,
 )
 
 
@@ -74,7 +82,7 @@ class StudentIdCardTests(TestCase):
         values.update(kwargs)
         return Exeat.objects.create(**values)
 
-    def test_id_card_is_restricted_and_renders_fixed_branded_layouts(self):
+    def test_id_card_is_restricted_and_uses_configured_school_identity(self):
         url = reverse("core:student_id_card", args=[self.student.pk])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
@@ -90,7 +98,17 @@ class StudentIdCardTests(TestCase):
         self.assertContains(response, "crest-back-panel")
         self.assertContains(response, "Kwame Identity")
         self.assertContains(response, "Scan to verify")
+        self.assertContains(response, "Atebubu SHS")
         self.assertContains(response, "Atebubu, Bono East Region")
+        self.assertContains(response, "+233 20 000 0000")
+        self.assertContains(response, "LOGO")
+        card_markup = response.content.split(b'<main class="card-print-area', 1)[1].split(b"</main>", 1)[0]
+        self.assertIn(b"Atebubu SHS", card_markup)
+        self.assertIn(b"Atebubu, Bono East Region", card_markup)
+        self.assertIn(b"+233 20 000 0000", card_markup)
+        self.assertNotIn(b"SCHOOL NAME", card_markup)
+        self.assertNotIn(b"SCHOOL ADDRESS", card_markup)
+        self.assertNotIn(b"SCHOOL CONTACT", card_markup)
         self.assertNotContains(response, "Parent Contact")
         qr_data_uri = response.context["qr_code"]
         self.assertTrue(qr_data_uri.startswith("data:image/svg+xml;base64,"))
@@ -104,7 +122,7 @@ class StudentIdCardTests(TestCase):
             response.context["public_url"],
         )
 
-    def test_school_address_is_shown_on_other_card_layouts(self):
+    def test_other_card_layouts_use_configured_school_identity(self):
         self.client.force_login(self.admin)
         url = reverse("core:student_id_card", args=[self.student.pk])
 
@@ -113,7 +131,68 @@ class StudentIdCardTests(TestCase):
                 response = self.client.get(url, {"layout": layout})
 
                 self.assertEqual(response.status_code, 200)
+                self.assertContains(response, "Atebubu SHS")
                 self.assertContains(response, "Atebubu, Bono East Region")
+                self.assertContains(response, "+233 20 000 0000")
+                card_markup = response.content.split(b'<main class="card-print-area', 1)[1].split(b"</main>", 1)[0]
+                self.assertIn(b"Atebubu SHS", card_markup)
+                self.assertIn(b"Atebubu, Bono East Region", card_markup)
+                self.assertIn(b"+233 20 000 0000", card_markup)
+                self.assertNotIn(b"SCHOOL NAME", card_markup)
+                self.assertNotIn(b"SCHOOL ADDRESS", card_markup)
+                self.assertNotIn(b"SCHOOL CONTACT", card_markup)
+
+    def test_generated_card_images_use_configured_school_identity(self):
+        for layout in ("classic", "crest", "modern"):
+            for side in ("front", "back"):
+                with self.subTest(layout=layout, side=side):
+                    image_bytes = render_student_card_side(
+                        self.student,
+                        school_configuration=SchoolConfiguration.get_solo(),
+                        public_url="https://example.test/verify",
+                        layout=layout,
+                        side=side,
+                        image_format="PNG",
+                    )
+
+                    with Image.open(BytesIO(image_bytes)) as image:
+                        self.assertEqual(image.format, "PNG")
+                        self.assertEqual(image.size, (CARD_WIDTH, CARD_HEIGHT))
+
+    def test_generated_card_image_embeds_the_configured_school_logo(self):
+        logo_output = BytesIO()
+        Image.new("RGBA", (30, 30), (220, 30, 40, 255)).save(
+            logo_output,
+            format="PNG",
+        )
+        configuration = SchoolConfiguration.get_solo()
+
+        with tempfile.TemporaryDirectory() as media_directory:
+            with override_settings(MEDIA_ROOT=media_directory):
+                configuration.logo.save(
+                    "school-logo.png",
+                    SimpleUploadedFile(
+                        "school-logo.png",
+                        logo_output.getvalue(),
+                        content_type="image/png",
+                    ),
+                    save=True,
+                )
+                image_bytes = render_student_card_side(
+                    self.student,
+                    school_configuration=configuration,
+                    public_url="https://example.test/verify",
+                    layout="classic",
+                    side="front",
+                    image_format="PNG",
+                )
+
+        with Image.open(BytesIO(image_bytes)) as image:
+            logo_area = image.crop((30, 20, 105, 105))
+            self.assertGreater(
+                sum(1 for pixel in logo_area.getdata() if pixel == (220, 30, 40)),
+                0,
+            )
 
     def test_id_card_rejects_unknown_layout(self):
         self.client.force_login(self.admin)
@@ -193,7 +272,7 @@ class StudentIdCardTests(TestCase):
         )
 
     def test_public_qr_shows_only_latest_exeat_and_gate_movements(self):
-        self.create_exeat(
+        older_exeat = self.create_exeat(
             exeat_type=Exeat.ExeatType.MEDICAL,
             destination="Older private destination",
             reason="Older private reason",
@@ -201,6 +280,9 @@ class StudentIdCardTests(TestCase):
         exeat = self.create_exeat(
             status=Exeat.Status.APPROVED,
             approved_by=self.approver,
+        )
+        Exeat.objects.filter(pk=older_exeat.pk).update(
+            created_at=timezone.now() - timezone.timedelta(minutes=1)
         )
         now = timezone.now()
         ExeatMovement.objects.create(
@@ -219,6 +301,13 @@ class StudentIdCardTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Atebubu SHS")
+        self.assertContains(response, "Atebubu, Bono East Region")
+        self.assertContains(response, "+233 20 000 0000")
+        self.assertContains(response, "LOGO")
+        self.assertNotContains(response, "SCHOOL NAME")
+        self.assertNotContains(response, "SCHOOL ADDRESS")
+        self.assertNotContains(response, "SCHOOL CONTACT")
         self.assertContains(response, "Kwame Identity")
         self.assertContains(response, "Approved departure")
         self.assertContains(response, "Gate departure")

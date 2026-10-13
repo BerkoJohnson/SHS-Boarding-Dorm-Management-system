@@ -36,7 +36,44 @@
 
         <!-- Session Command Actions -->
         {% include "core/operations/partials/roll_call_actions.html" with current_session=current_session %}
+        {% if can_delete_session %}
+          <form method="post" action="{% url 'core:roll_call_delete' current_session.id %}"
+                onsubmit="return confirm('Delete this roll call and its attendance records?')">
+            {% csrf_token %}
+            <button type="submit" class="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-xs font-semibold text-rose-700 hover:bg-rose-100">
+              Delete Roll Call
+            </button>
+          </form>
+        {% endif %}
       </div>
+
+      {% if current_session.status == 'In Progress' %}
+        <p class="mt-2 text-xs {% if current_session.is_expired %}text-rose-700{% else %}text-amber-700{% endif %}">
+          {% if current_session.is_expired %}
+            This roll call has expired and will be deleted shortly.
+          {% else %}
+            Complete within one hour. Time remaining:
+            <strong data-roll-call-countdown data-expires-at="{{ current_session.expires_at|date:'c' }}">Calculating…</strong>
+          {% endif %}
+        </p>
+        {% if not current_session.is_expired %}
+          <script>
+            (() => {
+              const countdown = document.querySelector("[data-roll-call-countdown]");
+              if (!countdown) return;
+              const expiresAt = Date.parse(countdown.dataset.expiresAt);
+              const updateCountdown = () => {
+                const seconds = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+                countdown.textContent = seconds
+                  ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+                  : "Expired";
+              };
+              updateCountdown();
+              window.setInterval(updateCountdown, 1000);
+            })();
+          </script>
+        {% endif %}
+      {% endif %}
 
       <!-- Quick Metrics Strip -->
       {% include "core/operations/partials/roll_call_metrics.html" with current_session=current_session %}

@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from django.db import models, transaction
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import FileExtensionValidator, RegexValidator
@@ -13,6 +13,7 @@ from .storage import PrivateStudentPhotoStorage
 
 MAX_STUDENT_PHOTO_SIZE = 5 * 1024 * 1024
 MAX_STUDENT_PHOTO_PIXELS = 25_000_000
+ROLL_CALL_SESSION_TIMEOUT = timedelta(hours=1)
 
 
 def validate_student_photo(photo):
@@ -1294,6 +1295,14 @@ class RollCallSession(BaseModel):
         related_name="conducted_roll_calls",
         help_text="Staff member conducting this roll call muster."
     )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_roll_call_sessions",
+        help_text="User who started this roll call session."
+    )
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -1345,6 +1354,39 @@ class RollCallSession(BaseModel):
             return 0
         present = self.present_count
         return round((present / total) * 100, 1)
+
+    @property
+    def expires_at(self):
+        if not self.created_at:
+            return None
+        return self.created_at + ROLL_CALL_SESSION_TIMEOUT
+
+    @property
+    def is_expired(self):
+        return (
+            self.status == self.Status.IN_PROGRESS
+            and self.expires_at is not None
+            and timezone.now() >= self.expires_at
+        )
+
+
+class RollCallNotification(BaseModel):
+    """Persistent in-app notification for an expired roll call session."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="roll_call_notifications",
+    )
+    title = models.CharField(max_length=150)
+    message = models.TextField()
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.title} for {self.user}"
 
 
 class RollCallEntry(BaseModel):

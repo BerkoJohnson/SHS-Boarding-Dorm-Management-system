@@ -15,10 +15,12 @@ from core.models import (
     AcademicTerm,
     HouseMaster,
     StaffRole,
+    SchoolConfiguration,
     UserProfile,
     get_user_profile,
     RollCallSession,
     RollCallEntry,
+    RollCallNotification,
     RollCallAbsenceFollowUp,
 )
 from core.services.roll_call import (
@@ -29,6 +31,7 @@ from core.services.roll_call import (
     resolve_absence_follow_up,
 )
 from core.services.reports import get_detailed_report
+from core.tasks import expire_unfinished_roll_calls
 
 User = get_user_model()
 
@@ -381,9 +384,21 @@ class ExeatCreateViewTests(TestCase):
             status=Exeat.Status.APPROVED,
             approved_by=self.housemaster
         )
+        SchoolConfiguration.objects.update_or_create(
+            defaults={
+                'name': 'EDEN SENIOR HIGH SCHOOL',
+                'address': 'School Road, Atebubu',
+                'contact_number': '+233 20 123 4567',
+            }
+        )
         response = self.client.get(f'/exeats/{exeat.pk}/')
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'Official Boarding Student Leave Authorization', response.content)
+        self.assertContains(response, 'EDEN SENIOR HIGH SCHOOL')
+        self.assertContains(response, 'School Road, Atebubu')
+        self.assertContains(response, '+233 20 123 4567')
+        self.assertContains(response, 'LOGO')
+        self.assertNotContains(response, 'SCHOOL NAME')
         self.assertIn(exeat.exeat_number.encode(), response.content)
         self.assertIn(b'Unknown', response.content)
 
@@ -1763,6 +1778,111 @@ class RollCallAndGateTests(TestCase):
         self.assertIn(self.boarder2.id, student_ids)
         self.assertNotIn(self.day_student.id, student_ids)
 
+    def test_roll_call_creation_tracks_the_logged_in_user_as_owner(self):
+        self.client.force_login(self.user_hm)
+
+        response = self.client.post(
+            '/operations/roll-call/new/',
+            {'house': str(self.house.pk), 'session_type': RollCallSession.SessionType.EVENING},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        session = RollCallSession.objects.get()
+        self.assertEqual(session.created_by, self.user_hm)
+        self.assertEqual(
+            session.expires_at - session.created_at,
+            timezone.timedelta(hours=1),
+        )
+
+    def test_only_owner_or_admin_can_delete_a_roll_call(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+            created_by=self.user_hm,
+        )
+        other_user = User.objects.create_user(
+            username='another_housemaster',
+            password='password123',
+        )
+        other_housemaster = HouseMaster.objects.create(
+            user=other_user,
+            full_name='Another Housemaster',
+            staff_id='STF-VLT-02',
+            phone_number='0241999555',
+            house=self.house,
+        )
+        other_profile = get_user_profile(other_user)
+        other_profile.role = StaffRole.HOUSEMASTER
+        other_profile.save(update_fields=['role'])
+
+        self.client.force_login(other_user)
+        denied_response = self.client.post(
+            reverse('core:roll_call_delete', args=[session.pk])
+        )
+        self.assertEqual(denied_response.status_code, 404)
+        self.assertTrue(RollCallSession.objects.filter(pk=session.pk).exists())
+
+        self.client.force_login(self.user_hm)
+        owner_response = self.client.post(
+            reverse('core:roll_call_delete', args=[session.pk])
+        )
+        self.assertRedirects(owner_response, reverse('core:roll_call_sessions'))
+        self.assertFalse(RollCallSession.objects.filter(pk=session.pk).exists())
+
+        other_session = create_roll_call_session(
+            house=self.house,
+            conducted_by=other_housemaster,
+            created_by=other_user,
+        )
+        admin = User.objects.create_user(username='roll-call-admin', password='password123')
+        admin_profile = get_user_profile(admin)
+        admin_profile.role = StaffRole.ADMIN
+        admin_profile.save(update_fields=['role'])
+        self.assertEqual(
+            UserProfile.objects.get(user=admin).role,
+            StaffRole.ADMIN,
+        )
+        self.client.force_login(admin)
+        admin_response = self.client.post(
+            reverse('core:roll_call_delete', args=[other_session.pk])
+        )
+        self.assertRedirects(admin_response, reverse('core:roll_call_sessions'))
+        self.assertFalse(RollCallSession.objects.filter(pk=other_session.pk).exists())
+
+    def test_expired_unfinished_roll_calls_are_deleted_and_notify_the_creator(self):
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+            created_by=self.user_hm,
+        )
+        RollCallSession.objects.filter(pk=session.pk).update(
+            created_at=timezone.now() - timezone.timedelta(hours=1, minutes=1)
+        )
+        session.refresh_from_db()
+        with self.assertRaisesMessage(ValueError, 'This roll call session has expired.'):
+            update_entry_status(
+                session.entries.first(),
+                RollCallEntry.Status.PRESENT,
+                updated_by=self.user_hm,
+            )
+
+        deleted_count = expire_unfinished_roll_calls()
+
+        self.assertEqual(deleted_count, 1)
+        self.assertFalse(RollCallSession.objects.filter(pk=session.pk).exists())
+        notification = RollCallNotification.objects.get(user=self.user_hm)
+        self.assertIn('deleted because it was not completed within one hour', notification.message)
+
+        self.client.force_login(self.user_hm)
+        dashboard_response = self.client.get('/')
+        self.assertContains(dashboard_response, 'Unfinished roll call expired')
+        read_response = self.client.post(
+            reverse('core:roll_call_notification_read', args=[notification.pk])
+        )
+        self.assertEqual(read_response.status_code, 302)
+        notification.refresh_from_db()
+        self.assertIsNotNone(notification.read_at)
+
     def test_roll_call_roster_is_paginated_and_keeps_session_selected(self):
         for index in range(15):
             Student.objects.create(
@@ -1819,7 +1939,7 @@ class RollCallAndGateTests(TestCase):
             ExeatMovement.objects.create(
                 exeat=exeat,
                 actual_departure=now - timezone.timedelta(minutes=index + 1),
-                departure_recorded_by='Gate Officer Bob',
+                departure_recorded_by=self.user_gate.username,
             )
 
         reconciled_exeat = Exeat.objects.create(
@@ -1859,6 +1979,58 @@ class RollCallAndGateTests(TestCase):
             htmx_response, 'core/operations/partials/gate_terminal_body.html'
         )
         self.assertNotContains(htmx_response, '<!DOCTYPE html>')
+
+    def test_gate_officer_dashboard_shows_only_their_current_year_operations(self):
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder1,
+            academic_term=self.term,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=2),
+            expected_return=now + timezone.timedelta(hours=2),
+            destination='Town',
+            reason='Current-year gate operation',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.hm,
+        )
+        ExeatMovement.objects.create(
+            exeat=exeat,
+            actual_departure=now - timezone.timedelta(hours=1),
+            actual_return=now - timezone.timedelta(minutes=30),
+            departure_recorded_by=self.user_gate.username,
+            return_recorded_by=self.user_gate.username,
+        )
+        another_exeat = Exeat.objects.create(
+            student=self.boarder2,
+            academic_term=self.term,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=2),
+            expected_return=now + timezone.timedelta(hours=2),
+            destination='Town',
+            reason='Another officer operation',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.hm,
+        )
+        ExeatMovement.objects.create(
+            exeat=another_exeat,
+            actual_departure=now - timezone.timedelta(minutes=45),
+            departure_recorded_by='another-officer',
+        )
+
+        self.client.force_login(self.user_gate)
+        response = self.client.get('/operations/gate/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['academic_year_departures'], 1)
+        self.assertEqual(response.context['academic_year_returns'], 1)
+        self.assertEqual(response.context['recent_movements_page'].paginator.count, 1)
+        self.assertEqual(
+            response.context['recent_movements_page'][0].exeat_id,
+            exeat.pk,
+        )
+        self.assertContains(response, self.year.name)
+        self.assertContains(response, 'My Gate Operations')
+        self.assertContains(response, self.boarder1.full_name)
 
     def test_roll_call_auto_detects_active_exeat(self):
         """Students currently departed on approved exeat are automatically marked ON_EXEAT."""
@@ -2888,6 +3060,13 @@ class HouseScopedAccessTests(TestCase):
         self.assertTemplateUsed(print_response, 'core/reports/print.html')
 
     def test_admin_and_senior_housemaster_reports_are_school_wide(self):
+        SchoolConfiguration.objects.update_or_create(
+            defaults={
+                'name': 'EDEN SENIOR HIGH SCHOOL',
+                'address': 'School Road, Atebubu',
+                'contact_number': '+233 20 123 4567',
+            }
+        )
         DisciplinaryRecord.objects.create(
             student=self.student_a,
             academic_term=self.term,
@@ -2925,6 +3104,10 @@ class HouseScopedAccessTests(TestCase):
                 f'/reports/print/?report=discipline&term={self.term.pk}'
             )
             self.assertContains(print_response, 'Cobalt report incident')
+            self.assertContains(print_response, 'EDEN SENIOR HIGH SCHOOL')
+            self.assertContains(print_response, 'School Road, Atebubu')
+            self.assertContains(print_response, '+233 20 123 4567')
+            self.assertContains(print_response, 'LOGO')
 
     def test_invalid_report_date_range_is_reported_and_cannot_be_printed(self):
         self.client.force_login(self.hm_user)

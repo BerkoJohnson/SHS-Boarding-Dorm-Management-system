@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{% if student %}Edit Student{% else %}Register Student{% endif %} - Eden High School{% endblock %}
+{% block title %}{% if student %}Edit Student{% else %}Register Student{% endif %} - {{ school_configuration.name }}{% endblock %}
 
 {% block extra_head %}
 <style>

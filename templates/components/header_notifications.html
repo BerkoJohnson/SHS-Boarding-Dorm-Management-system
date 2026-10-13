@@ -91,9 +91,15 @@
         <div class="max-h-80 overflow-y-auto divide-y divide-slate-100">
             {% if notifications %}
                 {% for item in notifications %}
-                <a href="{{ item.url }}" 
-                   @click="notifOpen = false"
+                {% if item.notification_id %}
+                <form method="post" action="{% url 'core:roll_call_notification_read' item.notification_id %}">
+                    {% csrf_token %}
+                    <button type="submit" @click="notifOpen = false"
+                            class="flex w-full items-start gap-3 p-3 text-left hover:bg-slate-50 transition group">
+                {% else %}
+                <a href="{{ item.url }}" @click="notifOpen = false"
                    class="flex items-start gap-3 p-3 hover:bg-slate-50 transition group">
+                {% endif %}
                     
                     <!-- Category Indicator Dot / Icon -->
                     <div class="mt-0.5 shrink-0">
@@ -103,7 +109,7 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                             </svg>
                         </div>
-                        {% elif item.category == 'pending' %}
+                        {% elif item.category == 'pending' or item.category == 'roll_call_expired' %}
                         <div class="w-7 h-7 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center border border-amber-200">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -123,7 +129,7 @@
                         <div class="flex items-center justify-between gap-1">
                             <span class="text-[10px] font-semibold uppercase tracking-wider 
                                 {% if item.category == 'overdue' %}text-rose-600
-                                {% elif item.category == 'pending' %}text-amber-600
+                                {% elif item.category == 'pending' or item.category == 'roll_call_expired' %}text-amber-600
                                 {% else %}text-red-600{% endif %}">
                                 {{ item.category_label }}
                             </span>
@@ -144,7 +150,12 @@
                         </svg>
                     </div>
 
+                {% if item.notification_id %}
+                    </button>
+                </form>
+                {% else %}
                 </a>
+                {% endif %}
                 {% endfor %}
             {% else %}
                 <!-- Empty State -->

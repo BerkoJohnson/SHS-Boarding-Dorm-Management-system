@@ -5,7 +5,8 @@ from typing import Dict, Any, List
 from django.utils import timezone
 from django.db.models import Q
 from core.models import (
-    Exeat, ExeatReconciliation, DisciplinaryRecord, SchoolConfiguration, StaffRole,
+    Exeat, ExeatReconciliation, DisciplinaryRecord, SchoolConfiguration,
+    StaffRole,
     get_user_profile, get_approvable_pending_for_user,
 )
 from core.permissions import (
@@ -212,7 +213,29 @@ def header_context(request) -> Dict[str, Any]:
             "icon": "shield-alert",
         })
 
-    total_notifications = overdue_count + unresolved_count + pending_count + critical_count
+    unread_roll_call_notifications = user.roll_call_notifications.filter(
+        read_at__isnull=True
+    )
+    for notification in unread_roll_call_notifications[:3]:
+        notifications.append({
+            "category": "roll_call_expired",
+            "category_label": "Roll Call Expired",
+            "title": notification.title,
+            "subtitle": notification.message,
+            "time_ago": "Needs attention",
+            "url": "/operations/roll-call/",
+            "notification_id": notification.pk,
+            "badge_color": "amber",
+            "icon": "clock",
+        })
+
+    total_notifications = (
+        overdue_count
+        + unresolved_count
+        + pending_count
+        + critical_count
+        + unread_roll_call_notifications.count()
+    )
 
     # 4. User identity and Housemaster profile resolution
     user_initials = get_user_initials(user)

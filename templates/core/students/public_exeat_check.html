@@ -12,7 +12,8 @@
     main { width: min(100%, 560px); margin: 0 auto; }
     header, section { border: 1px solid #e2e8f0; border-radius: 14px; background: white; box-shadow: 0 4px 16px rgb(15 23 42 / 6%); }
     header { display: flex; align-items: center; gap: 12px; padding: 16px; }
-    header img { width: 48px; height: 48px; border-radius: 8px; background: white; object-fit: contain; }
+    .logo-placeholder { display: grid; width: 48px; height: 48px; flex: none; place-items: center; border: 1px dashed #94a3b8; border-radius: 8px; color: #64748b; font-size: 9px; font-weight: 800; }
+    .school-logo { width: 48px; height: 48px; flex: none; object-fit: contain; }
     header h1 { margin: 0; font-size: 16px; }
     header p { margin: 4px 0 0; color: #64748b; font-size: 11px; }
     section { margin-top: 14px; padding: 16px; }
@@ -36,10 +37,14 @@
 <body>
 <main>
   <header>
-    {% if school_configuration.logo %}<img src="{{ school_configuration.logo.url }}" alt="">{% endif %}
+    {% if school_configuration.logo %}
+      <img class="school-logo" src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} logo">
+    {% else %}
+      <div class="logo-placeholder" aria-label="School logo placeholder">LOGO</div>
+    {% endif %}
     <div>
       <h1>{{ school_configuration.name }}</h1>
-      <p>Student ID · Exeat check</p>
+      <p>Student ID · Exeat check{% if school_configuration.address %} · {{ school_configuration.address }}{% endif %}{% if school_configuration.contact_number %} · {{ school_configuration.contact_number }}{% endif %}</p>
     </div>
   </header>
 

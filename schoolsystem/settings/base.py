@@ -253,4 +253,8 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.enqueue_overdue_exeat_reminders",
         "schedule": 15 * 60.0,
     },
+    "expire-unfinished-roll-calls": {
+        "task": "core.tasks.expire_unfinished_roll_calls",
+        "schedule": 60.0,
+    },
 }

@@ -193,17 +193,28 @@
     <!-- Official Printable Exeat Pass Slip -->
     <div class="bg-white border border-slate-200/90 rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 print:border-none print:shadow-none">
         
-        <!-- Header: Crest & Official Institution Title -->
+        <!-- School identity is configured in the system settings. -->
         <div class="text-center border-b border-slate-200/80 pb-5">
-            <div class="w-12 h-12 mx-auto rounded-xl bg-gradient-to-tr from-sky-600 to-brand-600 text-white flex items-center justify-center font-extrabold text-xl shadow-md mb-2">
-                SHS
+            {% if school_configuration.logo %}
+            <img src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} logo" class="w-12 h-12 mx-auto object-contain mb-2">
+            {% else %}
+            <div class="w-12 h-12 mx-auto rounded-xl border-2 border-dashed border-slate-400 bg-slate-50 text-slate-500 flex items-center justify-center text-[9px] font-bold tracking-wide mb-2">
+                LOGO
             </div>
+            {% endif %}
             <h1 class="text-base sm:text-lg font-extrabold text-slate-900 tracking-wide uppercase">
-                EDEN SENIOR HIGH SCHOOL
+                {{ school_configuration.name }}
             </h1>
             <p class="text-2xs text-slate-500 font-medium uppercase tracking-wider">
                 Official Boarding Student Leave Authorization & Gate Movement Pass
             </p>
+            {% if school_configuration.address or school_configuration.contact_number %}
+            <p class="mt-1 text-[9px] text-slate-400 uppercase tracking-wide">
+                {% if school_configuration.address %}{{ school_configuration.address }}{% endif %}
+                {% if school_configuration.address and school_configuration.contact_number %} · {% endif %}
+                {% if school_configuration.contact_number %}{{ school_configuration.contact_number }}{% endif %}
+            </p>
+            {% endif %}
             <div class="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 border border-slate-200 text-xs font-mono font-bold text-slate-800">
                 <span>PASS NO:</span>
                 <span class="text-brand-700">{{ exeat.exeat_number }}</span>

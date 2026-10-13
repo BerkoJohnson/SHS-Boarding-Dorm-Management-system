@@ -5,7 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import qrcode
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 
 from django.conf import settings
 
@@ -89,7 +89,15 @@ def render_student_card_side(
     if side == "front":
         _draw_front(image, draw, fonts, colors, layout, student, school_configuration)
     else:
-        _draw_back(image, draw, fonts, colors, layout, student, school_configuration, public_url)
+        _draw_back(
+            image,
+            draw,
+            fonts,
+            colors,
+            layout,
+            public_url,
+            school_configuration,
+        )
 
     output = BytesIO()
     if image_format == "PNG":
@@ -140,20 +148,17 @@ def _draw_front(image, draw, fonts, colors, layout, student, school_configuratio
         width=3,
     )
 
-    logo = _open_image(school_configuration.logo)
     if layout == "crest":
-        _draw_crest_front_header(image, draw, fonts, colors, school_configuration, logo, student)
+        _draw_crest_front_header(image, draw, fonts, colors, student, school_configuration)
     elif layout == "classic":
         draw.rectangle((0, 0, CARD_WIDTH, 145), fill=colors["ink"])
-        if logo:
-            _paste_contained(image, logo, (34, 27, 100, 100))
-        _draw_school_heading(draw, fonts, school_configuration.name, 125, 40, "white", "#dbeafe")
+        _draw_school_logo(image, draw, fonts, school_configuration, (34, 27, 100, 100))
+        _draw_school_heading(draw, fonts, 125, 40, "white", "#dbeafe", school_configuration.name)
         draw.text((CARD_WIDTH - 180, 57), student.get_residency_display().upper(), font=fonts["label"], fill="#dbeafe")
     else:
         draw.rectangle((0, 0, CARD_WIDTH, 14), fill=colors["accent"])
-        if logo:
-            _paste_contained(image, logo, (34, 30, 91, 91))
-        _draw_school_heading(draw, fonts, school_configuration.name, 110, 37, colors["ink"], colors["muted"])
+        _draw_school_logo(image, draw, fonts, school_configuration, (34, 30, 91, 91))
+        _draw_school_heading(draw, fonts, 110, 37, colors["ink"], colors["muted"], school_configuration.name)
         draw.rounded_rectangle((790, 42, 974, 91), radius=20, fill=colors["pale"])
         draw.text((810, 54), student.get_residency_display().upper(), font=fonts["label"], fill=colors["ink"])
 
@@ -180,20 +185,19 @@ def _draw_front(image, draw, fonts, colors, layout, student, school_configuratio
             draw.rectangle((0, CARD_HEIGHT - 12, CARD_WIDTH, CARD_HEIGHT), fill=colors["accent"])
 
 
-def _draw_crest_front_header(image, draw, fonts, colors, configuration, logo, student):
+def _draw_crest_front_header(image, draw, fonts, colors, student, school_configuration):
     draw.rectangle((0, 0, CARD_WIDTH, 145), fill="#f5fbf5")
     draw.polygon([(720, 0), (CARD_WIDTH, 0), (CARD_WIDTH, 145), (800, 145)], fill="#d8eed7")
     draw.polygon([(830, 0), (CARD_WIDTH, 0), (CARD_WIDTH, 145), (910, 145)], fill="#80bc71")
     draw.polygon([(940, 0), (CARD_WIDTH, 0), (CARD_WIDTH, 145)], fill="#39854d")
-    if logo:
-        _paste_contained(image, logo, (35, 25, 98, 98), circular=True)
-    _draw_school_heading(draw, fonts, configuration.name, 145, 39, "#123b27", "#477153")
+    _draw_school_logo(image, draw, fonts, school_configuration, (35, 25, 98, 98), circular=True)
+    _draw_school_heading(draw, fonts, 145, 39, "#123b27", "#477153", school_configuration.name)
     draw.rounded_rectangle((823, 50, 974, 99), radius=22, fill="#e3f2df")
     draw.text((841, 62), student.get_residency_display().upper(), font=fonts["label"], fill="#24613b")
 
 
-def _draw_school_heading(draw, fonts, name, x, y, title_color, subtitle_color):
-    title = _fit_text(draw, name.upper(), fonts["heading"], CARD_WIDTH - x - 235)
+def _draw_school_heading(draw, fonts, x, y, title_color, subtitle_color, school_name):
+    title = _fit_text(draw, school_name, fonts["heading"], CARD_WIDTH - x - 235)
     draw.text((x, y), title, font=fonts["heading"], fill=title_color)
     draw.text((x, y + 49), "STUDENT IDENTITY CARD", font=fonts["small"], fill=subtitle_color)
 
@@ -212,7 +216,7 @@ def _draw_student_fields(draw, fonts, student, start_x, start_y, columns, colors
         draw.text((x, y + 32), _fit_text(draw, value, fonts["body_bold"], column_width - 18), font=fonts["body_bold"], fill=colors["text"])
 
 
-def _draw_back(image, draw, fonts, colors, layout, student, school_configuration, public_url):
+def _draw_back(image, draw, fonts, colors, layout, public_url, school_configuration):
     draw.rounded_rectangle(
         (0, 0, CARD_WIDTH - 1, CARD_HEIGHT - 1),
         radius=28,
@@ -223,9 +227,14 @@ def _draw_back(image, draw, fonts, colors, layout, student, school_configuration
     if layout == "crest":
         panel_width = 205
         _draw_geometric_panel(draw, panel_width)
-        logo = _open_image(school_configuration.logo)
-        if logo:
-            _draw_circular_logo(image, logo, (57, 250, 148, 341))
+        _draw_school_logo(
+            image,
+            draw,
+            fonts,
+            school_configuration,
+            (57, 250, 148, 341),
+            circular=True,
+        )
         content_left = 230
     else:
         panel_width = 16
@@ -246,13 +255,26 @@ def _draw_back(image, draw, fonts, colors, layout, student, school_configuration
     )
     draw.line((content_left, 286, content_left + 473, 286), fill="#dce8dc", width=3)
     draw.text((content_left, 314), "IF FOUND, RETURN TO", font=fonts["label"], fill=colors["muted"])
-    draw.text((content_left, 351), _fit_text(draw, school_configuration.name, fonts["body_bold"], 468), font=fonts["body_bold"], fill=colors["ink"])
-    address_lines = _wrap_lines(draw, school_configuration.address, fonts["small"], 468, 2)
-    for index, line in enumerate(address_lines):
-        draw.text((content_left, 391 + index * 25), line, font=fonts["small"], fill=colors["muted"])
-    phone_y = 391 + len(address_lines) * 25
+    draw.text(
+        (content_left, 351),
+        _fit_text(draw, school_configuration.name, fonts["body_bold"], 473),
+        font=fonts["body_bold"],
+        fill=colors["ink"],
+    )
+    if school_configuration.address:
+        draw.text(
+            (content_left, 391),
+            _fit_text(draw, school_configuration.address, fonts["small"], 473),
+            font=fonts["small"],
+            fill=colors["muted"],
+        )
     if school_configuration.contact_number:
-        draw.text((content_left, phone_y), school_configuration.contact_number, font=fonts["small"], fill=colors["muted"])
+        draw.text(
+            (content_left, 416),
+            _fit_text(draw, school_configuration.contact_number, fonts["small"], 473),
+            font=fonts["small"],
+            fill=colors["muted"],
+        )
 
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=9, border=2)
     qr.add_data(public_url)
@@ -307,19 +329,6 @@ def _draw_photo(image, student, box, colors):
     image.paste(photo, (left, top), mask)
 
 
-def _draw_circular_logo(image, logo, box):
-    left, top, right, bottom = box
-    size = min(right - left, bottom - top)
-    logo = ImageOps.contain(logo, (size - 14, size - 14))
-    base = Image.new("RGBA", (size, size), (255, 255, 255, 255))
-    logo_x = (size - logo.width) // 2
-    logo_y = (size - logo.height) // 2
-    base.alpha_composite(logo, (logo_x, logo_y))
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((1, 1, size - 2, size - 2), fill=255)
-    image.paste(base.convert("RGB"), (left, top), mask)
-
-
 def _open_image(field):
     if not field:
         return None
@@ -328,17 +337,43 @@ def _open_image(field):
             return ImageOps.exif_transpose(image).convert("RGBA")
 
 
-def _paste_contained(image, logo, box, circular=False):
+def _draw_school_logo(image, draw, fonts, school_configuration, box, circular=False):
     left, top, right, bottom = box
+    bounds = (left, top, right - 1, bottom - 1)
     if circular:
-        _draw_circular_logo(image, logo, box)
+        draw.ellipse(bounds, fill="white", outline="#94a3b8", width=3)
+    else:
+        draw.rounded_rectangle(bounds, radius=8, fill="white", outline="#94a3b8", width=3)
+    logo = _open_image(school_configuration.logo)
+    if logo:
+        logo = ImageOps.contain(logo, (right - left - 12, bottom - top - 12))
+        mask = Image.new("L", logo.size, 0)
+        mask_draw = ImageDraw.Draw(mask)
+        if circular:
+            mask_draw.ellipse((0, 0, logo.width - 1, logo.height - 1), fill=255)
+        else:
+            mask_draw.rounded_rectangle(
+                (0, 0, logo.width - 1, logo.height - 1),
+                radius=5,
+                fill=255,
+            )
+        mask = ImageChops.multiply(mask, logo.getchannel("A"))
+        image.paste(
+            logo,
+            (
+                left + (right - left - logo.width) // 2,
+                top + (bottom - top - logo.height) // 2,
+            ),
+            mask,
+        )
         return
-    contained = ImageOps.contain(logo, (right - left, bottom - top))
-    image.paste(
-        contained.convert("RGB"),
-        (left + (right - left - contained.width) // 2, top + (bottom - top - contained.height) // 2),
-        contained.getchannel("A") if contained.mode == "RGBA" else None,
-    )
+
+    label_font = fonts["small"]
+    label = _fit_text(draw, "LOGO", label_font, right - left - 12)
+    text_bounds = draw.textbbox((0, 0), label, font=label_font)
+    x = left + ((right - left) - (text_bounds[2] - text_bounds[0])) // 2
+    y = top + ((bottom - top) - (text_bounds[3] - text_bounds[1])) // 2
+    draw.text((x, y), label, font=label_font, fill="#64748b")
 
 
 def _fit_text(draw, text, font, max_width):

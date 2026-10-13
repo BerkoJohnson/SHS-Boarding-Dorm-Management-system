@@ -6,6 +6,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from celery import shared_task
 from django.conf import settings
+from django.db import transaction
 from django.db.models import F, Q
 from django.urls import reverse
 from django.utils import timezone
@@ -169,6 +170,59 @@ def enqueue_overdue_exeat_reminders() -> int:
 
 
 @shared_task
+def expire_unfinished_roll_calls() -> int:
+    from core.models import (
+        ROLL_CALL_SESSION_TIMEOUT,
+        RollCallNotification,
+        RollCallSession,
+    )
+
+    now = timezone.now()
+    expired_ids = RollCallSession.objects.filter(
+        status=RollCallSession.Status.IN_PROGRESS,
+        created_at__lte=now - ROLL_CALL_SESSION_TIMEOUT,
+    ).values_list("pk", flat=True)[:100]
+
+    deleted_count = 0
+    for session_id in expired_ids:
+        with transaction.atomic():
+            session = (
+                RollCallSession.objects.select_for_update(of=("self",))
+                .select_related("created_by", "conducted_by__user", "house")
+                .filter(
+                    pk=session_id,
+                    status=RollCallSession.Status.IN_PROGRESS,
+                    created_at__lte=now - ROLL_CALL_SESSION_TIMEOUT,
+                )
+                .first()
+            )
+            if session is None:
+                continue
+
+            owner = session.created_by
+            if owner is None and session.conducted_by_id:
+                owner = session.conducted_by.user
+            if owner is not None:
+                RollCallNotification.objects.create(
+                    user=owner,
+                    title="Unfinished roll call expired",
+                    message=(
+                        f"The {session.get_session_type_display()} for "
+                        f"{session.house.name} was deleted because it was not "
+                        "completed within one hour."
+                    ),
+                )
+            else:
+                logger.warning(
+                    "Expired roll call %s has no creator to notify",
+                    session.pk,
+                )
+            session.delete()
+            deleted_count += 1
+    return deleted_count
+
+
+@shared_task
 def generate_student_id_export(export_id: str, public_origin: str) -> bool:
     from core.models import SchoolConfiguration, Student, StudentIDExport
     from core.services.student_id_images import (
@@ -194,6 +248,7 @@ def generate_student_id_export(export_id: str, public_origin: str) -> bool:
         .select_related("programme", "house", "class_group")
         .order_by("full_name", "admission_no")
     )
+    school_configuration = SchoolConfiguration.get_solo()
     total_students = students.count()
     if not total_students:
         export.status = StudentIDExport.Status.FAILED
@@ -204,7 +259,6 @@ def generate_student_id_export(export_id: str, public_origin: str) -> bool:
         )
         return False
 
-    configuration = SchoolConfiguration.get_solo()
     export.status = StudentIDExport.Status.PROCESSING
     export.total_students = total_students
     export.processed_students = 0
@@ -232,7 +286,7 @@ def generate_student_id_export(export_id: str, public_origin: str) -> bool:
                 for side in ("front", "back"):
                     image_bytes = render_student_card_side(
                         student=student,
-                        school_configuration=configuration,
+                        school_configuration=school_configuration,
                         public_url=public_url,
                         layout=export.layout,
                         side=side,

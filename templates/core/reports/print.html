@@ -3,11 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ report.title }} | Eden High School</title>
+  <title>{{ report.title }} | {{ school_configuration.name }}</title>
   <style>
     :root { color-scheme: light; font-family: Arial, sans-serif; color: #172033; }
     body { margin: 0; background: #f1f5f9; }
     .report { max-width: 1200px; margin: 32px auto; padding: 32px; background: #fff; }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid #cbd5e1; }
+    .brand-mark { display: grid; width: 44px; height: 44px; flex: none; place-items: center; border: 1px dashed #64748b; color: #475569; font-size: 9px; font-weight: 700; }
+    .brand-logo { width: 44px; height: 44px; flex: none; object-fit: contain; }
+    .brand-name { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: .04em; }
+    .brand-details { margin: 3px 0 0; color: #64748b; font-size: 10px; }
     .toolbar { display: flex; justify-content: flex-end; margin-bottom: 24px; }
     button { border: 0; border-radius: 6px; background: #172033; color: #fff; padding: 10px 16px; font-weight: 700; cursor: pointer; }
     h1 { margin: 0; font-size: 24px; }
@@ -38,6 +43,23 @@
     <div class="toolbar no-print">
       <button type="button" onclick="window.print()">Print / Save as PDF</button>
     </div>
+    <header class="brand">
+      {% if school_configuration.logo %}
+        <img class="brand-logo" src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} logo">
+      {% else %}
+        <div class="brand-mark">LOGO</div>
+      {% endif %}
+      <div>
+        <p class="brand-name">{{ school_configuration.name }}</p>
+        {% if school_configuration.address or school_configuration.contact_number %}
+          <p class="brand-details">
+            {% if school_configuration.address %}{{ school_configuration.address }}{% endif %}
+            {% if school_configuration.address and school_configuration.contact_number %} · {% endif %}
+            {% if school_configuration.contact_number %}{{ school_configuration.contact_number }}{% endif %}
+          </p>
+        {% endif %}
+      </div>
+    </header>
     <h1>{{ report.title }}</h1>
     <p class="meta">
       <strong>Scope:</strong> {% if user_house_scope %}{{ user_house_scope.name }}{% else %}School-wide{% endif %}<br>

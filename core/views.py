@@ -31,6 +31,7 @@ from .models import (
     Programme,
     ClassGroup,
     DisciplinaryRecord,
+    AcademicYear,
     AcademicTerm,
     HouseMaster,
     StaffRole,
@@ -41,6 +42,7 @@ from .models import (
     RollCallSession,
     RollCallEntry,
     RollCallAbsenceFollowUp,
+    RollCallNotification,
     SchoolConfiguration,
     StudentIDExport,
 )
@@ -915,11 +917,11 @@ def student_id_card_view(request, student_pk):
         "core/students/id_card.html",
         {
             "student": student,
-            "school_configuration": SchoolConfiguration.get_solo(),
             "public_url": public_url,
             "qr_code": make_qr_data_uri(public_url),
             "layouts": STUDENT_ID_LAYOUTS.items(),
             "selected_layout": layout,
+            "school_configuration": SchoolConfiguration.get_solo(),
         },
     )
 
@@ -2049,6 +2051,22 @@ def roll_call_sessions_view(request):
         pagination_query.pop('entry_page', None)
         pagination_query = pagination_query.urlencode()
 
+    profile = get_user_profile(request.user)
+    is_admin = request.user.is_superuser or (
+        profile is not None and profile.role == StaffRole.ADMIN
+    )
+    can_delete_session = bool(
+        current_session
+        and (
+            is_admin
+            or current_session.created_by_id == request.user.pk
+            or (
+                current_session.created_by_id is None
+                and current_session.conducted_by is not None
+                and current_session.conducted_by.user_id == request.user.pk
+            )
+        )
+    )
     context = {
         'houses': houses,
         'recent_sessions': recent_sessions,
@@ -2070,6 +2088,7 @@ def roll_call_sessions_view(request):
         'selected_status': selected_status,
         'can_view_all_houses': house_scope is None,
         'user_house_scope': house_scope,
+        'can_delete_session': can_delete_session,
     }
 
     if request.htmx:
@@ -2140,7 +2159,51 @@ def gate_security_view(request):
     )
     in_campus_count = max(0, total_boarders - currently_out_count)
 
-    recent_movements = ExeatMovement.objects.filter(
+    current_academic_year = AcademicYear.objects.filter(is_current=True).first()
+    academic_year_movements = ExeatMovement.objects.none()
+    academic_year_departures = 0
+    academic_year_returns = 0
+    gate_operations_are_personal = False
+    if current_academic_year:
+        academic_year_range = (
+            current_academic_year.start_date,
+            current_academic_year.end_date,
+        )
+        academic_year_movements = ExeatMovement.objects.filter(
+            Q(actual_departure__date__range=academic_year_range)
+            | Q(actual_return__date__range=academic_year_range)
+        )
+        profile = get_user_profile(request.user)
+        if profile and profile.role == StaffRole.GATE_OFFICER and not request.user.is_superuser:
+            gate_operations_are_personal = True
+            officer_name = request.user.get_full_name() or request.user.username
+            academic_year_departures = ExeatMovement.objects.filter(
+                actual_departure__date__range=academic_year_range,
+                departure_recorded_by=officer_name,
+            ).count()
+            academic_year_returns = ExeatMovement.objects.filter(
+                actual_return__date__range=academic_year_range,
+                return_recorded_by=officer_name,
+            ).count()
+            academic_year_movements = ExeatMovement.objects.filter(
+                Q(
+                    actual_departure__date__range=academic_year_range,
+                    departure_recorded_by=officer_name,
+                )
+                | Q(
+                    actual_return__date__range=academic_year_range,
+                    return_recorded_by=officer_name,
+                )
+            )
+        else:
+            academic_year_departures = ExeatMovement.objects.filter(
+                actual_departure__date__range=academic_year_range
+            ).count()
+            academic_year_returns = ExeatMovement.objects.filter(
+                actual_return__date__range=academic_year_range
+            ).count()
+
+    recent_movements = academic_year_movements.filter(
         actual_departure__isnull=False
     ).select_related(
         'exeat', 'exeat__student', 'exeat__student__house'
@@ -2183,6 +2246,10 @@ def gate_security_view(request):
         'awaiting_departure_count': awaiting_departure_count,
         'awaiting_departures_query': awaiting_departures_query,
         'current_time': now,
+        'current_academic_year': current_academic_year,
+        'academic_year_departures': academic_year_departures,
+        'academic_year_returns': academic_year_returns,
+        'gate_operations_are_personal': gate_operations_are_personal,
     }
 
     if request.htmx:
@@ -2214,13 +2281,12 @@ def roll_call_create_session_view(request):
         conducted_by = None
         if hasattr(request.user, 'housemaster') and request.user.housemaster:
             conducted_by = request.user.housemaster
-        else:
-            conducted_by = HouseMaster.objects.filter(house=house).first() or HouseMaster.objects.first()
             
         session = create_roll_call_session(
             house=house,
             session_type=session_type,
             conducted_by=conducted_by,
+            created_by=request.user,
             dormitory=dormitory,
             notes=notes,
         )
@@ -2231,6 +2297,41 @@ def roll_call_create_session_view(request):
         )
         return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
         
+    return redirect('core:roll_call_sessions')
+
+
+@login_required
+@require_POST
+def roll_call_delete_session_view(request, session_pk):
+    """Delete an owned roll call, or any roll call as a system administrator."""
+    profile = get_user_profile(request.user)
+    is_admin = request.user.is_superuser or (
+        profile is not None and profile.role == StaffRole.ADMIN
+    )
+    sessions = RollCallSession.objects.all()
+    if not is_admin:
+        sessions = sessions.filter(
+            Q(created_by=request.user)
+            | Q(created_by__isnull=True, conducted_by__user=request.user)
+        )
+    session = get_object_or_404(sessions, pk=session_pk)
+    house_name = session.house.name
+    session.delete()
+    messages.success(request, f"Roll call for {house_name} was deleted.")
+    return redirect('core:roll_call_sessions')
+
+
+@login_required
+@require_POST
+def roll_call_notification_read_view(request, notification_pk):
+    notification = get_object_or_404(
+        RollCallNotification,
+        pk=notification_pk,
+        user=request.user,
+        read_at__isnull=True,
+    )
+    notification.read_at = timezone.now()
+    notification.save(update_fields=["read_at", "updated_at"])
     return redirect('core:roll_call_sessions')
 
 
@@ -2277,7 +2378,11 @@ def roll_call_mark_all_present_view(request, session_pk):
     if session.status == RollCallSession.Status.COMPLETED:
         messages.error(request, "Cannot modify a finalized roll call session.")
         return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
-    count = mark_all_present(session, request.user)
+    try:
+        count = mark_all_present(session, request.user)
+    except ValueError as error:
+        messages.error(request, str(error))
+        return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
     messages.success(
         request,
         f"Marked {count} eligible absent students present. Unmarked students, excused "
@@ -2716,6 +2821,7 @@ def _reports_context(request):
         'selected_term': term,
         'report_generated_at': timezone.localtime(),
         'active_tab': 'reports',
+        'school_configuration': SchoolConfiguration.get_solo(),
     }
 
 

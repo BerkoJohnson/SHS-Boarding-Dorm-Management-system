@@ -27,6 +27,7 @@ def create_roll_call_session(
     session_type: str = RollCallSession.SessionType.EVENING,
     inspection_date: Optional[date] = None,
     conducted_by: Optional[HouseMaster] = None,
+    created_by=None,
     dormitory: Optional[Dormitory] = None,
     academic_term: Optional[AcademicTerm] = None,
     notes: Optional[str] = None,
@@ -64,6 +65,7 @@ def create_roll_call_session(
             session_type=session_type,
             date=inspection_date,
             conducted_by=conducted_by,
+            created_by=created_by,
             status=RollCallSession.Status.IN_PROGRESS,
             notes=notes or "",
         )
@@ -147,6 +149,8 @@ def update_entry_status(
             raise ValueError(
                 "Cannot modify attendance records in a finalized roll call session."
             )
+        if session.is_expired:
+            raise ValueError("This roll call session has expired.")
 
         previous_status = entry.status
         entry.session = session
@@ -227,6 +231,8 @@ def complete_roll_call_session(session: RollCallSession) -> RollCallSession:
         )
         if locked_session.status == RollCallSession.Status.COMPLETED:
             return locked_session
+        if locked_session.is_expired:
+            raise ValueError("This roll call session has expired.")
 
         unmarked_count = locked_session.entries.filter(
             status=RollCallEntry.Status.UNMARKED
@@ -273,6 +279,8 @@ def mark_all_present(session: RollCallSession, corrected_by) -> int:
         )
         if locked_session.status == RollCallSession.Status.COMPLETED:
             return 0
+        if locked_session.is_expired:
+            raise ValueError("This roll call session has expired.")
 
         absent_entries = list(
             locked_session.entries.filter(

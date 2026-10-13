@@ -161,7 +161,7 @@
     box-shadow: 0 2px 8px rgb(15 55 29 / 24%);
     transform: translate(-50%, -50%);
   }
-  .crest-back-logo img { width: 36px; height: 36px; object-fit: contain; }
+  .crest-back-logo span { color: #39854d; font-size: 7px; font-weight: 900; }
   .crest-back-content {
     position: absolute;
     inset: 0 0 0 68px;
@@ -222,7 +222,19 @@
   .layout-modern .card-front { background: linear-gradient(145deg, #eff6ff 0%, white 55%); }
   .card-brand { background: var(--card-ink); color: white; }
   .card-accent { color: var(--card-accent); }
-  .card-school-logo { width: 32px; height: 32px; object-fit: contain; border-radius: 5px; background: white; }
+  .card-school-logo {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    place-items: center;
+    border: 1px dashed #94a3b8;
+    border-radius: 5px;
+    background: white;
+    color: #64748b;
+    font-size: 6px;
+    font-weight: 800;
+  }
   .card-student-photo { width: 72px; height: 94px; object-fit: cover; border: 2px solid white; border-radius: 6px; }
   .card-qr { width: 104px; height: 104px; object-fit: contain; }
   .layout-modern .card-front:after {
@@ -291,9 +303,10 @@
       {% if selected_layout == "crest" %}
       <section class="card-sheet card-front" aria-label="Student ID card front">
         <header class="crest-front-header">
-          {% if school_configuration.logo %}
-          <img class="card-school-logo" src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} crest">
-          {% endif %}
+          <div class="card-school-logo">
+            {% if school_configuration.logo %}<img src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} logo" class="w-full h-full object-contain">
+            {% else %}<span aria-label="School logo placeholder">LOGO</span>{% endif %}
+          </div>
           <div class="crest-front-copy">
             <p class="crest-front-title">{{ school_configuration.name }}</p>
             <p class="crest-front-subtitle">Student Identity Card</p>
@@ -322,11 +335,10 @@
 
       <section class="card-sheet card-back" aria-label="Student ID card back">
         <div class="crest-back-panel" aria-hidden="true">
-          {% if school_configuration.logo %}
           <div class="crest-back-logo">
-            <img src="{{ school_configuration.logo.url }}" alt="">
+            {% if school_configuration.logo %}<img src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} logo" class="w-full h-full rounded-full object-contain">
+            {% else %}<span>LOGO</span>{% endif %}
           </div>
-          {% endif %}
         </div>
         <div class="crest-back-content">
           <div class="crest-back-copy">
@@ -335,7 +347,7 @@
             <div class="crest-back-return">
               <p class="crest-back-return-label">If found, return to</p>
               <p class="crest-back-school">{{ school_configuration.name }}</p>
-              {% if school_configuration.address %}<p class="crest-back-address">{{ school_configuration.address|linebreaksbr }}</p>{% endif %}
+              {% if school_configuration.address %}<p class="crest-back-address">{{ school_configuration.address }}</p>{% endif %}
               {% if school_configuration.contact_number %}<p class="crest-back-phone">{{ school_configuration.contact_number }}</p>{% endif %}
             </div>
           </div>
@@ -348,9 +360,10 @@
       {% else %}
       <section class="card-sheet card-front" aria-label="Student ID card front">
         <div class="card-brand flex h-12 items-center gap-2 px-3">
-          {% if school_configuration.logo %}
-          <img class="card-school-logo" src="{{ school_configuration.logo.url }}" alt="">
-          {% endif %}
+          <div class="card-school-logo">
+            {% if school_configuration.logo %}<img src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} logo" class="w-full h-full object-contain">
+            {% else %}<span aria-label="School logo placeholder">LOGO</span>{% endif %}
+          </div>
           <div class="min-w-0 flex-1">
             <p class="truncate text-[10px] font-black uppercase tracking-wide">{{ school_configuration.name }}</p>
             <p class="mt-0.5 text-[8px] uppercase tracking-[.2em] text-white/75">Student Identity Card</p>
@@ -384,7 +397,7 @@
           <div class="mt-3 border-t border-slate-200 pt-2">
             <p class="text-[7px] font-bold uppercase tracking-wider text-slate-400">If found, return to</p>
             <p class="mt-0.5 text-[9px] font-bold text-slate-800">{{ school_configuration.name }}</p>
-            {% if school_configuration.address %}<p class="mt-0.5 text-[8px] leading-tight text-slate-600">{{ school_configuration.address|linebreaksbr }}</p>{% endif %}
+            {% if school_configuration.address %}<p class="mt-0.5 text-[8px] leading-tight text-slate-600">{{ school_configuration.address }}</p>{% endif %}
             {% if school_configuration.contact_number %}<p class="mt-0.5 text-[8px] text-slate-600">{{ school_configuration.contact_number }}</p>{% endif %}
           </div>
         </div>
