@@ -1092,6 +1092,18 @@ class HeaderComponentsTests(TestCase):
         self.assertContains(response, '<option value="dark">Dark</option>')
         self.assertContains(response, '<option value="system">System</option>')
         self.assertContains(response, 'prefers-color-scheme: dark')
+        rendered_html = response.content.decode()
+        self.assertRegex(
+            rendered_html,
+            r'<div class="relative"\s+'
+            r'x-data="\{ userMenuOpen: false, themeMode:.*?\}"\s+'
+            r'@click\.outside="userMenuOpen = false"',
+        )
+        self.assertNotRegex(
+            rendered_html,
+            r'<button(?=[^>]*@click="userMenuOpen = !userMenuOpen")'
+            r'(?=[^>]*@click\.outside=)[^>]*>',
+        )
         # User avatar and monogram initials
         self.assertIn(b'KM', response.content)
         self.assertIn(b'Sign Out', response.content)
