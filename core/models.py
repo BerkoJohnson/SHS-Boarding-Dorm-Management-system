@@ -1356,14 +1356,20 @@ class RollCallSession(BaseModel):
 
     @property
     def total_students(self):
+        if hasattr(self, "roll_call_total_students"):
+            return self.roll_call_total_students
         return self.entries.count()
 
     @property
     def present_count(self):
+        if hasattr(self, "roll_call_present_count"):
+            return self.roll_call_present_count
         return self.entries.filter(status=RollCallEntry.Status.PRESENT).count()
 
     @property
     def unmarked_count(self):
+        if hasattr(self, "roll_call_unmarked_count"):
+            return self.roll_call_unmarked_count
         return self.entries.filter(status=RollCallEntry.Status.UNMARKED).count()
 
     @property
@@ -1372,14 +1378,20 @@ class RollCallSession(BaseModel):
 
     @property
     def absent_count(self):
+        if hasattr(self, "roll_call_absent_count"):
+            return self.roll_call_absent_count
         return self.entries.filter(status=RollCallEntry.Status.ABSENT).count()
 
     @property
     def on_exeat_count(self):
+        if hasattr(self, "roll_call_on_exeat_count"):
+            return self.roll_call_on_exeat_count
         return self.entries.filter(status=RollCallEntry.Status.ON_EXEAT).count()
 
     @property
     def infirmary_count(self):
+        if hasattr(self, "roll_call_infirmary_count"):
+            return self.roll_call_infirmary_count
         return self.entries.filter(status=RollCallEntry.Status.INFIRMARY).count()
 
     @property

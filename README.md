@@ -134,7 +134,10 @@ Before using real student or guardian data:
    serve `STATIC_ROOT`; do not expose `MEDIA_ROOT` or `.private`.
 3. Keep the web process, Celery worker, and Celery Beat running under a process
    manager. Confirm Redis 6 or newer, task execution, scheduled overdue checks,
-   and SMS delivery using test recipients before enabling school-wide SMS.
+   expired-export cleanup, and SMS delivery using test recipients before
+   enabling school-wide SMS. The `Procfile` defines separate `web`, `worker`,
+   and `beat` processes; configure all three with the same production
+   environment and Redis broker.
 4. Back up PostgreSQL and required private files, including
    `.private/student_photos` and `.private/student_id_exports`, using encrypted,
    access-controlled storage. Test a restore before the trial and define
@@ -177,11 +180,17 @@ deployment changes, and configure:
 Do not point a staging service at a Neon database that contains real student
 records. Create an isolated empty staging database and use synthetic data.
 Render free web services use ephemeral storage, sleep when idle, and are
-intended for testing rather than production. This initial web-only preview
-does not provide the Celery worker/Beat services or durable private student
-photos and export storage; student photos remain on protected local storage
-and exports are stored locally. Do not use real student photos or exports until
-durable private storage and backup/restore are set up and verified.
+intended for testing rather than production. The initial web-only preview does
+not start Celery worker/Beat services: create separate Render Background Worker
+services using `celery -A schoolsystem worker --loglevel=INFO` and
+`celery -A schoolsystem beat --loglevel=INFO`, and give them the same database,
+Redis, and Django environment as the web service. Without these services,
+queued exports and scheduled SMS, reminder, roll-call expiration, and expired
+export cleanup tasks will not run. The preview also lacks durable private
+student photo and export storage; student photos remain on protected local
+storage and exports are stored locally. Do not use real student photos or
+exports until worker/Beat services, durable private storage, and backup/restore
+are set up and verified.
 
 ## Exeat SMS notifications
 

@@ -223,6 +223,34 @@ def expire_unfinished_roll_calls() -> int:
 
 
 @shared_task
+def cleanup_expired_student_id_exports() -> int:
+    from core.models import StudentIDExport
+    from core.services.student_id_images import private_student_id_export_path
+
+    expired_exports = StudentIDExport.objects.filter(
+        expires_at__lte=timezone.now(),
+        status__in=(
+            StudentIDExport.Status.COMPLETED,
+            StudentIDExport.Status.FAILED,
+        ),
+    )
+    deleted_count = 0
+    for export in expired_exports.iterator():
+        archive_path = private_student_id_export_path(export.archive_name)
+        try:
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception(
+                "Could not delete expired student ID export archive %s",
+                export.archive_name,
+            )
+            continue
+        export.delete()
+        deleted_count += 1
+    return deleted_count
+
+
+@shared_task
 def generate_student_id_export(export_id: str, public_origin: str) -> bool:
     from core.models import SchoolConfiguration, Student, StudentIDExport
     from core.services.student_id_images import (

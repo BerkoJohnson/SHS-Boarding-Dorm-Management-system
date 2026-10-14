@@ -257,4 +257,8 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.expire_unfinished_roll_calls",
         "schedule": 60.0,
     },
+    "cleanup-expired-student-id-exports": {
+        "task": "core.tasks.cleanup_expired_student_id_exports",
+        "schedule": 24 * 60 * 60.0,
+    },
 }

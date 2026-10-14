@@ -1968,7 +1968,29 @@ def roll_call_sessions_view(request):
     selected_status = request.GET.get('session_status', '').strip()
     sessions_qs = RollCallSession.objects.select_related(
         'house', 'dormitory', 'conducted_by', 'academic_term'
-    ).prefetch_related('entries').order_by('-date', '-created_at')
+    ).annotate(
+        roll_call_total_students=Count('entries'),
+        roll_call_present_count=Count(
+            'entries',
+            filter=Q(entries__status=RollCallEntry.Status.PRESENT),
+        ),
+        roll_call_unmarked_count=Count(
+            'entries',
+            filter=Q(entries__status=RollCallEntry.Status.UNMARKED),
+        ),
+        roll_call_absent_count=Count(
+            'entries',
+            filter=Q(entries__status=RollCallEntry.Status.ABSENT),
+        ),
+        roll_call_on_exeat_count=Count(
+            'entries',
+            filter=Q(entries__status=RollCallEntry.Status.ON_EXEAT),
+        ),
+        roll_call_infirmary_count=Count(
+            'entries',
+            filter=Q(entries__status=RollCallEntry.Status.INFIRMARY),
+        ),
+    ).order_by('-date', '-created_at')
 
     if house_scope is not None:
         selected_house_id = str(house_scope.pk)
@@ -2976,11 +2998,16 @@ def create_student_id_export_view(request):
 def download_student_id_export_view(request, export_id):
     """Serve the generated student ID export ZIP for the admin user."""
     export = get_object_or_404(StudentIDExport, pk=export_id, requested_by=request.user)
+    if timezone.now() >= export.expires_at:
+        messages.error(request, "The selected export has expired and is no longer available.")
+        return redirect("core:configuration")
     if export.status != StudentIDExport.Status.COMPLETED:
         messages.error(request, "The selected export is not ready for download yet.")
         return redirect("core:configuration")
 
-    archive_path = Path(settings.BASE_DIR) / ".private" / "student_id_exports" / export.archive_name
+    from .services.student_id_images import private_student_id_export_path
+
+    archive_path = private_student_id_export_path(export.archive_name)
     if not archive_path.exists():
         messages.error(request, "The requested export archive could not be found.")
         return redirect("core:configuration")

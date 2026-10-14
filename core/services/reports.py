@@ -107,14 +107,15 @@ def get_dashboard_metrics(house_id=None):
     if house_id is not None:
         recent_sessions = recent_sessions.filter(house_id=house_id)
     
-    # Calculate average attendance manually if qs is small, or use aggregate
-    # attendance_rate is a property, so we need to calculate it manually or just aggregate
-    total_present = 0
-    total_expected = 0
-    for session in recent_sessions:
-        total_expected += session.total_students
-        total_present += session.present_count
-        
+    attendance_totals = recent_sessions.aggregate(
+        total_expected=Count("entries"),
+        total_present=Count(
+            "entries",
+            filter=Q(entries__status=RollCallEntry.Status.PRESENT),
+        ),
+    )
+    total_expected = attendance_totals["total_expected"]
+    total_present = attendance_totals["total_present"]
     avg_attendance = round((total_present / total_expected * 100), 1) if total_expected > 0 else 0
 
     return {
