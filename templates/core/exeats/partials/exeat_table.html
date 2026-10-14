@@ -195,7 +195,10 @@
                             });
                         }
                     }
-                }" :class="menuOpen ? 'z-50' : ''">
+                }" 
+                @scroll.window="menuOpen = false"
+                @keydown.escape.window="menuOpen = false"
+                :class="menuOpen ? 'z-50' : ''">
                     <div class="inline-block relative text-left">
                         <button @click="toggleMenu($el)"
                                 @click.outside="menuOpen = false" 

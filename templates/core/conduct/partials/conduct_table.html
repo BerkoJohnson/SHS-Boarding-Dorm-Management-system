@@ -114,9 +114,33 @@
                 </td>
 
                 <!-- Context Menu -->
-                <td class="px-3 py-2.5 text-right whitespace-nowrap" x-data="{ menuOpen: false, dropUp: false }">
+                <td class="px-3 py-2.5 text-right whitespace-nowrap relative" x-data="{
+                    menuOpen: false,
+                    menuStyle: {},
+                    toggleMenu(button) {
+                        this.menuOpen = !this.menuOpen;
+                        if (this.menuOpen) {
+                            this.$nextTick(() => {
+                                const buttonRect = button.getBoundingClientRect();
+                                const menuRect = this.$refs.actionMenu.getBoundingClientRect();
+                                const dropUp = window.innerHeight - buttonRect.bottom < menuRect.height + 8;
+                                const top = dropUp
+                                    ? Math.max(8, buttonRect.top - menuRect.height - 6)
+                                    : Math.min(buttonRect.bottom + 6, window.innerHeight - menuRect.height - 8);
+                                const left = Math.max(8, Math.min(
+                                    buttonRect.right - menuRect.width,
+                                    window.innerWidth - menuRect.width - 8
+                                ));
+                                this.menuStyle = { top: `${top}px`, left: `${left}px` };
+                            });
+                        }
+                    }
+                }" 
+                @scroll.window="menuOpen = false"
+                @keydown.escape.window="menuOpen = false"
+                :class="menuOpen ? 'z-50' : ''">
                     <div class="inline-block relative text-left">
-                        <button @click="menuOpen = !menuOpen; if (menuOpen) { $nextTick(() => { const r = $el.getBoundingClientRect(); dropUp = (window.innerHeight - r.bottom < 200); }) }" 
+                        <button @click="toggleMenu($el)" 
                                 @click.outside="menuOpen = false" 
                                 type="button"
                                 class="p-1 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-100 transition focus:outline-none"
@@ -136,8 +160,9 @@
                              x-transition:leave="transition ease-in duration-75"
                              x-transition:leave-start="transform opacity-100 scale-100"
                              x-transition:leave-end="transform opacity-0 scale-95"
-                             :class="dropUp ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
-                             class="absolute right-0 w-48 bg-white rounded-lg shadow-2xl border border-slate-200 py-1 z-50 text-left">
+                             x-ref="actionMenu"
+                             :style="menuStyle"
+                             class="fixed w-48 bg-white rounded-lg shadow-2xl border border-slate-200 py-1 z-50 text-left">
                             
                             <div class="px-3 py-1.5 border-b border-slate-100 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                                 Conduct Record
