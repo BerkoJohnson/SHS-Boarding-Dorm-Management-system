@@ -192,6 +192,167 @@ storage and exports are stored locally. Do not use real student photos or
 exports until worker/Beat services, durable private storage, and backup/restore
 are set up and verified.
 
+### Supervised synthetic-data pilot
+
+Use an isolated, dedicated staging database for rehearsal. Never run the
+synthetic seeder against the live school database or a Neon branch that contains
+copied production records. The command refuses to write unless the configured
+database name is explicitly confirmed, SMS is disabled, and relevant school
+tables are empty. It does not delete or overwrite existing data.
+
+The fixture contains 100 fictional learners (80 boarders and 20 day students),
+four pilot houses, gender-specific dormitories and rooms, three programmes,
+six class groups, and ten inactive test staff accounts covering housemasters,
+tutors, a senior housemaster, and a gate officer. Names and identifiers are
+synthetic; no guardian contacts, student photos, exeat transactions, or
+attendance sessions are created. Test accounts have unusable passwords and
+must be individually activated and given unique credentials by an authorized
+administrator before use. Create an active staging superuser first so these
+accounts can be configured. Do not enable SMS for this dataset.
+
+From the repository root, first review the plan without modifying the database:
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py seed_synthetic_pilot --settings=schoolsystem.settings.production
+```
+
+Only after verifying that the selected configuration points to a newly created,
+empty staging database, set `DATABASE_PROFILE=neon` and
+`SYNTHETIC_PILOT_DATABASE` to the exact staging database name in the current
+PowerShell process. Keep credentials in the existing environment/secret store;
+do not put them in command arguments or paste them into logs. For example:
+
+```powershell
+$env:DATABASE_PROFILE = "neon"
+$env:SYNTHETIC_PILOT_DATABASE = "<exact dedicated staging database name>"
+```
+
+Then apply:
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py seed_synthetic_pilot --apply --confirm-empty-staging --settings=schoolsystem.settings.production
+```
+
+The seeder refuses to mix its records with existing students, guardians,
+houses, dormitories, staff profiles, exeats, attendance, or related operational
+records. If it refuses, stop and verify the selected database and its contents;
+do not work around the guard or delete records to make it pass. Ask the database
+administrator to provision a genuinely empty staging database instead.
+
+For the supervised session, use synthetic test accounts only; verify each
+account's role and house scope before enabling it. Exercise registration/search,
+house boundaries, roll call, exeat approval, gate departure/return, absence
+follow-up, reports, and export access with a facilitator observing. Keep SMS
+disabled and use the UI to exercise live workflows rather than seeding live
+exeats or attendance actions. Record defects without including real student
+information. This 100-record dataset is for workflow rehearsal, not a load or
+capacity test.
+
+## Multi-school tenancy rollout
+
+Tenancy uses `django-pgschemas` with one PostgreSQL schema per school. The
+legacy single-school mode remains the default:
+
+```text
+TENANCY_ENABLED=false
+```
+
+Do not enable tenancy on a live service until the existing school has been
+copied into a tenant schema and that schema has been validated. The
+`migrate_legacy_school` command leaves the original public-schema records and
+source uploads intact, creates an inactive tenant, and registers the verified
+hostname. It does not cut traffic over automatically.
+
+### Domain setup and onboarding
+
+- Configure school subdomains to resolve to the web service. Attach custom
+  domains at the hosting provider and complete its DNS and TLS certificate
+  verification before registering them. Keep the original Render hostname as
+  a verified domain for the existing school.
+- Domain routing accepts only exact, manually verified hostnames belonging to
+  active tenants. Unknown, unverified, or inactive hostnames receive a 404.
+  Do not enable header-based tenant selection.
+- When `TENANCY_ENABLED=true`, production sets Django `ALLOWED_HOSTS` to `*`
+  because new custom domains are registered in the tenant directory rather
+  than a static environment list. The domain-routing middleware runs first and
+  performs exact active/verified hostname matching before any school request
+  is processed. Keep that middleware first and never bypass it at the proxy.
+- Platform operators provision a new school schema only after verifying its
+  domain. The schema is created and migrated automatically, but remains
+  inactive until explicitly enabled:
+
+  ```powershell
+  .\.venv\Scripts\python.exe .\manage.py provision_school --name "<school name>" --schema "<schema_name>" --domain "<school hostname>" --confirm-domain-verified --settings=schoolsystem.settings.production
+  .\.venv\Scripts\python.exe .\manage.py add_school_domain --schema "<schema_name>" --domain "<verified alias hostname>" --confirm-domain-verified --settings=schoolsystem.settings.production
+  .\.venv\Scripts\python.exe .\manage.py set_school_status --schema "<schema_name>" --activate --settings=schoolsystem.settings.production
+  ```
+
+  Use `--primary` with `add_school_domain` when moving a school to a new
+  canonical hostname; otherwise it adds an alias.
+
+For a tenant-aware release, first apply the public-schema migrations and then
+the dynamic-tenant migrations. `django-pgschemas` replaces the normal
+`migrate` command when tenancy is enabled:
+
+```powershell
+$env:TENANCY_ENABLED = "true"
+.\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
+```
+
+Run schema migrations as a controlled release step. Review the package's
+schema selection options with `manage.py migrate --help`; keep public and
+tenant migration results in the deployment log.
+
+### Existing-school cutover
+
+Rehearse these steps against an isolated staging database first. On the
+production database, take a verified backup of PostgreSQL, public media,
+private student photos, and private ID exports; pause web writes and stop
+Celery worker/Beat processes during the data copy. Set `TENANCY_ENABLED=true`
+only in the one-off migration command environment until validation passes:
+
+```powershell
+$env:TENANCY_ENABLED = "true"
+.\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py migrate_legacy_school --name "<current school name>" --schema "<schema_name>" --domain "<current Render hostname>" --confirm-domain-verified --settings=schoolsystem.settings.production
+```
+
+The adoption command requires the source core/auth tables to match the newly
+migrated tenant schema, preserves database IDs and relationships, copies
+referenced uploads under the tenant namespace, and keeps the public source
+untouched. Database rows are copied transactionally; file copies can leave
+unreferenced destination files if an error interrupts the command. In that
+case, inspect the inactive target schema and files before retrying; do not
+delete the source.
+
+Tenant migrations create a default SMS configuration row. The adoption command
+replaces that row with the existing school's configuration, but refuses to
+overwrite any other unexpected target data. If a copy stops after creating the
+inactive tenant, rerun the same command with the same name and schema; it can
+resume only when that tenant is still inactive and has no registered domains.
+If the target contains other data or the tenant has already been activated,
+stop and inspect it rather than deleting or reusing the schema.
+
+Validate tenant data, staff login, student photos, school branding, public QR
+checks, exeats, scheduled jobs, exports, and isolation before activating the
+tenant. Then enable `TENANCY_ENABLED=true` on the web, worker, and Beat
+processes, activate the tenant, and test the existing Render hostname and
+every custom domain. Keep the public-schema copy and backup until cutover is
+accepted.
+
+Before tenant writes begin, disabling tenancy can return the service to the
+unchanged public-schema copy. After tenant writes begin, this is not a
+lossless rollback: restore from a coordinated backup or reconcile tenant
+changes first. Do not drop tenant schemas as part of routine deactivation.
+
+Celery tasks carry explicit tenant schema names; scheduled jobs fan out over
+active tenant schemas. Tenant app migrations include the school's
+authentication and operational data; `django_celery_beat` and the tenant
+directory remain public. Private student photos, logos, and ID export archives
+are isolated by tenant path even though they use shared storage infrastructure.
+Back up and monitor database schemas and files together.
+
 ## Exeat SMS notifications
 
 Configure `SMS_ENABLED`, `SMS_ONLINE_GH_API_KEY`, `SMS_SENDER_ID`, `SMS_TIME_ZONE`,

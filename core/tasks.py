@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from datetime import timedelta
+from functools import wraps
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from celery import shared_task
@@ -14,8 +16,55 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 
+def _tenant_context(tenant_schema):
+    if not settings.TENANCY_ENABLED:
+        return nullcontext()
+    if not tenant_schema:
+        raise ValueError("Tenant-scoped tasks require a tenant schema name.")
+    from tenancy.models import Tenant
+
+    tenant = Tenant.objects.filter(
+        schema_name=tenant_schema,
+        is_active=True,
+    ).first()
+    if tenant is None:
+        raise ValueError(f"Active tenant schema '{tenant_schema}' was not found.")
+    return tenant
+
+
+def _with_tenant_schema(task_function):
+    @wraps(task_function)
+    def wrapped(*args, tenant_schema=None, **kwargs):
+        with _tenant_context(tenant_schema):
+            return task_function(*args, **kwargs)
+
+    return wrapped
+
+
+def _run_for_each_tenant(task, tenant_schema, operation):
+    if not settings.TENANCY_ENABLED:
+        return operation()
+    if tenant_schema:
+        with _tenant_context(tenant_schema):
+            return operation()
+
+    from tenancy.models import Tenant
+
+    schemas = list(
+        Tenant.objects.filter(is_active=True).values_list("schema_name", flat=True)
+    )
+    for schema_name in schemas:
+        task.apply_async(kwargs={"tenant_schema": schema_name})
+    return len(schemas)
+
+
 @shared_task(bind=True, max_retries=4)
-def send_sms_delivery_task(self, delivery_id: str) -> bool:
+@_with_tenant_schema
+def send_sms_delivery_task(
+    self,
+    delivery_id: str,
+    tenant_schema: str | None = None,
+) -> bool:
     from core.models import SMSConfiguration, SMSDelivery
     from core.services.sms import send_sms
 
@@ -90,7 +139,15 @@ def send_sms_delivery_task(self, delivery_id: str) -> bool:
 
 
 @shared_task
-def dispatch_queued_sms_deliveries() -> int:
+def dispatch_queued_sms_deliveries(tenant_schema: str | None = None) -> int:
+    return _run_for_each_tenant(
+        dispatch_queued_sms_deliveries,
+        tenant_schema,
+        _dispatch_queued_sms_deliveries_for_current_tenant,
+    )
+
+
+def _dispatch_queued_sms_deliveries_for_current_tenant() -> int:
     from core.models import SMSConfiguration, SMSDelivery
     from core.services.sms import enqueue_sms_delivery_task
 
@@ -121,7 +178,15 @@ def dispatch_queued_sms_deliveries() -> int:
 
 
 @shared_task
-def enqueue_overdue_exeat_reminders() -> int:
+def enqueue_overdue_exeat_reminders(tenant_schema: str | None = None) -> int:
+    return _run_for_each_tenant(
+        enqueue_overdue_exeat_reminders,
+        tenant_schema,
+        _enqueue_overdue_exeat_reminders_for_current_tenant,
+    )
+
+
+def _enqueue_overdue_exeat_reminders_for_current_tenant() -> int:
     from core.models import Exeat, ExeatReconciliation, SMSConfiguration, SMSDelivery
     from core.services.sms import enqueue_exeat_event_sms
 
@@ -170,7 +235,15 @@ def enqueue_overdue_exeat_reminders() -> int:
 
 
 @shared_task
-def expire_unfinished_roll_calls() -> int:
+def expire_unfinished_roll_calls(tenant_schema: str | None = None) -> int:
+    return _run_for_each_tenant(
+        expire_unfinished_roll_calls,
+        tenant_schema,
+        _expire_unfinished_roll_calls_for_current_tenant,
+    )
+
+
+def _expire_unfinished_roll_calls_for_current_tenant() -> int:
     from core.models import (
         ROLL_CALL_SESSION_TIMEOUT,
         RollCallNotification,
@@ -223,7 +296,15 @@ def expire_unfinished_roll_calls() -> int:
 
 
 @shared_task
-def cleanup_expired_student_id_exports() -> int:
+def cleanup_expired_student_id_exports(tenant_schema: str | None = None) -> int:
+    return _run_for_each_tenant(
+        cleanup_expired_student_id_exports,
+        tenant_schema,
+        _cleanup_expired_student_id_exports_for_current_tenant,
+    )
+
+
+def _cleanup_expired_student_id_exports_for_current_tenant() -> int:
     from core.models import StudentIDExport
     from core.services.student_id_images import private_student_id_export_path
 
@@ -251,7 +332,12 @@ def cleanup_expired_student_id_exports() -> int:
 
 
 @shared_task
-def generate_student_id_export(export_id: str, public_origin: str) -> bool:
+@_with_tenant_schema
+def generate_student_id_export(
+    export_id: str,
+    public_origin: str,
+    tenant_schema: str | None = None,
+) -> bool:
     from core.models import SchoolConfiguration, Student, StudentIDExport
     from core.services.student_id_images import (
         private_student_id_export_path,

@@ -12,6 +12,13 @@ DATABASE_PROFILE = os.getenv("DATABASE_PROFILE", "local").strip().lower() or "lo
 if DATABASE_PROFILE not in {"local", "neon"}:
     raise ValueError("DATABASE_PROFILE must be either 'local' or 'neon'")
 
+TENANCY_ENABLED = os.getenv("TENANCY_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 if DATABASE_PROFILE == "neon":
     required_neon_settings = ("PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD")
     missing_neon_settings = [
@@ -40,19 +47,54 @@ else:
 
 # Application definition
 
-INSTALLED_APPS = [
+TENANT_APPS = [
     "core.admin_apps.InstitutionalAdminConfig",
     "django.contrib.auth",
-    "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django_htmx",
-    "django_celery_beat",
     "core",
 ]
+PUBLIC_APPS = [
+    "django.contrib.contenttypes",
+    "django.contrib.staticfiles",
+    "django_pgschemas",
+    "django_celery_beat",
+    "tenancy",
+]
+TENANTS = {
+    "public": {"APPS": PUBLIC_APPS},
+    "default": {
+        "TENANT_MODEL": "tenancy.Tenant",
+        "DOMAIN_MODEL": "tenancy.Domain",
+        "APPS": TENANT_APPS,
+        "URLCONF": "schoolsystem.urls",
+    },
+}
+
+if TENANCY_ENABLED:
+    INSTALLED_APPS = list(dict.fromkeys(PUBLIC_APPS + TENANT_APPS))
+else:
+    INSTALLED_APPS = [
+        "core.admin_apps.InstitutionalAdminConfig",
+        "django.contrib.auth",
+        "django.contrib.contenttypes",
+        "django.contrib.sessions",
+        "django.contrib.messages",
+        "django.contrib.staticfiles",
+        "django_htmx",
+        "django_celery_beat",
+        "core",
+        "tenancy",
+    ]
 
 MIDDLEWARE = [
+    *(
+        ["tenancy.middleware.VerifiedDomainRoutingMiddleware"]
+        if TENANCY_ENABLED
+        else []
+    ),
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -88,7 +130,11 @@ WSGI_APPLICATION = "schoolsystem.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
+        "ENGINE": (
+            "django_pgschemas.postgresql"
+            if TENANCY_ENABLED
+            else "django.db.backends.postgresql"
+        ),
         "NAME": DB_NAME,
         "USER": DB_USER,
         "PASSWORD": DB_PASSWORD,
@@ -102,6 +148,9 @@ DATABASES = {
         },
     }
 }
+
+if TENANCY_ENABLED:
+    DATABASE_ROUTERS = ["django_pgschemas.routers.TenantAppsRouter"]
 
 
 # Password validation

@@ -17,14 +17,16 @@ ALLOWED_HOSTS = [
     for host in os.getenv("ALLOWED_HOSTS", "").split(",")
     if host.strip()
 ]
-if not ALLOWED_HOSTS:
+if not ALLOWED_HOSTS and not TENANCY_ENABLED:
     raise ImproperlyConfigured(
         "Set ALLOWED_HOSTS to the production hostnames, separated by commas."
     )
-if "*" in ALLOWED_HOSTS:
+if "*" in ALLOWED_HOSTS and not TENANCY_ENABLED:
     raise ImproperlyConfigured(
         "ALLOWED_HOSTS must list explicit production hostnames; '*' is not allowed."
     )
+if TENANCY_ENABLED:
+    ALLOWED_HOSTS = ["*"]
 
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()

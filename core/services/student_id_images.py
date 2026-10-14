@@ -61,10 +61,19 @@ def safe_student_folder_name(student) -> str:
     return f"{admission_no or student.pk} - {name or 'Student'}"
 
 
-def private_student_id_export_path(archive_name: str) -> Path:
+def private_student_id_export_path(
+    archive_name: str,
+    *,
+    schema_name: str | None = None,
+) -> Path:
     if Path(archive_name).name != archive_name or not archive_name.endswith(".zip"):
         raise ValueError("Invalid student ID export archive name.")
-    return Path(settings.BASE_DIR) / ".private" / "student_id_exports" / archive_name
+    export_root = Path(settings.BASE_DIR) / ".private" / "student_id_exports"
+    if settings.TENANCY_ENABLED:
+        from django_pgschemas.schema import get_current_schema
+
+        export_root /= schema_name or get_current_schema().schema_name
+    return export_root / archive_name
 
 
 def render_student_card_side(

@@ -402,6 +402,32 @@ class ExeatCreateViewTests(TestCase):
         self.assertIn(exeat.exeat_number.encode(), response.content)
         self.assertIn(b'Unknown', response.content)
 
+    def test_overdue_exeat_detail_uses_warning_colors(self):
+        """An overdue student-out pass is not presented as a valid green pass."""
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(hours=5),
+            expected_return=now - timezone.timedelta(hours=1),
+            destination='Town',
+            reason='Errand',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.housemaster,
+        )
+        ExeatMovement.objects.create(
+            exeat=exeat,
+            actual_departure=now - timezone.timedelta(hours=3),
+        )
+
+        response = self.client.get(f'/exeats/{exeat.pk}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'PASS OVERDUE')
+        self.assertContains(response, 'bg-rose-50/80')
+        self.assertContains(response, 'text-rose-900')
+        self.assertNotContains(response, 'PASS ISSUED · VALID')
+
     def test_exeat_quick_actions(self):
         """POST /exeats/<pk>/action/<action>/ correctly transitions gate movement and status."""
         now = timezone.now()

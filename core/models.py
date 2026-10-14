@@ -1,3 +1,4 @@
+import posixpath
 import uuid
 from datetime import date, timedelta
 from django.db import models, transaction
@@ -8,12 +9,29 @@ from django.conf import settings
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from PIL import Image, UnidentifiedImageError
+from django_pgschemas.schema import get_current_schema
 from .storage import PrivateStudentPhotoStorage
 
 
 MAX_STUDENT_PHOTO_SIZE = 5 * 1024 * 1024
 MAX_STUDENT_PHOTO_PIXELS = 25_000_000
 ROLL_CALL_SESSION_TIMEOUT = timedelta(hours=1)
+
+
+def tenant_upload_path(directory, filename):
+    if settings.TENANCY_ENABLED:
+        schema_name = get_current_schema().schema_name
+        if schema_name != "public":
+            directory = posixpath.join("tenants", schema_name, directory)
+    return posixpath.join(directory, filename)
+
+
+def student_photo_upload_to(instance, filename):
+    return tenant_upload_path("students/photos/%Y/%m", filename)
+
+
+def school_logo_upload_to(instance, filename):
+    return tenant_upload_path("school/logos", filename)
 
 
 def validate_student_photo(photo):
@@ -567,7 +585,7 @@ class Student(BaseModel):
     date_of_birth = models.DateField(null=True, blank=True)
     photo = models.ImageField(
         storage=PrivateStudentPhotoStorage(),
-        upload_to="students/photos/%Y/%m/",
+        upload_to=student_photo_upload_to,
         blank=True,
         validators=[
             FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"]),
@@ -1111,7 +1129,7 @@ class SchoolConfiguration(models.Model):
         blank=True,
         help_text="Short school name used in SMS notifications.",
     )
-    logo = models.ImageField(upload_to="school/logos/", blank=True)
+    logo = models.ImageField(upload_to=school_logo_upload_to, blank=True)
     address = models.TextField(blank=True)
     contact_number = models.CharField(max_length=30, blank=True)
     updated_at = models.DateTimeField(auto_now=True)

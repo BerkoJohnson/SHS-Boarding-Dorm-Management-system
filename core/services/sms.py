@@ -8,6 +8,7 @@ import requests
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from django_pgschemas.schema import get_current_schema
 
 from core.models import Exeat, HouseMaster, SMSConfiguration, SMSDelivery, SchoolConfiguration
 
@@ -160,6 +161,13 @@ def enqueue_exeat_event_sms(
 
     recipients = get_exeat_sms_targets(exeat, event_type)
     deliveries = []
+    tenant_schema = (
+        get_current_schema().schema_name
+        if settings.TENANCY_ENABLED
+        else None
+    )
+    if tenant_schema == "public":
+        raise RuntimeError("SMS deliveries must be queued inside a school tenant.")
     for recipient_name, phone_number, audience in recipients:
         dedupe_key = f"{event_type}:{exeat.pk}:{phone_number}:{occurrence_key}"
         delivery, created = SMSDelivery.objects.get_or_create(
@@ -180,16 +188,30 @@ def enqueue_exeat_event_sms(
         deliveries.append(delivery)
         if created:
             transaction.on_commit(
-                lambda delivery_id=delivery.pk: enqueue_sms_delivery_task(delivery_id)
+                lambda delivery_id=delivery.pk, schema=tenant_schema:
+                    enqueue_sms_delivery_task(delivery_id, tenant_schema=schema)
             )
     return deliveries
 
 
-def enqueue_sms_delivery_task(delivery_id: str) -> None:
+def enqueue_sms_delivery_task(delivery_id: str, *, tenant_schema=None) -> None:
     from core.tasks import send_sms_delivery_task
 
+    if settings.TENANCY_ENABLED:
+        tenant_schema = tenant_schema or get_current_schema().schema_name
+        if tenant_schema == "public":
+            raise RuntimeError(
+                "SMS delivery tasks must be queued with a school tenant."
+            )
+
     try:
-        send_sms_delivery_task.delay(str(delivery_id))
+        if settings.TENANCY_ENABLED:
+            send_sms_delivery_task.delay(
+                str(delivery_id),
+                tenant_schema=tenant_schema,
+            )
+        else:
+            send_sms_delivery_task.delay(str(delivery_id))
     except Exception:
         logger.exception("Could not queue SMS delivery %s; it remains in the outbox", delivery_id)
 

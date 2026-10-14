@@ -87,6 +87,35 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("'*' is not allowed", result.stderr)
 
+    def test_tenant_mode_uses_verified_domain_routing_for_dynamic_hosts(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import schoolsystem.settings.production as settings; "
+                "assert settings.TENANCY_ENABLED; "
+                "assert settings.ALLOWED_HOSTS == ['*']; "
+                "assert settings.DATABASES['default']['ENGINE'] == "
+                "'django_pgschemas.postgresql'; "
+                "assert settings.MIDDLEWARE[0] == "
+                "'tenancy.middleware.VerifiedDomainRoutingMiddleware'; "
+                "assert settings.DATABASE_ROUTERS == "
+                "['django_pgschemas.routers.TenantAppsRouter']",
+            ],
+            cwd=PROJECT_ROOT,
+            env={
+                **os.environ,
+                "DJANGO_SECRET_KEY": TEST_SECRET_KEY,
+                "ALLOWED_HOSTS": "",
+                "TENANCY_ENABLED": "true",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_neon_profile_uses_pg_variables_and_requires_ssl(self):
         result = subprocess.run(
             [

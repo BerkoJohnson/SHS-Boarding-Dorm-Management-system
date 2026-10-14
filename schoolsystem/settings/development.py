@@ -5,7 +5,9 @@ from .base import *
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'default-insecure-key-for-dev')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost',]
+ALLOWED_HOSTS = (
+    ["*"] if TENANCY_ENABLED else ["127.0.0.1", "localhost"]
+)
 
 DATABASES['default']['CONN_MAX_AGE'] = 0
 

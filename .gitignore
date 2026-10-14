@@ -102,6 +102,7 @@ ENV/
 
 .DS_Store
 *.sqlite3
+*.dump
 media/
 .private/
 *.pyc

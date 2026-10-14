@@ -172,18 +172,20 @@
         </div>
     </div>
     {% elif exeat.status == 'Approved' %}
-    <div class="bg-emerald-50/80 border border-emerald-200 rounded-2xl shadow-2xs p-4 sm:p-5 flex flex-col sm:flex-row sm:items-start gap-4 print:hidden">
-        <div class="w-10 h-10 shrink-0 rounded-xl bg-emerald-500 text-white flex items-center justify-center shadow-xs">
+    <div class="{% if exeat.current_state == 'OVERDUE (Student Out)' or exeat.current_state == 'OVERDUE (Reconciled)' %}bg-rose-50/80 border-rose-200{% elif exeat.current_state == 'Pass Unresolved' or exeat.current_state == 'Departure Not Recorded' %}bg-amber-50/80 border-amber-200{% elif exeat.current_state == 'Active (Student Out)' or exeat.current_state == 'Student Out (Reconciled)' %}bg-blue-50/80 border-blue-200{% else %}bg-emerald-50/80 border-emerald-200{% endif %} border rounded-2xl shadow-2xs p-4 sm:p-5 flex flex-col sm:flex-row sm:items-start gap-4 print:hidden">
+        <div class="w-10 h-10 shrink-0 rounded-xl {% if exeat.current_state == 'OVERDUE (Student Out)' or exeat.current_state == 'OVERDUE (Reconciled)' %}bg-rose-600{% elif exeat.current_state == 'Pass Unresolved' or exeat.current_state == 'Departure Not Recorded' %}bg-amber-500{% elif exeat.current_state == 'Active (Student Out)' or exeat.current_state == 'Student Out (Reconciled)' %}bg-blue-600{% else %}bg-emerald-500{% endif %} text-white flex items-center justify-center shadow-xs">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
         </div>
         <div class="flex-1">
-            <div class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200 mb-1.5">PASS ISSUED · VALID</div>
-            <h3 class="text-sm font-bold text-emerald-900 tracking-tight">
+            <div class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-full {% if exeat.current_state == 'OVERDUE (Student Out)' or exeat.current_state == 'OVERDUE (Reconciled)' %}bg-rose-100 text-rose-700 border-rose-200{% elif exeat.current_state == 'Pass Unresolved' or exeat.current_state == 'Departure Not Recorded' %}bg-amber-100 text-amber-700 border-amber-200{% elif exeat.current_state == 'Active (Student Out)' or exeat.current_state == 'Student Out (Reconciled)' %}bg-blue-100 text-blue-700 border-blue-200{% else %}bg-emerald-100 text-emerald-700 border-emerald-200{% endif %} border mb-1.5">
+                {% if exeat.current_state == 'OVERDUE (Student Out)' or exeat.current_state == 'OVERDUE (Reconciled)' %}PASS OVERDUE{% elif exeat.current_state == 'Pass Unresolved' %}MOVEMENT UNRESOLVED{% elif exeat.current_state == 'Departure Not Recorded' %}DEPARTURE NOT RECORDED{% elif exeat.current_state == 'Returned' or exeat.current_state == 'Returned (Reconciled)' %}PASS COMPLETED{% elif exeat.current_state == 'Active (Student Out)' or exeat.current_state == 'Student Out (Reconciled)' %}STUDENT OUT{% else %}PASS ISSUED · VALID{% endif %}
+            </div>
+            <h3 class="text-sm font-bold {% if exeat.current_state == 'OVERDUE (Student Out)' or exeat.current_state == 'OVERDUE (Reconciled)' %}text-rose-900{% elif exeat.current_state == 'Pass Unresolved' or exeat.current_state == 'Departure Not Recorded' %}text-amber-900{% elif exeat.current_state == 'Active (Student Out)' or exeat.current_state == 'Student Out (Reconciled)' %}text-blue-900{% else %}text-emerald-900{% endif %} tracking-tight">
                 Status: {{ exeat.current_state }}
             </h3>
-            <p class="text-[11px] text-emerald-800/90 mt-0.5">
+            <p class="text-[11px] {% if exeat.current_state == 'OVERDUE (Student Out)' or exeat.current_state == 'OVERDUE (Reconciled)' %}text-rose-800/90{% elif exeat.current_state == 'Pass Unresolved' or exeat.current_state == 'Departure Not Recorded' %}text-amber-800/90{% elif exeat.current_state == 'Active (Student Out)' or exeat.current_state == 'Student Out (Reconciled)' %}text-blue-800/90{% else %}text-emerald-800/90{% endif %} mt-0.5">
                 Gate log entry created. <strong>Approved by {{ exeat.approved_by.full_name|default:"Senior Housemaster" }}</strong>{% if exeat.approved_by and exeat.approved_by.is_senior_housemaster %} (Senior Housemaster){% endif %}.
             </p>
         </div>

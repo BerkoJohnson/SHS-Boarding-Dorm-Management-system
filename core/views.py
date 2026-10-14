@@ -2988,7 +2988,14 @@ def create_student_id_export_view(request):
     )
 
     public_origin = request.build_absolute_uri('/').rstrip('/')
-    generate_student_id_export.delay(str(export.pk), public_origin)
+    if settings.TENANCY_ENABLED:
+        generate_student_id_export.delay(
+            str(export.pk),
+            public_origin,
+            tenant_schema=request.tenant.schema_name,
+        )
+    else:
+        generate_student_id_export.delay(str(export.pk), public_origin)
     messages.success(request, "Student ID export queued. It will be generated in the background.")
     return redirect("core:configuration")
 
