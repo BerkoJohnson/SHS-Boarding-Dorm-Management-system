@@ -4,7 +4,7 @@ from . import views
 app_name = 'core'
 
 urlpatterns = [
-    path('login/', views.RememberMeLoginView.as_view(), name='login'),
+    path('login/', views.StaffLoginView.as_view(), name='login'),
     path('', views.dashboard_view, name='dashboard'),
     path('exeats/', views.exeat_list_view, name='exeat_list'),
     path('exeats/pending-approvals/', views.exeat_approvals_hub_view, name='exeat_approvals'),

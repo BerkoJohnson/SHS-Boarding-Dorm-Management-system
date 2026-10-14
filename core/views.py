@@ -44,6 +44,7 @@ from .models import (
     RollCallAbsenceFollowUp,
     RollCallNotification,
     SchoolConfiguration,
+    ConfigurationAuditLog,
     StudentIDExport,
 )
 from .forms import (
@@ -94,18 +95,9 @@ STUDENT_ID_LAYOUTS = {
 }
 
 
-class RememberMeLoginView(auth_views.LoginView):
+class StaffLoginView(auth_views.LoginView):
     template_name = "registration/login.html"
     redirect_authenticated_user = True
-    remember_me_age = 14 * 24 * 60 * 60
-
-    def form_valid(self, form):
-        response = super().form_valid(form)
-        if self.request.POST.get("remember_me") == "on":
-            self.request.session.set_expiry(self.remember_me_age)
-        else:
-            self.request.session.set_expiry(0)
-        return response
 
 
 def paginate_queryset(queryset, request, page_parameter='page', per_page=10):
@@ -1729,16 +1721,14 @@ def exeat_action_view(request, pk, action):
     return redirect('core:dashboard')
 
 
+@require_POST
 def logout_view(request):
-    """
-    Safely terminates user session and redirects to login with flash feedback.
-    Supports both POST and GET requests.
-    """
+    """Terminate the user session and redirect to login with flash feedback."""
     if request.user.is_authenticated:
         username = request.user.get_full_name() or request.user.username
         logout(request)
         messages.info(request, f"You have been signed out successfully. Goodbye, {username}!")
-    return redirect('core:dashboard')
+    return redirect('core:login')
 
 
 @login_required
@@ -2829,7 +2819,7 @@ def _reports_context(request):
 # SYSTEM CONFIGURATION
 # -----------------------------------------------------------------------------
 @login_required
-@role_required(*ADMIN_ROLES)
+@role_required(StaffRole.ADMIN)
 def configuration_hub_view(request):
     """
     System configuration Control Center hub.
@@ -2841,11 +2831,16 @@ def configuration_hub_view(request):
         .order_by('-created_at')[:5]
         if hasattr(request.user, 'pk') else StudentIDExport.objects.none()
     )
+    configuration_audit = (
+        ConfigurationAuditLog.objects.select_related('actor')
+        .order_by('-created_at')[:10]
+    )
 
     context = {
         'academic_terms': academic_terms,
         'sms_enabled': SMSConfiguration.is_enabled(),
         'export_jobs': export_jobs,
+        'configuration_audit': configuration_audit,
         'id_export_layouts': [
             {'value': 'classic', 'label': 'Classic'},
             {'value': 'crest', 'label': 'Crest'},
@@ -2861,7 +2856,7 @@ def configuration_hub_view(request):
 
 
 @login_required
-@role_required(*ADMIN_ROLES)
+@role_required(StaffRole.ADMIN)
 @require_POST
 def set_active_term_view(request, term_id):
     """
@@ -2870,7 +2865,42 @@ def set_active_term_view(request, term_id):
     from core.services.configuration import set_active_term
     
     try:
-        set_active_term(term_id)
+        with transaction.atomic():
+            term = AcademicTerm.objects.select_for_update().select_related(
+                'academic_year'
+            ).get(pk=term_id)
+            previous_terms = list(
+                AcademicTerm.objects.select_for_update()
+                .filter(level=term.level, is_current=True)
+                .select_related('academic_year')
+            )
+            if not term.is_current:
+                set_active_term(term_id)
+                ConfigurationAuditLog.objects.create(
+                    actor=request.user,
+                    event=ConfigurationAuditLog.Event.ACTIVE_TERM_CHANGED,
+                    description=(
+                        f"Active term set to {term.academic_year.name} - "
+                        f"{term.get_term_display()} ({term.get_level_display()})."
+                    ),
+                    details={
+                        'previous_terms': [
+                            {
+                                'id': str(previous.pk),
+                                'academic_year': previous.academic_year.name,
+                                'term': previous.get_term_display(),
+                                'level': previous.get_level_display(),
+                            }
+                            for previous in previous_terms
+                        ],
+                        'new_term': {
+                            'id': str(term.pk),
+                            'academic_year': term.academic_year.name,
+                            'term': term.get_term_display(),
+                            'level': term.get_level_display(),
+                        },
+                    },
+                )
         messages.success(request, "Active academic term successfully updated.")
     except AcademicTerm.DoesNotExist:
         messages.error(request, "Academic term not found.")
@@ -2881,7 +2911,7 @@ def set_active_term_view(request, term_id):
 
 
 @login_required
-@role_required(*ADMIN_ROLES)
+@role_required(StaffRole.ADMIN)
 @require_POST
 def set_sms_enabled_view(request):
     """Update the system-wide SMS notification switch."""
@@ -2890,9 +2920,22 @@ def set_sms_enabled_view(request):
         messages.error(request, "Choose whether SMS notifications should be enabled or disabled.")
         return redirect("core:configuration")
 
-    configuration, _created = SMSConfiguration.objects.get_or_create(pk=1)
-    configuration.enabled = enabled_value == "true"
-    configuration.save(update_fields=["enabled", "updated_at"])
+    with transaction.atomic():
+        configuration, _created = SMSConfiguration.objects.select_for_update().get_or_create(pk=1)
+        previous_enabled = configuration.enabled
+        configuration.enabled = enabled_value == "true"
+        configuration.save(update_fields=["enabled", "updated_at"])
+        if previous_enabled != configuration.enabled:
+            state_label = "enabled" if configuration.enabled else "disabled"
+            ConfigurationAuditLog.objects.create(
+                actor=request.user,
+                event=ConfigurationAuditLog.Event.SMS_STATE_CHANGED,
+                description=f"SMS notifications {state_label}.",
+                details={
+                    'previous_enabled': previous_enabled,
+                    'enabled': configuration.enabled,
+                },
+            )
 
     state_label = "enabled" if configuration.enabled else "disabled"
     messages.success(request, f"SMS notifications are now {state_label}.")
@@ -2900,7 +2943,7 @@ def set_sms_enabled_view(request):
 
 
 @login_required
-@role_required(*ADMIN_ROLES)
+@role_required(StaffRole.ADMIN)
 @require_POST
 def create_student_id_export_view(request):
     """Queue a background export of all enrolled students' card images."""
@@ -2929,7 +2972,7 @@ def create_student_id_export_view(request):
 
 
 @login_required
-@role_required(*ADMIN_ROLES)
+@role_required(StaffRole.ADMIN)
 def download_student_id_export_view(request, export_id):
     """Serve the generated student ID export ZIP for the admin user."""
     export = get_object_or_404(StudentIDExport, pk=export_id, requested_by=request.user)

@@ -1,7 +1,6 @@
 from django.contrib.admin import AdminSite
 
-from core.models import get_user_profile
-from core.permissions import ADMIN_ROLES
+from core.models import StaffRole, get_user_profile
 
 
 class InstitutionalAdminSite(AdminSite):
@@ -11,4 +10,4 @@ class InstitutionalAdminSite(AdminSite):
         if request.user.is_superuser:
             return True
         profile = get_user_profile(request.user)
-        return bool(profile and profile.role in ADMIN_ROLES)
+        return bool(profile and profile.role == StaffRole.ADMIN)

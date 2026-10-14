@@ -1,6 +1,7 @@
 import io
 import tempfile
 import uuid
+from datetime import date
 from pathlib import Path
 
 from django.contrib.auth import get_user_model
@@ -12,6 +13,9 @@ from django.utils import timezone
 from PIL import Image
 
 from core.models import (
+    AcademicTerm,
+    AcademicYear,
+    ConfigurationAuditLog,
     Dormitory,
     Exeat,
     House,
@@ -59,6 +63,84 @@ class InstitutionalRoleAuthorizationTests(TestCase):
         user.profile.refresh_from_db()
         self.assertEqual(user.profile.role, StaffRole.ADMIN)
 
+    def test_configuration_is_visible_to_admin_role_accounts(self):
+        user = User.objects.create_user(
+            username="configuration-admin",
+            password="secure-test-password",
+            is_staff=True,
+        )
+        UserProfile.objects.filter(user=user).update(role=StaffRole.ADMIN)
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("core:configuration"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Configuration")
+        self.assertContains(response, "Configuration Audit Log")
+        audit_response = self.client.get(
+            reverse("admin:core_configurationauditlog_changelist"),
+        )
+        self.assertEqual(audit_response.status_code, 200)
+
+    def test_configuration_is_not_available_to_senior_housemasters(self):
+        user = User.objects.create_user(
+            username="configuration-senior",
+            password="secure-test-password",
+        )
+        UserProfile.objects.filter(user=user).update(
+            role=StaffRole.SENIOR_HOUSEMASTER,
+        )
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("core:configuration"))
+
+        self.assertRedirects(response, reverse("core:dashboard"))
+
+    def test_active_term_change_records_actor_and_previous_term(self):
+        admin_user = User.objects.create_user(
+            username="term-configuration-admin",
+            password="secure-test-password",
+        )
+        UserProfile.objects.filter(user=admin_user).update(role=StaffRole.ADMIN)
+        academic_year = AcademicYear.objects.create(
+            start_date=date(2026, 9, 1),
+            end_date=date(2027, 8, 31),
+        )
+        previous_term = AcademicTerm.objects.create(
+            academic_year=academic_year,
+            term=AcademicTerm.TermChoice.TERM_1,
+            level=AcademicTerm.LevelChoice.ALL,
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 12, 15),
+            is_current=True,
+        )
+        next_term = AcademicTerm.objects.create(
+            academic_year=academic_year,
+            term=AcademicTerm.TermChoice.TERM_2,
+            level=AcademicTerm.LevelChoice.ALL,
+            start_date=date(2027, 1, 10),
+            end_date=date(2027, 4, 15),
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.post(
+            reverse("core:set_active_term", args=[next_term.pk]),
+        )
+
+        self.assertEqual(response.status_code, 204)
+        audit_event = ConfigurationAuditLog.objects.get(
+            event=ConfigurationAuditLog.Event.ACTIVE_TERM_CHANGED,
+        )
+        self.assertEqual(audit_event.actor, admin_user)
+        self.assertEqual(
+            audit_event.details["previous_terms"][0]["id"],
+            str(previous_term.pk),
+        )
+        self.assertEqual(
+            audit_event.details["new_term"]["id"],
+            str(next_term.pk),
+        )
+
 
 class InstitutionalAdminAuthorizationTests(TestCase):
     def setUp(self):
@@ -101,6 +183,63 @@ class InstitutionalAdminAuthorizationTests(TestCase):
         response = self.client.get(reverse("admin:core_student_changelist"))
 
         self.assertEqual(response.status_code, 200)
+
+    def test_senior_housemaster_cannot_use_django_admin(self):
+        user = User.objects.create_user(
+            username="senior-admin-site-user",
+            password="secure-test-password",
+            is_staff=True,
+        )
+        UserProfile.objects.filter(user=user).update(
+            role=StaffRole.SENIOR_HOUSEMASTER,
+        )
+        user.user_permissions.add(self.student_view_permission)
+        self.client.force_login(user)
+
+        response = self.client.get(reverse("admin:core_student_changelist"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login/", response["Location"])
+
+    def test_academic_term_admin_changes_are_audited(self):
+        admin_user = User.objects.create_superuser(
+            username="academic-term-admin",
+            password="secure-test-password",
+        )
+        academic_year = AcademicYear.objects.create(
+            start_date=date(2026, 9, 1),
+            end_date=date(2027, 8, 31),
+        )
+        term = AcademicTerm.objects.create(
+            academic_year=academic_year,
+            term=AcademicTerm.TermChoice.TERM_1,
+            level=AcademicTerm.LevelChoice.ALL,
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 12, 15),
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.post(
+            reverse("admin:core_academicterm_change", args=[term.pk]),
+            {
+                "academic_year": str(academic_year.pk),
+                "term": AcademicTerm.TermChoice.TERM_1,
+                "level": AcademicTerm.LevelChoice.ALL,
+                "start_date": "2026-09-01",
+                "end_date": "2026-12-15",
+                "is_current": "on",
+                "_save": "Save",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        term.refresh_from_db()
+        self.assertTrue(term.is_current)
+        audit_event = ConfigurationAuditLog.objects.get(
+            event=ConfigurationAuditLog.Event.ACADEMIC_TERM_CHANGED,
+        )
+        self.assertEqual(audit_event.actor, admin_user)
+        self.assertTrue(audit_event.details["to"]["is_current"])
 
     def test_configuration_action_rejects_get_requests(self):
         user = User.objects.create_user(

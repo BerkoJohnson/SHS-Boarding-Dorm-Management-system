@@ -101,6 +101,18 @@ server, Celery worker, and Celery Beat running in separate PowerShell terminals.
 The commands above are for local development, not a production deployment.
 Before using real student or guardian data:
 
+### Staff access and configuration
+
+- Staff sessions end when the browser closes and expire after 30 minutes of
+  inactivity. The login page does not offer a persistent sign-in option.
+- Staff who forget their password must contact the system administrator for a
+  reset.
+- Only staff assigned the `ADMIN` role (or a Django superuser) can open system
+  configuration. Django Admin also requires an active staff account and the
+  relevant model permissions. Academic-term, SMS, school identity, staff-role,
+  and housemaster-assignment changes are recorded in the configuration audit
+  log.
+
 1. Configure the production environment with a randomly generated
    `DJANGO_SECRET_KEY` of at least 50 characters, a comma-separated
    `ALLOWED_HOSTS` containing only the deployed hostnames, and the database and

@@ -152,7 +152,7 @@
     </div>
 
     <!-- Quick Admin Links -->
-    {% if request.user.is_superuser %}
+    {% if can_view_config and request.user.is_staff %}
     <div class="space-y-4">
       <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
@@ -184,10 +184,37 @@
             <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
             Manage Academic Calendar
           </a>
+          <a href="{% url 'admin:core_configurationauditlog_changelist' %}" target="_blank" class="flex items-center gap-2 p-2 rounded-lg hover:bg-slate-50 text-slate-700 text-sm transition">
+            <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2m-4-2v4m0 0l-2-2m2 2l2-2m-6 9h8m-8 4h8"></path></svg>
+            Configuration Audit Log
+          </a>
         </div>
       </div>
     </div>
     {% endif %}
+  </div>
+
+  <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+    <div class="px-5 py-4 border-b border-slate-100 bg-slate-50">
+      <h3 class="text-sm font-bold text-slate-800">Recent Configuration Changes</h3>
+      <p class="text-xs text-slate-500 mt-0.5">The latest changes to school identity, staff roles, active terms, and SMS settings.</p>
+    </div>
+    <div class="divide-y divide-slate-100">
+      {% for audit_event in configuration_audit %}
+        <div class="px-5 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+          <div>
+            <p class="text-sm font-semibold text-slate-800">{{ audit_event.description }}</p>
+            <p class="text-xs text-slate-500">
+              {{ audit_event.actor.get_full_name|default:audit_event.actor.username|default:"Former user" }}
+              · {{ audit_event.get_event_display }}
+            </p>
+          </div>
+          <time class="text-xs text-slate-500" datetime="{{ audit_event.created_at|date:'c' }}">{{ audit_event.created_at|date:"M d, Y H:i" }}</time>
+        </div>
+      {% empty %}
+        <p class="px-5 py-4 text-sm text-slate-500">No configuration changes have been recorded yet.</p>
+      {% endfor %}
+    </div>
   </div>
 </div>
 {% endblock %}

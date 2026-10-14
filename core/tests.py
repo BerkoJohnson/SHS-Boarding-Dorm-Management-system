@@ -1125,10 +1125,11 @@ class HeaderComponentsTests(TestCase):
         self.assertIn(b'Active Alerts', response.content)
 
     def test_logout_view(self):
-        """POST /logout/ terminates user session and redirects to dashboard (which redirects to login)."""
+        """POST /logout/ terminates the user session and redirects to login."""
         response = self.client.post('/logout/')
         self.assertEqual(response.status_code, 302)
-        # Verify user is logged out: next request to / should redirect to login
+        self.assertIn('/login/', response.url)
+        # Verify user is logged out: the dashboard redirects to login.
         dash_resp = self.client.get('/')
         self.assertEqual(dash_resp.status_code, 302)
         self.assertIn('/login/', dash_resp.url)
@@ -2919,15 +2920,22 @@ class HouseScopedAccessTests(TestCase):
         response = self.client.get('/reports/')
         self.assertEqual(response.context['report_filters']['report'].value(), 'housing')
         self.assertEqual(response.context['report']['title'], 'Boarding Occupancy & Placement')
-        self.assertContains(response, 'action="/reports/"')
+        self.assertContains(response, 'action="/reports/#report-results"')
         self.assertContains(response, 'method="get"')
         self.assertContains(response, 'name="report"')
+        self.assertContains(response, 'id="report-results"')
+        self.assertContains(response, 'rowspan="2"')
+        self.assertEqual(
+            [group["house"] for group in response.context["report"]["row_groups"]],
+            ["Amber House"],
+        )
         self.assertNotContains(response, 'Total Boarders')
 
         response = self.client.get('/reports/', {'report': 'attendance'})
         self.assertEqual(response.context['report_filters']['report'].value(), 'attendance')
         self.assertEqual(response.context['report']['title'], 'Roll-call Attendance & Follow-up')
         self.assertContains(response, 'Total Boarders')
+        self.assertContains(response, 'id="report-results"')
 
     def test_reports_are_denied_to_gate_officer_and_tutor(self):
         self.client.force_login(self.gate_user)

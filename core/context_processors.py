@@ -280,7 +280,7 @@ def header_context(request) -> Dict[str, Any]:
     can_view_conduct = is_super or (has_house_scope and role in CONDUCT_ROLES)
     can_view_exeats = is_super or (has_house_scope and role in EXEAT_ROLES)
     can_view_reports = is_super or (has_house_scope and role in REPORT_ROLES)
-    can_view_config = is_super or role in ADMIN_ROLES
+    can_view_config = is_super or role == StaffRole.ADMIN
     can_manage_students = is_super or role in STUDENT_MANAGEMENT_ROLES
     can_view_student_records = is_super or (
         has_house_scope and role in STUDENT_RECORD_ROLES

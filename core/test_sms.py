@@ -15,6 +15,7 @@ from core.models import (
     Programme,
     SMSDelivery,
     SMSConfiguration,
+    ConfigurationAuditLog,
     Student,
     UserProfile,
     StaffRole,
@@ -260,6 +261,16 @@ class SMSConfigurationViewTests(TestCase):
         self.assertRedirects(response, reverse("core:configuration"))
         self.configuration.refresh_from_db()
         self.assertFalse(self.configuration.enabled)
+        audit_event = ConfigurationAuditLog.objects.get(
+            event=ConfigurationAuditLog.Event.SMS_STATE_CHANGED,
+        )
+        self.assertEqual(audit_event.actor, self.admin_user)
+        self.assertEqual(
+            audit_event.details,
+            {"previous_enabled": True, "enabled": False},
+        )
+        audit_response = self.client.get(reverse("core:configuration"))
+        self.assertContains(audit_response, "SMS notifications disabled.")
 
     def test_regular_user_cannot_change_sms_state(self):
         user = User.objects.create_user(
@@ -277,7 +288,7 @@ class SMSConfigurationViewTests(TestCase):
         self.configuration.refresh_from_db()
         self.assertTrue(self.configuration.enabled)
 
-    def test_senior_housemaster_can_change_sms_state(self):
+    def test_senior_housemaster_cannot_change_sms_state(self):
         senior_user = User.objects.create_user(
             username="sms_config_senior",
             password="password123",
@@ -292,6 +303,11 @@ class SMSConfigurationViewTests(TestCase):
             {"enabled": "false"},
         )
 
-        self.assertRedirects(response, reverse("core:configuration"))
+        self.assertRedirects(response, reverse("core:dashboard"))
         self.configuration.refresh_from_db()
-        self.assertFalse(self.configuration.enabled)
+        self.assertTrue(self.configuration.enabled)
+        self.assertFalse(
+            ConfigurationAuditLog.objects.filter(
+                event=ConfigurationAuditLog.Event.SMS_STATE_CHANGED,
+            ).exists()
+        )

@@ -15,10 +15,13 @@ from .models import (
     ExeatReconciliation,
     SMSConfiguration,
     SchoolConfiguration,
+    ConfigurationAuditLog,
     SMSDelivery,
     HouseMaster,
     DisciplinaryRecord,
     UserProfile,
+    StaffRole,
+    get_user_profile,
     RollCallSession,
     RollCallEntry,
     RollCallAbsenceFollowUp,
@@ -32,12 +35,66 @@ class UserProfileAdmin(admin.ModelAdmin):
     list_filter = ('role',)
     search_fields = ('user__username', 'user__first_name', 'user__last_name', 'user__email', 'phone_number')
 
+    def save_model(self, request, obj, form, change):
+        previous_role = None
+        if change:
+            previous_role = UserProfile.objects.get(pk=obj.pk).role
+        super().save_model(request, obj, form, change)
+        if previous_role != obj.role:
+            previous_label = (
+                UserProfile(role=previous_role).get_role_display()
+                if previous_role else "No role"
+            )
+            ConfigurationAuditLog.objects.create(
+                actor=request.user,
+                event=ConfigurationAuditLog.Event.STAFF_ROLE_CHANGED,
+                description=(
+                    f"{obj.user.get_username()}: {previous_label} to "
+                    f"{obj.get_role_display()}."
+                ),
+                details={
+                    "username": obj.user.get_username(),
+                    "previous_role": previous_role,
+                    "role": obj.role,
+                },
+            )
+
 
 @admin.register(HouseMaster)
 class HouseMasterAdmin(admin.ModelAdmin):
     list_display = ('staff_id', 'full_name', 'user', 'house', 'assigned_dormitory', 'is_senior_housemaster')
     list_filter = ('is_senior_housemaster', 'house')
     search_fields = ('staff_id', 'full_name', 'user__username', 'phone_number')
+
+    def save_model(self, request, obj, form, change):
+        tracked_fields = (
+            "user_id",
+            "house_id",
+            "assigned_dormitory_id",
+            "is_senior_housemaster",
+        )
+        previous = (
+            HouseMaster.objects.get(pk=obj.pk)
+            if change else None
+        )
+        changes = {}
+        for field_name in tracked_fields:
+            old_value = getattr(previous, field_name) if previous else None
+            new_value = getattr(obj, field_name)
+            if old_value != new_value:
+                changes[field_name] = {
+                    "from": str(old_value) if old_value is not None else None,
+                    "to": str(new_value) if new_value is not None else None,
+                }
+
+        super().save_model(request, obj, form, change)
+        if changes:
+            ConfigurationAuditLog.objects.create(
+                actor=request.user,
+                event=ConfigurationAuditLog.Event.HOUSEMASTER_ASSIGNMENT_CHANGED,
+                description=f"Housemaster assignment updated for {obj.full_name}.",
+                details=changes,
+            )
 
 
 @admin.register(House)
@@ -123,7 +180,7 @@ class SMSDeliveryAdmin(admin.ModelAdmin):
 class SMSConfigurationAdmin(admin.ModelAdmin):
     list_display = ("enabled", "updated_at")
     fields = ("enabled", "updated_at")
-    readonly_fields = ("updated_at",)
+    readonly_fields = ("enabled", "updated_at")
 
     def has_add_permission(self, request):
         return not SMSConfiguration.objects.filter(pk=1).exists()
@@ -140,6 +197,67 @@ class SMSConfigurationAdmin(admin.ModelAdmin):
                 reverse("admin:core_smsconfiguration_change", args=[1])
             )
         return super().changelist_view(request, extra_context)
+
+
+@admin.register(AcademicTerm)
+class AcademicTermAdmin(admin.ModelAdmin):
+    list_display = ("academic_year", "term", "level", "start_date", "end_date", "is_current")
+    list_filter = ("academic_year", "term", "level", "is_current")
+
+    def save_model(self, request, obj, form, change):
+        tracked_fields = (
+            "academic_year_id",
+            "term",
+            "level",
+            "start_date",
+            "end_date",
+            "is_current",
+        )
+        previous = (
+            AcademicTerm.objects.select_related("academic_year").get(pk=obj.pk)
+            if change else None
+        )
+        old_values = {
+            field_name: (
+                getattr(previous, field_name).isoformat()
+                if previous and field_name in {"start_date", "end_date"}
+                else str(getattr(previous, field_name))
+                if previous and field_name.endswith("_id")
+                else getattr(previous, field_name)
+                if previous else None
+            )
+            for field_name in tracked_fields
+        }
+        replaced_active_terms = list(
+            AcademicTerm.objects.filter(level=obj.level, is_current=True)
+            .exclude(pk=obj.pk)
+            .values_list("pk", flat=True)
+        )
+
+        super().save_model(request, obj, form, change)
+        new_values = {
+            field_name: (
+                getattr(obj, field_name).isoformat()
+                if field_name in {"start_date", "end_date"}
+                else str(getattr(obj, field_name))
+                if field_name.endswith("_id")
+                else getattr(obj, field_name)
+            )
+            for field_name in tracked_fields
+        }
+        if old_values != new_values:
+            ConfigurationAuditLog.objects.create(
+                actor=request.user,
+                event=ConfigurationAuditLog.Event.ACADEMIC_TERM_CHANGED,
+                description=f"Academic term {obj} saved in Django Admin.",
+                details={
+                    "from": old_values,
+                    "to": new_values,
+                    "replaced_active_terms": [
+                        str(term_id) for term_id in replaced_active_terms
+                    ],
+                },
+            )
 
 
 @admin.register(SchoolConfiguration)
@@ -162,6 +280,59 @@ class SchoolConfigurationAdmin(admin.ModelAdmin):
                 reverse("admin:core_schoolconfiguration_change", args=[1])
             )
         return super().changelist_view(request, extra_context)
+
+    def save_model(self, request, obj, form, change):
+        tracked_fields = ("name", "short_name", "logo", "address", "contact_number")
+        previous = (
+            SchoolConfiguration.objects.get(pk=obj.pk)
+            if change else None
+        )
+        changes = {}
+        for field_name in tracked_fields:
+            old_value = getattr(previous, field_name).name if (
+                previous and field_name == "logo"
+            ) else getattr(previous, field_name) if previous else None
+            new_value = getattr(obj, field_name).name if field_name == "logo" else getattr(obj, field_name)
+            if old_value != new_value:
+                changes[field_name] = {"from": old_value, "to": new_value}
+
+        super().save_model(request, obj, form, change)
+        if changes:
+            ConfigurationAuditLog.objects.create(
+                actor=request.user,
+                event=ConfigurationAuditLog.Event.SCHOOL_IDENTITY_CHANGED,
+                description="School identity settings updated.",
+                details=changes,
+            )
+
+
+@admin.register(ConfigurationAuditLog)
+class ConfigurationAuditLogAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "actor", "event", "description")
+    list_filter = ("event", "created_at")
+    search_fields = ("description", "actor__username")
+    readonly_fields = ("actor", "event", "description", "details", "created_at")
+    ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        profile = get_user_profile(request.user)
+        return bool(
+            request.user.is_active
+            and request.user.is_staff
+            and (
+                request.user.is_superuser
+                or (profile and profile.role == StaffRole.ADMIN)
+            )
+        )
 
 
 @admin.register(DisciplinaryRecord)
@@ -231,6 +402,5 @@ admin.site.register(
         ClassGroup,
         Guardian,
         AcademicYear,
-        AcademicTerm,
     ]
 )

@@ -13,7 +13,10 @@ def set_active_term(term_id) -> AcademicTerm:
         
         # Deactivate other terms with the same level, or just all terms to be safe
         # depending on business logic. The system uses LevelChoice.ALL predominantly.
-        AcademicTerm.objects.filter(level=term.level).exclude(id=term_id).update(is_current=False)
+        AcademicTerm.objects.filter(
+            level=term.level,
+            is_current=True,
+        ).exclude(id=term_id).update(is_current=False)
         
         term.is_current = True
         term.save()

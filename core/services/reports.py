@@ -298,6 +298,11 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                     "Placement required",
                 ))
         occupancy = round(total_assigned * 100 / total_capacity, 1) if total_capacity else 0
+        row_groups = []
+        for row in rows:
+            if row[1] == "House total":
+                row_groups.append({"house": row[0], "rows": []})
+            row_groups[-1]["rows"].append(row)
         return {
             "title": "Boarding Occupancy & Placement",
             "headers": (
@@ -311,6 +316,7 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                 "Capacity / Placement",
             ),
             "rows": rows,
+            "row_groups": row_groups,
             "summary": (
                 ("Boarders", total_boarders),
                 ("Configured beds", total_capacity),

@@ -1132,6 +1132,41 @@ class SchoolConfiguration(models.Model):
         return self.name
 
 
+class ConfigurationAuditLog(models.Model):
+    """Append-only record of privileged changes to system configuration."""
+
+    class Event(models.TextChoices):
+        ACTIVE_TERM_CHANGED = "active_term_changed", "Active academic term changed"
+        ACADEMIC_TERM_CHANGED = "academic_term_changed", "Academic term updated"
+        SMS_STATE_CHANGED = "sms_state_changed", "SMS notification state changed"
+        SCHOOL_IDENTITY_CHANGED = "school_identity_changed", "School identity changed"
+        STAFF_ROLE_CHANGED = "staff_role_changed", "Staff role changed"
+        HOUSEMASTER_ASSIGNMENT_CHANGED = (
+            "housemaster_assignment_changed",
+            "Housemaster assignment changed",
+        )
+
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="configuration_audit_events",
+    )
+    event = models.CharField(max_length=40, choices=Event.choices)
+    description = models.CharField(max_length=255)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Configuration Audit Event"
+        verbose_name_plural = "Configuration Audit Events"
+
+    def __str__(self):
+        return f"{self.get_event_display()} - {self.created_at:%Y-%m-%d %H:%M}"
+
+
 class StudentIDExport(BaseModel):
     """Tracked background export of active students' ID card images."""
 
