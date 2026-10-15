@@ -24,6 +24,10 @@ from core.models import (
 
 
 class SyntheticPilotSeederTests(TestCase):
+    def setUp(self):
+        super().setUp()
+        SMSConfiguration.objects.all().delete()
+
     @override_settings(SMS_ENABLED=False)
     def test_default_command_only_prints_plan(self):
         output = StringIO()

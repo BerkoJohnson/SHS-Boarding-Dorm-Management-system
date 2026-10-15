@@ -18,6 +18,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.contrib.auth import logout
 from django.contrib import messages
 from django.views.decorators.cache import never_cache
+from django.utils.http import url_has_allowed_host_and_scheme
 from .models import (
     Student,
     Exeat,
@@ -1716,7 +1717,11 @@ def exeat_action_view(request, pk, action):
                     messages.info(request, f"Exeat pass {exeat.exeat_number} was cancelled and voided.")
 
     referer = request.META.get('HTTP_REFERER')
-    if referer:
+    if referer and url_has_allowed_host_and_scheme(
+        referer,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
         return redirect(referer)
     return redirect('core:dashboard')
 
@@ -2314,6 +2319,7 @@ def roll_call_create_session_view(request):
 
 @login_required
 @require_POST
+@role_required(*ROLL_CALL_ROLES)
 def roll_call_delete_session_view(request, session_pk):
     """Delete an owned roll call, or any roll call as a system administrator."""
     profile = get_user_profile(request.user)
@@ -2326,6 +2332,7 @@ def roll_call_delete_session_view(request, session_pk):
             Q(created_by=request.user)
             | Q(created_by__isnull=True, conducted_by__user=request.user)
         )
+    sessions = filter_queryset_by_house(request.user, sessions, "house_id")
     session = get_object_or_404(sessions, pk=session_pk)
     house_name = session.house.name
     session.delete()
@@ -2335,6 +2342,7 @@ def roll_call_delete_session_view(request, session_pk):
 
 @login_required
 @require_POST
+@role_required(*ROLL_CALL_ROLES)
 def roll_call_notification_read_view(request, notification_pk):
     notification = get_object_or_404(
         RollCallNotification,

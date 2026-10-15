@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 
@@ -18,6 +19,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if not settings.TENANCY_ENABLED:
+            raise CommandError(
+                "Set TENANCY_ENABLED=true before adding tenant domains."
+            )
         if not options["confirm_domain_verified"]:
             raise CommandError(
                 "Verify domain ownership first, then pass --confirm-domain-verified."
@@ -31,6 +36,14 @@ class Command(BaseCommand):
             raise CommandError(str(error)) from error
         if Domain.objects.filter(domain=domain_name, folder="").exists():
             raise CommandError(f"Domain '{domain_name}' is already registered.")
+
+        # Demote any existing primary domain for this tenant so there is
+        # at most one primary at any time (issue #11).
+        if options["primary"]:
+            Domain.objects.filter(
+                tenant=tenant,
+                is_primary=True,
+            ).update(is_primary=False)
 
         domain = Domain.objects.create(
             tenant=tenant,

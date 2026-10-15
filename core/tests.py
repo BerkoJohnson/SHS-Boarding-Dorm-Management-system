@@ -1876,6 +1876,56 @@ class RollCallAndGateTests(TestCase):
         self.assertRedirects(admin_response, reverse('core:roll_call_sessions'))
         self.assertFalse(RollCallSession.objects.filter(pk=other_session.pk).exists())
 
+    def test_unassigned_owner_cannot_delete_roll_call_or_read_notification(self):
+        unassigned_user = User.objects.create_user(
+            username='unassigned_roll_call_owner',
+            password='password123',
+        )
+        session = create_roll_call_session(
+            house=self.house,
+            conducted_by=self.hm,
+            created_by=unassigned_user,
+        )
+        notification = RollCallNotification.objects.create(
+            user=unassigned_user,
+            title='Private roll call notice',
+            message='This notification belongs to the unassigned account.',
+        )
+        self.client.force_login(unassigned_user)
+
+        delete_response = self.client.post(
+            reverse('core:roll_call_delete', args=[session.pk])
+        )
+        notification_response = self.client.post(
+            reverse(
+                'core:roll_call_notification_read',
+                args=[notification.pk],
+            )
+        )
+
+        for response in (delete_response, notification_response):
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response['Location'], reverse('core:dashboard'))
+        self.assertTrue(RollCallSession.objects.filter(pk=session.pk).exists())
+        notification.refresh_from_db()
+        self.assertIsNone(notification.read_at)
+
+    def test_housemaster_cannot_delete_owned_roll_call_outside_assigned_house(self):
+        other_house = House.objects.create(name='Other Roll Call House')
+        session = RollCallSession.objects.create(
+            house=other_house,
+            conducted_by=self.hm,
+            created_by=self.user_hm,
+        )
+        self.client.force_login(self.user_hm)
+
+        response = self.client.post(
+            reverse('core:roll_call_delete', args=[session.pk])
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(RollCallSession.objects.filter(pk=session.pk).exists())
+
     def test_expired_unfinished_roll_calls_are_deleted_and_notify_the_creator(self):
         session = create_roll_call_session(
             house=self.house,

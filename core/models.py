@@ -20,8 +20,9 @@ ROLL_CALL_SESSION_TIMEOUT = timedelta(hours=1)
 
 def tenant_upload_path(directory, filename):
     if settings.TENANCY_ENABLED:
-        schema_name = get_current_schema().schema_name
-        if schema_name != "public":
+        schema = get_current_schema()
+        schema_name = getattr(schema, "schema_name", None) if schema else None
+        if schema_name and schema_name != "public":
             directory = posixpath.join("tenants", schema_name, directory)
     return posixpath.join(directory, filename)
 

@@ -131,7 +131,10 @@ Before using real student or guardian data:
 
    Run Django behind a production-grade WSGI server and HTTPS-terminating
    reverse proxy. Configure that server or a trusted static-file service to
-   serve `STATIC_ROOT`; do not expose `MEDIA_ROOT` or `.private`.
+   serve `STATIC_ROOT`; do not expose `MEDIA_ROOT` or `.private`. The proxy
+   must remove client-supplied `X-Forwarded-Proto` and set it itself before
+   forwarding requests, because Django trusts that header when determining
+   whether a request uses HTTPS.
 3. Keep the web process, Celery worker, and Celery Beat running under a process
    manager. Confirm Redis 6 or newer, task execution, scheduled overdue checks,
    expired-export cleanup, and SMS delivery using test recipients before
@@ -162,7 +165,14 @@ deployment changes, and configure:
   `ALLOWED_HOSTS` containing the exact Render hostname, and
   `CSRF_TRUSTED_ORIGINS` containing its HTTPS origin. Add the separate
   staging database's `PGHOST`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD`;
-  `PGPORT=5432` and `PGSSLMODE=require`. For media, create a private Neon
+  `PGPORT=5432` and an explicit TLS mode such as `PGSSLMODE=require`.
+  Production refuses the local database profile and requires one of
+  `require`, `verify-ca`, or `verify-full` for PostgreSQL TLS. HSTS is disabled
+  until explicitly configured; first confirm HTTPS works for the service's
+  hostnames, then set `SECURE_HSTS_SECONDS`. Only enable
+  `SECURE_HSTS_INCLUDE_SUBDOMAINS=true` or `SECURE_HSTS_PRELOAD=true` after
+  confirming every affected subdomain is permanently HTTPS-capable.
+  For media, create a private Neon
   Object Storage bucket and set `MEDIA_STORAGE_BACKEND=neon_s3` and
   `NEON_STORAGE_BUCKET=uploads`. In Neon Console, use **Connect → Storage** for
   the endpoint, region, and branch credential; the credential must have
@@ -440,6 +450,9 @@ Duplicate admission or index numbers (within the upload or already in the
 system), invalid references, or invalid placements reject the entire upload.
 It never updates an existing student. A roster import does not include photos;
 add photos through an individual student form.
+The `import_roster` management command uses the same validation and atomic
+write path as the web importer, and reports row-specific validation errors
+without importing a partial roster.
 
 Dormitory blocks can be divided into named rooms with a positive room capacity.
 Manage room inventory in Django Admin before assigning students. Once rooms are

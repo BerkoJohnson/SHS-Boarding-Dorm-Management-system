@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Sequence
 from zoneinfo import ZoneInfo
 
@@ -18,9 +19,12 @@ HOUSEMASTER_AUDIENCE = "housemaster"
 
 
 def _school_short_name() -> str:
+    """Return a GSM 03.38–safe sender ID (alphanumeric only, max 11 chars)."""
     configuration = SchoolConfiguration.get_solo()
-    short_name = (configuration.short_name or configuration.name or "ATSEC").strip()
-    return short_name.upper() if short_name else "EDENSYS"
+    raw = (configuration.short_name or configuration.name or "ATSEC").strip()
+    # Strip characters not allowed in SMS sender IDs (GSM 03.38).
+    sanitized = re.sub(r"[^A-Za-z0-9]", "", raw)[:11]
+    return sanitized.upper() if sanitized else "EDENSYS"
 
 
 def normalize_phone_number(value: str | None) -> str:
@@ -235,7 +239,7 @@ def send_bulk_sms(phone_numbers: Sequence[str], message: str) -> bool:
         "key": api_key,
         "text": message,
         "type": 0,
-        "sender": getattr(settings, "SMS_SENDER_ID", "ATSEC"),
+        "sender": _school_short_name() or getattr(settings, "SMS_SENDER_ID", "ATSEC"),
         "to": ",".join(cleaned_numbers),
     }
     try:

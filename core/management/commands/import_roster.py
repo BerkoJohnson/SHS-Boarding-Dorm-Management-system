@@ -1,112 +1,35 @@
-from datetime import datetime
-import pandas as pd
-from django.core.management.base import BaseCommand
-from core.models import Student, Programme, House, Dormitory, ClassGroup, Guardian
-from core.services.roster import get_roster_house_identity
+from pathlib import Path
+
+from django.core.files import File
+from django.core.management.base import BaseCommand, CommandError
+
+from core.services.student_import import import_student_roster
 
 
 class Command(BaseCommand):
-    help = "Import students roster from Excel file"
+    help = "Validate and import a student roster from CSV or Excel .xlsx"
 
     def add_arguments(self, parser):
-        parser.add_argument('file_path', type=str, help="Path to the roster Excel file")
+        parser.add_argument("file_path", type=str, help="Path to the roster file")
 
     def handle(self, *args, **options):
-        file_path = options['file_path']
-        xls = pd.ExcelFile(file_path)
+        file_path = Path(options["file_path"])
+        try:
+            with file_path.open("rb") as source:
+                roster_file = File(source, name=file_path.name)
+                imported_count, errors = import_student_roster(roster_file)
+        except OSError as error:
+            raise CommandError(
+                f"Could not read roster file '{file_path}': {error}"
+            ) from error
 
-        for sheet in xls.sheet_names:
-            self.stdout.write(f"Processing sheet: {sheet}...")
-            df = pd.read_excel(file_path, sheet_name=sheet)
+        if errors:
+            details = "\n".join(f"- {error}" for error in errors)
+            raise CommandError(f"Roster import failed:\n{details}")
 
-            for _, row in df.iterrows():
-                # 1. Programme
-                prog_obj, _ = Programme.objects.get_or_create(
-                    name=str(row['Programme']).strip().upper()
-                )
-
-                # 2. ClassGroup
-                class_str = str(row['Class']).strip() if pd.notnull(row['Class']) else ''
-                class_obj = None
-                if class_str and class_str.lower() != 'unallocated':
-                    class_obj, _ = ClassGroup.objects.get_or_create(
-                        name=class_str,
-                        defaults={'programme': prog_obj}
-                    )
-
-                # 3. House & Dormitory Processing
-                house_str = str(row['House']).strip() if pd.notnull(row['House']) else ''
-                house_obj = None
-                dorm_obj = None
-
-                if house_str and house_str.lower() != 'unallocated':
-                    clean_house_name, gender_code = get_roster_house_identity(
-                        house_str,
-                        str(row['Gender']),
-                    )
-                    house_obj, _ = House.objects.get_or_create(
-                        name__iexact=clean_house_name,
-                        defaults={'name': clean_house_name},
-                    )
-
-                    block_label = "Boys Block" if gender_code == Dormitory.GenderBlock.MALE else "Girls Block"
-                    dorm_name = f"{house_obj.name} {block_label}"
-
-                    # Get or create the physical Dormitory block linked to this House
-                    dorm_obj, _ = Dormitory.objects.get_or_create(
-                        house=house_obj,
-                        gender=gender_code,
-                        name=dorm_name,
-                        defaults={'capacity': 100}
-                    )
-
-                # 4. Residency Status
-                residency_val = str(row['Residency']).strip().title() if pd.notnull(row['Residency']) else 'Boarding'
-
-                # Explicitly clear dormitory for Day students to satisfy model clean() rules
-                if residency_val == Student.ResidencyStatus.DAY:
-                    dorm_obj = None
-
-                # 5. Guardian Processing
-                guardian_obj = None
-                p_name = str(row['Parent Name']).strip() if pd.notnull(row['Parent Name']) else ''
-                p_contact_raw = str(row['Parent Contact']).strip() if pd.notnull(row['Parent Contact']) else ''
-                p_contact = p_contact_raw.split('.')[0] if p_contact_raw else ''
-
-                if p_name and p_contact:
-                    guardian_obj, _ = Guardian.objects.get_or_create(
-                        phone_number=p_contact,
-                        defaults={'full_name': p_name}
-                    )
-
-                # 6. Parse Date of Birth
-                dob = None
-                if pd.notnull(row['Date of Birth']):
-                    dob_str = str(row['Date of Birth']).strip()
-                    try:
-                        dob = datetime.strptime(dob_str, '%d/%m/%Y').date()
-                    except ValueError:
-                        try:
-                            dob = pd.to_datetime(dob_str).date()
-                        except Exception:
-                            pass
-
-                # 7. Student Record Update or Creation
-                student, _ = Student.objects.update_or_create(
-                    admission_no=str(row['Admission No.']).strip(),
-                    defaults={
-                        'index_number': str(row['Index Number']).strip(),
-                        'full_name': str(row['Full Name']).strip(),
-                        'gender': str(row['Gender']).strip().lower(),
-                        'date_of_birth': dob,
-                        'programme': prog_obj,
-                        'house': house_obj,
-                        'dormitory': dorm_obj,
-                        'class_group': class_obj,
-                        'guardian': guardian_obj,
-                        'residency': residency_val,
-                        'status': str(row['Status']).strip().title() if pd.notnull(row['Status']) else 'Enrolled',
-                    }
-                )
-
-        self.stdout.write(self.style.SUCCESS("Roster import completed successfully!"))
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Roster import completed successfully: "
+                f"{imported_count} student record(s) imported."
+            )
+        )

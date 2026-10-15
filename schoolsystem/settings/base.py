@@ -18,6 +18,7 @@ TENANCY_ENABLED = os.getenv("TENANCY_ENABLED", "false").strip().lower() in {
     "yes",
     "on",
 }
+PLATFORM_ADMIN_DOMAIN = os.getenv("PLATFORM_ADMIN_DOMAIN", "").strip() or None
 
 if DATABASE_PROFILE == "neon":
     required_neon_settings = ("PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD")
@@ -58,7 +59,6 @@ TENANT_APPS = [
 ]
 PUBLIC_APPS = [
     "django.contrib.contenttypes",
-    "django.contrib.staticfiles",
     "django_pgschemas",
     "django_celery_beat",
     "tenancy",
@@ -99,12 +99,19 @@ MIDDLEWARE = [
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
+    (
+        "tenancy.middleware.DynamicCsrfMiddleware"
+        if TENANCY_ENABLED
+        else "django.middleware.csrf.CsrfViewMiddleware"
+    ),
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
 ]
+
+# Silence security.W003 when DynamicCsrfMiddleware replaces CsrfViewMiddleware.
+SILENCED_SYSTEM_CHECKS = ["security.W003"] if TENANCY_ENABLED else []
 
 ROOT_URLCONF = "schoolsystem.urls"
 

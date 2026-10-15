@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 from django_pgschemas.utils import check_schema_name_not_reserved
 
 from tenancy.models import Domain, Tenant, normalize_domain
@@ -47,16 +49,44 @@ class Command(BaseCommand):
         if Domain.objects.filter(domain=domain_name, folder="").exists():
             raise CommandError(f"Domain '{domain_name}' is already registered.")
 
-        tenant = Tenant.objects.create(
-            name=school_name,
-            schema_name=schema_name,
-            is_active=False,
-        )
-        Domain.objects.create(
-            tenant=tenant,
-            domain=domain_name,
-            is_verified=True,
-        )
+        with transaction.atomic():
+            tenant = Tenant.objects.create(
+                name=school_name,
+                schema_name=schema_name,
+                is_active=False,
+            )
+            Domain.objects.create(
+                tenant=tenant,
+                domain=domain_name,
+                is_verified=True,
+            )
+
+        # Run migrations for the new tenant schema.  This must happen
+        # outside the atomic block because DDL commands (CREATE TABLE)
+        # issued by the migration runner should not be rolled back by a
+        # subsequent Python-level error.
+        self.stdout.write("Running migrations for the new tenant schema\u2026")
+        try:
+            with tenant:
+                call_command("migrate", verbosity=0)
+                # Seed the initial SchoolConfiguration so the school name
+                # and SMS sender ID are set from the start.
+                from core.models import SchoolConfiguration
+
+                SchoolConfiguration.objects.get_or_create(
+                    id=1,
+                    defaults={
+                        "name": school_name,
+                        "short_name": school_name[:50].strip(),
+                    },
+                )
+        except Exception as error:
+            raise CommandError(
+                f"Schema '{schema_name}' was created but migrations failed: "
+                f"{error}\n\nTo retry, run:\n"
+                f"  python manage.py migrate --schema={schema_name}"
+            ) from error
+
         self.stdout.write(
             self.style.SUCCESS(
                 f"Created school '{tenant.name}' with schema "

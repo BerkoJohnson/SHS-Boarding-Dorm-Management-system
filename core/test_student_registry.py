@@ -5,6 +5,8 @@ from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from openpyxl import Workbook
@@ -686,6 +688,64 @@ class StudentRegistryTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Upload a CSV or Excel .xlsx file.")
+
+    def test_management_command_imports_a_validated_csv_roster(self):
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "ADM-COMMAND-1",
+                    "IDX-COMMAND-1",
+                    "Command Import Student",
+                    "Male",
+                    "General Science",
+                    "Red House",
+                    "1A1",
+                ],
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = Path(directory, uploaded_file.name)
+            roster_path.write_bytes(uploaded_file.read())
+            output = io.StringIO()
+
+            call_command("import_roster", str(roster_path), stdout=output)
+
+        self.assertIn("1 student record(s) imported", output.getvalue())
+        self.assertTrue(
+            Student.objects.filter(admission_no="ADM-COMMAND-1").exists()
+        )
+
+    def test_management_command_reports_row_errors_without_partial_imports(self):
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "ADM-COMMAND-GOOD",
+                    "IDX-COMMAND-GOOD",
+                    "Valid Student",
+                    "Male",
+                    "General Science",
+                    "Red House",
+                    "1A1",
+                ],
+                [
+                    "ADM-COMMAND-BAD",
+                    "IDX-COMMAND-BAD",
+                    "Invalid Student",
+                    "Female",
+                    "Unknown Programme",
+                    "Red House",
+                    "1A1",
+                ],
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = Path(directory, uploaded_file.name)
+            roster_path.write_bytes(uploaded_file.read())
+
+            with self.assertRaisesMessage(CommandError, "CSV, row 3"):
+                call_command("import_roster", str(roster_path))
+
+        self.assertFalse(Student.objects.exists())
 
 
 class TemporaryStudentMediaTests(TransactionTestCase):

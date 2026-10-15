@@ -72,7 +72,12 @@ def private_student_id_export_path(
     if settings.TENANCY_ENABLED:
         from django_pgschemas.schema import get_current_schema
 
-        export_root /= schema_name or get_current_schema().schema_name
+        schema = get_current_schema()
+        resolved = schema_name or (
+            getattr(schema, "schema_name", None) if schema else None
+        )
+        if resolved and resolved != "public":
+            export_root /= resolved
     return export_root / archive_name
 
 

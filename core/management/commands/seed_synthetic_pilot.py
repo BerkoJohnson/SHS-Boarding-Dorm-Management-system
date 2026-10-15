@@ -1,5 +1,7 @@
+from contextlib import nullcontext
 import os
 
+from django.conf import settings as django_settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
@@ -35,6 +37,11 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
+            "--schema",
+            default=None,
+            help="Tenant schema name to seed into (required when TENANCY_ENABLED=True).",
+        )
+        parser.add_argument(
             "--apply",
             action="store_true",
             help="Create the dataset; without this flag, only print the plan.",
@@ -61,54 +68,72 @@ class Command(BaseCommand):
             )
             return
 
+        schema = options.get("schema")
+        if django_settings.TENANCY_ENABLED and not schema:
+            raise CommandError(
+                "TENANCY_ENABLED is True; pass --schema to specify the "
+                "target tenant schema."
+            )
+
         if not options["confirm_empty_staging"]:
             raise CommandError(
                 "Refusing to seed without --confirm-empty-staging."
             )
 
-        expected_database = os.getenv("SYNTHETIC_PILOT_DATABASE", "").strip()
-        if not expected_database or expected_database != connection.settings_dict["NAME"]:
-            raise CommandError(
-                "SYNTHETIC_PILOT_DATABASE must exactly match the configured "
-                "dedicated staging database name."
-            )
+        # Activate the tenant schema if specified.
+        if schema:
+            from tenancy.models import Tenant
+            tenant = Tenant.objects.filter(schema_name=schema).first()
+            if tenant is None:
+                raise CommandError(f"Tenant schema '{schema}' was not found.")
+            context = tenant
+        else:
+            context = nullcontext()
 
-        if SMSConfiguration.is_enabled():
-            raise CommandError(
-                "SMS is enabled. Disable SMS before creating synthetic pilot data."
-            )
+        with context:
+            expected_database = os.getenv("SYNTHETIC_PILOT_DATABASE", "").strip()
+            if not expected_database or expected_database != connection.settings_dict["NAME"]:
+                raise CommandError(
+                    "SYNTHETIC_PILOT_DATABASE must exactly match the configured "
+                    "dedicated staging database name."
+                )
 
-        occupied_tables = self._occupied_school_tables()
-        if occupied_tables:
-            table_summary = ", ".join(
-                f"{model.__name__}={count}"
-                for model, count in occupied_tables
-            )
-            raise CommandError(
-                "Refusing to mix synthetic fixtures with existing school records: "
-                f"{table_summary}. Use a fresh, isolated staging database."
-            )
+            if SMSConfiguration.is_enabled():
+                raise CommandError(
+                    "SMS is enabled. Disable SMS before creating synthetic pilot data."
+                )
 
-        user_model = get_user_model()
-        if not user_model.objects.filter(
-            is_superuser=True,
-            is_active=True,
-        ).exists():
-            raise CommandError(
-                "Create an active staging superuser before seeding so an "
-                "administrator can manage the disabled pilot accounts."
-            )
+            occupied_tables = self._occupied_school_tables()
+            if occupied_tables:
+                table_summary = ", ".join(
+                    f"{model.__name__}={count}"
+                    for model, count in occupied_tables
+                )
+                raise CommandError(
+                    "Refusing to mix synthetic fixtures with existing school records: "
+                    f"{table_summary}. Use a fresh, isolated staging database."
+                )
 
-        with transaction.atomic():
-            self._create_dataset()
+            user_model = get_user_model()
+            if not user_model.objects.filter(
+                is_superuser=True,
+                is_active=True,
+            ).exists():
+                raise CommandError(
+                    "Create an active staging superuser before seeding so an "
+                    "administrator can manage the disabled pilot accounts."
+                )
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                "Synthetic pilot dataset created. Test accounts are inactive "
-                "and have unusable passwords; have an administrator set "
-                "individual credentials before supervised testing."
+            with transaction.atomic():
+                self._create_dataset()
+
+            self.stdout.write(
+                self.style.SUCCESS(
+                    "Synthetic pilot dataset created. Test accounts are inactive "
+                    "and have unusable passwords; have an administrator set "
+                    "individual credentials before supervised testing."
+                )
             )
-        )
 
     @staticmethod
     def _occupied_school_tables():

@@ -11,16 +11,44 @@ TEST_SECRET_KEY = "test-only-secret-key-for-production-settings-checks"
 
 
 class ProductionSettingsTests(SimpleTestCase):
-    def run_settings_import(self, *, secret_key, allowed_hosts, db_sslmode=""):
+    def run_settings_import(
+        self,
+        *,
+        secret_key,
+        allowed_hosts,
+        database_profile="neon",
+        pg_sslmode="require",
+        secure_hsts_seconds=None,
+        hsts_subdomains=None,
+        hsts_preload=None,
+    ):
         environment = os.environ.copy()
         environment["DJANGO_SECRET_KEY"] = secret_key
         environment["ALLOWED_HOSTS"] = allowed_hosts
-        environment["DB_SSLMODE"] = db_sslmode
+        environment["DATABASE_PROFILE"] = database_profile
+        environment["PGHOST"] = "neon.example.neon.tech"
+        environment["PGDATABASE"] = "neon_db"
+        environment["PGUSER"] = "neon_user"
+        environment["PGPASSWORD"] = "test-password"
+        environment["PGSSLMODE"] = pg_sslmode
+        environment.pop("SECURE_HSTS_SECONDS", None)
+        environment.pop("SECURE_HSTS_INCLUDE_SUBDOMAINS", None)
+        environment.pop("SECURE_HSTS_PRELOAD", None)
+        if secure_hsts_seconds is not None:
+            environment["SECURE_HSTS_SECONDS"] = secure_hsts_seconds
+        if hsts_subdomains is not None:
+            environment["SECURE_HSTS_INCLUDE_SUBDOMAINS"] = hsts_subdomains
+        if hsts_preload is not None:
+            environment["SECURE_HSTS_PRELOAD"] = hsts_preload
+        environment["TENANCY_ENABLED"] = "false"
         return subprocess.run(
             [
                 sys.executable,
                 "-c",
-                "import schoolsystem.settings.production",
+                "import schoolsystem.settings.production as settings; "
+                "print(settings.SECURE_HSTS_SECONDS, "
+                "settings.SECURE_HSTS_INCLUDE_SUBDOMAINS, "
+                "settings.SECURE_HSTS_PRELOAD)",
             ],
             cwd=PROJECT_ROOT,
             env=environment,
@@ -66,6 +94,12 @@ class ProductionSettingsTests(SimpleTestCase):
                 **os.environ,
                 "DJANGO_SECRET_KEY": TEST_SECRET_KEY,
                 "ALLOWED_HOSTS": "school.example.org",
+                "DATABASE_PROFILE": "neon",
+                "PGHOST": "neon.example.neon.tech",
+                "PGDATABASE": "neon_db",
+                "PGUSER": "neon_user",
+                "PGPASSWORD": "test-password",
+                "PGSSLMODE": "require",
             },
             capture_output=True,
             text=True,
@@ -108,6 +142,12 @@ class ProductionSettingsTests(SimpleTestCase):
                 "DJANGO_SECRET_KEY": TEST_SECRET_KEY,
                 "ALLOWED_HOSTS": "",
                 "TENANCY_ENABLED": "true",
+                "DATABASE_PROFILE": "neon",
+                "PGHOST": "neon.example.neon.tech",
+                "PGDATABASE": "neon_db",
+                "PGUSER": "neon_user",
+                "PGPASSWORD": "test-password",
+                "PGSSLMODE": "require",
             },
             capture_output=True,
             text=True,
@@ -115,6 +155,54 @@ class ProductionSettingsTests(SimpleTestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_production_settings_reject_the_local_database_profile(self):
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            database_profile="local",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Production requires DATABASE_PROFILE=neon", result.stderr)
+
+    def test_production_settings_require_an_explicit_secure_tls_mode(self):
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            pg_sslmode="",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Production requires PGSSLMODE", result.stderr)
+
+    def test_production_settings_default_to_host_only_non_preload_hsts(self):
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("0 False False", result.stdout)
+
+    def test_hsts_preload_requires_year_long_subdomain_policy(self):
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            secure_hsts_seconds="31536000",
+            hsts_subdomains="true",
+            hsts_preload="true",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        invalid_result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            secure_hsts_seconds="31536000",
+            hsts_preload="true",
+        )
+        self.assertNotEqual(invalid_result.returncode, 0)
+        self.assertIn("SECURE_HSTS_INCLUDE_SUBDOMAINS=true", invalid_result.stderr)
 
     def test_neon_profile_uses_pg_variables_and_requires_ssl(self):
         result = subprocess.run(

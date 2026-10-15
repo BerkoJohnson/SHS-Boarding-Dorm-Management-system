@@ -1,3 +1,4 @@
+import logging
 import shutil
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -12,6 +13,8 @@ from core.models import SchoolConfiguration, Student
 from core.storage import PrivateStudentPhotoStorage
 from core.services.student_id_images import private_student_id_export_path
 from tenancy.models import Domain, Tenant, normalize_domain
+
+logger = logging.getLogger(__name__)
 
 
 AUTH_TABLES = {
@@ -154,11 +157,70 @@ class Command(BaseCommand):
             )
             return [row[0] for row in cursor.fetchall()]
 
+    @staticmethod
+    def _topological_sort_tables(tables):
+        """Sort tables so parent rows are inserted before child rows.
+
+        Introspects FK relationships from the public schema and applies
+        Kahn's algorithm to produce a dependency-safe insertion order.
+        This eliminates the need for DISABLE TRIGGER ALL (which requires
+        PostgreSQL SUPERUSER privilege).
+        """
+        table_set = set(tables)
+        # Build dependency graph: child -> set of parent tables.
+        dependencies = {table: set() for table in tables}
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    kcu.table_name  AS child_table,
+                    ccu.table_name  AS parent_table
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name  = kcu.constraint_name
+                   AND tc.table_schema    = kcu.table_schema
+                JOIN information_schema.constraint_column_usage ccu
+                    ON tc.constraint_name  = ccu.constraint_name
+                   AND tc.table_schema    = ccu.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_schema    = 'public'
+                """
+            )
+            for child, parent in cursor.fetchall():
+                if (
+                    child in table_set
+                    and parent in table_set
+                    and child != parent
+                ):
+                    dependencies[child].add(parent)
+
+        # Kahn's algorithm — stable topological sort.
+        sorted_tables = []
+        no_deps = [t for t in tables if not dependencies[t]]
+        while no_deps:
+            table = no_deps.pop(0)
+            sorted_tables.append(table)
+            for t in list(dependencies):
+                dependencies[t].discard(table)
+                if (
+                    not dependencies[t]
+                    and t not in sorted_tables
+                    and t not in no_deps
+                ):
+                    no_deps.append(t)
+
+        # Append any remaining tables (circular FKs — unlikely but safe).
+        for t in tables:
+            if t not in sorted_tables:
+                sorted_tables.append(t)
+        return sorted_tables
+
     def _copy_rows(self, tables, schema_name):
         quote = connection.ops.quote_name
         replace_sms_configuration = False
         with connection.cursor() as cursor:
-            cursor.execute("SET CONSTRAINTS ALL DEFERRED")
+            # Increase statement_timeout for large datasets (issue #20).
+            cursor.execute("SET LOCAL statement_timeout = '0'")
             for table_name in tables:
                 source_columns = self._columns("public", table_name)
                 target_columns = self._columns(schema_name, table_name)
@@ -202,8 +264,15 @@ class Command(BaseCommand):
                     f"{quote('core_smsconfiguration')}"
                 )
 
-            for table_name in tables:
-                column_sql = ", ".join(quote(column) for column in self._columns("public", table_name))
+            # Sort tables in FK-safe order so parent rows exist before
+            # child rows are inserted.  This avoids the need for
+            # DISABLE TRIGGER ALL (which requires PostgreSQL SUPERUSER).
+            ordered_tables = self._topological_sort_tables(tables)
+            for table_name in ordered_tables:
+                column_sql = ", ".join(
+                    quote(column)
+                    for column in self._columns("public", table_name)
+                )
                 cursor.execute(
                     f"INSERT INTO {quote(schema_name)}.{quote(table_name)} "
                     f"({column_sql}) SELECT {column_sql} "
@@ -264,9 +333,16 @@ class Command(BaseCommand):
             )
 
     def _copy_file(self, storage, old_name, schema_name):
+        # Guard against double-prefixing on resumed migration (issue #8).
+        if old_name.startswith(f"tenants/{schema_name}/"):
+            return old_name
         new_name = f"tenants/{schema_name}/{old_name.lstrip('/')}"
         if not storage.exists(old_name):
-            raise CommandError(f"Referenced upload '{old_name}' is missing.")
+            logger.warning(
+                "Referenced upload '%s' is missing from storage; skipping.",
+                old_name,
+            )
+            return old_name
         if not storage.exists(new_name):
             with storage.open(old_name, "rb") as source:
                 saved_name = storage.save(new_name, File(source))

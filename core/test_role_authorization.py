@@ -16,11 +16,13 @@ from core.models import (
     AcademicTerm,
     AcademicYear,
     ConfigurationAuditLog,
+    DisciplinaryRecord,
     Dormitory,
     Exeat,
     House,
     HouseMaster,
     Programme,
+    SMSConfiguration,
     StaffRole,
     Student,
     UserProfile,
@@ -446,3 +448,208 @@ class HouseScopedWriteAuthorizationTests(TestCase):
         self.assertEqual(response.status_code, 404)
         exeat.refresh_from_db()
         self.assertEqual(exeat.status, Exeat.Status.PENDING)
+
+    def test_exeat_action_rejects_external_referer_redirects(self):
+        programme = Programme.objects.create(name="Redirect Programme")
+        house = House.objects.create(name="Redirect House")
+        dormitory = Dormitory.objects.create(
+            house=house,
+            name="Redirect Dormitory",
+            gender=Dormitory.GenderBlock.MALE,
+        )
+        student = Student.objects.create(
+            admission_no="REDIRECT-001",
+            index_number="IDX-REDIRECT-001",
+            full_name="Redirect Student",
+            gender=Student.Gender.MALE,
+            programme=programme,
+            house=house,
+            dormitory=dormitory,
+        )
+        user = User.objects.create_user(
+            username="redirect-housemaster",
+            password="test-password",
+        )
+        UserProfile.objects.update_or_create(
+            user=user,
+            defaults={"role": StaffRole.HOUSEMASTER},
+        )
+        HouseMaster.objects.create(
+            user=user,
+            full_name="Redirect Housemaster",
+            staff_id="ROLE-REDIRECT-HM",
+            phone_number="+233200000005",
+            house=house,
+        )
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=student,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now + timezone.timedelta(hours=1),
+            expected_return=now + timezone.timedelta(hours=3),
+            destination="Private destination",
+            reason="Private reason",
+        )
+        self.client.force_login(user)
+
+        response = self.client.post(
+            reverse("core:exeat_action", args=[exeat.pk, "noop"]),
+            HTTP_REFERER="https://attacker.example/phishing",
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("core:dashboard"),
+            fetch_redirect_response=False,
+        )
+        internal_response = self.client.post(
+            reverse("core:exeat_action", args=[exeat.pk, "noop"]),
+            HTTP_REFERER=reverse("core:exeat_list"),
+        )
+        self.assertRedirects(
+            internal_response,
+            reverse("core:exeat_list"),
+            fetch_redirect_response=False,
+        )
+
+
+class HousemasterAuthorizationBoundaryTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="boundary-housemaster",
+            password="test-password",
+        )
+        UserProfile.objects.update_or_create(
+            user=self.user,
+            defaults={"role": StaffRole.HOUSEMASTER},
+        )
+        self.house = House.objects.create(name="Boundary House")
+        self.other_house = House.objects.create(name="Other Boundary House")
+        self.dormitory = Dormitory.objects.create(
+            house=self.house,
+            name="Boundary Dormitory",
+            gender=Dormitory.GenderBlock.MALE,
+        )
+        self.other_dormitory = Dormitory.objects.create(
+            house=self.other_house,
+            name="Other Boundary Dormitory",
+            gender=Dormitory.GenderBlock.MALE,
+        )
+        self.programme = Programme.objects.create(name="Boundary Programme")
+        HouseMaster.objects.create(
+            user=self.user,
+            full_name="Boundary Housemaster",
+            staff_id="ROLE-BOUNDARY-HM",
+            phone_number="+233200000004",
+            house=self.house,
+        )
+        self.student = Student.objects.create(
+            admission_no="BOUNDARY-001",
+            index_number="IDX-BOUNDARY-001",
+            full_name="Boundary House Student",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=self.house,
+            dormitory=self.dormitory,
+        )
+        self.other_student = Student.objects.create(
+            admission_no="BOUNDARY-002",
+            index_number="IDX-BOUNDARY-002",
+            full_name="Other House Student",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=self.other_house,
+            dormitory=self.other_dormitory,
+        )
+        self.local_record = DisciplinaryRecord.objects.create(
+            student=self.student,
+            offense="Local house incident",
+            action_taken="Local follow-up",
+        )
+        DisciplinaryRecord.objects.create(
+            student=self.other_student,
+            offense="Private opposing-house incident",
+            action_taken="Private follow-up",
+        )
+
+    def test_housemaster_cannot_view_or_change_schoolwide_configuration(self):
+        academic_year = AcademicYear.objects.create(
+            start_date=date(2026, 9, 1),
+            end_date=date(2027, 8, 31),
+        )
+        term = AcademicTerm.objects.create(
+            academic_year=academic_year,
+            term=AcademicTerm.TermChoice.TERM_1,
+            level=AcademicTerm.LevelChoice.ALL,
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 12, 15),
+        )
+        sms_configuration, _created = SMSConfiguration.objects.get_or_create(
+            pk=1,
+            defaults={"enabled": True},
+        )
+        sms_configuration.enabled = True
+        sms_configuration.save(update_fields=["enabled", "updated_at"])
+        self.client.force_login(self.user)
+
+        configuration_response = self.client.get(reverse("core:configuration"))
+        active_term_response = self.client.post(
+            reverse("core:set_active_term", args=[term.pk])
+        )
+        sms_response = self.client.post(
+            reverse("core:set_sms_enabled"),
+            {"enabled": "false"},
+        )
+
+        self.assertRedirects(
+            configuration_response,
+            reverse("core:dashboard"),
+        )
+        self.assertRedirects(active_term_response, reverse("core:dashboard"))
+        self.assertRedirects(sms_response, reverse("core:dashboard"))
+        term.refresh_from_db()
+        sms_configuration.refresh_from_db()
+        self.assertFalse(term.is_current)
+        self.assertTrue(sms_configuration.enabled)
+        self.assertFalse(
+            ConfigurationAuditLog.objects.filter(
+                event=ConfigurationAuditLog.Event.ACTIVE_TERM_CHANGED,
+            ).exists()
+        )
+
+    def test_housemaster_cannot_view_disciplinary_data_from_another_house(self):
+        self.client.force_login(self.user)
+
+        conduct_response = self.client.get(reverse("core:conduct_list"))
+        requested_other_house_response = self.client.get(
+            reverse("core:conduct_list"),
+            {"house": str(self.other_house.pk)},
+        )
+        own_record_response = self.client.get(
+            reverse("core:student_record", args=[self.student.pk])
+        )
+        other_record_response = self.client.get(
+            reverse("core:student_record", args=[self.other_student.pk])
+        )
+
+        self.assertEqual(conduct_response.status_code, 200)
+        self.assertContains(conduct_response, "Local house incident")
+        self.assertNotContains(
+            conduct_response,
+            "Private opposing-house incident",
+        )
+        self.assertEqual(requested_other_house_response.status_code, 200)
+        self.assertNotContains(
+            requested_other_house_response,
+            "Private opposing-house incident",
+        )
+        self.assertEqual(
+            list(conduct_response.context["houses"]),
+            [self.house],
+        )
+        self.assertEqual(own_record_response.status_code, 200)
+        self.assertEqual(
+            list(own_record_response.context["disciplinary_records"]),
+            [self.local_record],
+        )
+        self.assertEqual(other_record_response.status_code, 404)

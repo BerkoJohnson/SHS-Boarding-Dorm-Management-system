@@ -36,7 +36,7 @@ def _with_tenant_schema(task_function):
     @wraps(task_function)
     def wrapped(*args, tenant_schema=None, **kwargs):
         with _tenant_context(tenant_schema):
-            return task_function(*args, **kwargs)
+            return task_function(*args, tenant_schema=tenant_schema, **kwargs)
 
     return wrapped
 
