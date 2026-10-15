@@ -63,8 +63,11 @@ PUBLIC_APPS = [
     "django_celery_beat",
     "tenancy",
 ]
+
 TENANTS = {
-    "public": {"APPS": PUBLIC_APPS},
+    "public": {
+        "APPS": PUBLIC_APPS,
+    },
     "default": {
         "TENANT_MODEL": "tenancy.Tenant",
         "DOMAIN_MODEL": "tenancy.Domain",

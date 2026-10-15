@@ -1,4 +1,6 @@
 import os
+from urllib.parse import urlsplit
+
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *
@@ -51,10 +53,52 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 # --- SECURITY HARDENING ---
+MIDDLEWARE.insert(
+    1,
+    "schoolsystem.security.ContentSecurityPolicyReportOnlyMiddleware",
+)
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+
+CSP_REPORT_ONLY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self'; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'self'; "
+    "form-action 'self'"
+)
+csp_report_uri = os.getenv("CSP_REPORT_URI", "").strip()
+if csp_report_uri:
+    parsed_report_uri = urlsplit(csp_report_uri)
+    relative_report_uri = (
+        csp_report_uri.startswith("/")
+        and not csp_report_uri.startswith("//")
+        and not parsed_report_uri.scheme
+        and not parsed_report_uri.netloc
+        and "\\" not in csp_report_uri
+    )
+    absolute_report_uri = (
+        parsed_report_uri.scheme == "https"
+        and bool(parsed_report_uri.hostname)
+        and parsed_report_uri.username is None
+        and parsed_report_uri.password is None
+    )
+    if (
+        any(character.isspace() for character in csp_report_uri)
+        or not (relative_report_uri or absolute_report_uri)
+    ):
+        raise ImproperlyConfigured(
+            "CSP_REPORT_URI must be a safe relative or HTTPS URL."
+        )
+    CSP_REPORT_ONLY_POLICY += f"; report-uri {csp_report_uri}"
 
 
 def _environment_flag(name, default="false"):

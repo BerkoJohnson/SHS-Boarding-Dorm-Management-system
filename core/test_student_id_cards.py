@@ -315,28 +315,7 @@ class StudentIdCardTests(TestCase):
             200,
         )
 
-    def test_public_qr_shows_only_latest_exeat_and_gate_movements(self):
-        older_exeat = self.create_exeat(
-            exeat_type=Exeat.ExeatType.MEDICAL,
-            destination="Older private destination",
-            reason="Older private reason",
-        )
-        exeat = self.create_exeat(
-            status=Exeat.Status.APPROVED,
-            approved_by=self.approver,
-        )
-        Exeat.objects.filter(pk=older_exeat.pk).update(
-            created_at=timezone.now() - timezone.timedelta(minutes=1)
-        )
-        now = timezone.now()
-        ExeatMovement.objects.create(
-            exeat=exeat,
-            actual_departure=now,
-            actual_return=now + timezone.timedelta(minutes=25),
-            departure_recorded_by="Gate Officer",
-            return_recorded_by="Gate Officer",
-        )
-
+    def test_public_qr_verifies_a_record_without_disclosing_student_or_exeat_data(self):
         response = self.client.get(
             reverse(
                 "core:public_student_exeat",
@@ -347,18 +326,19 @@ class StudentIdCardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Atebubu SHS")
         self.assertContains(response, "Atebubu, Bono East Region")
-        self.assertContains(response, "+233 20 000 0000")
         self.assertContains(response, "LOGO")
         self.assertNotContains(response, "SCHOOL NAME")
         self.assertNotContains(response, "SCHOOL ADDRESS")
         self.assertNotContains(response, "SCHOOL CONTACT")
-        self.assertContains(response, "Kwame Identity")
-        self.assertContains(response, "Approved departure")
-        self.assertContains(response, "Gate departure")
-        self.assertContains(response, "Gate return")
-        self.assertNotContains(response, "Private reason")
-        self.assertNotContains(response, "Private destination")
-        self.assertNotContains(response, "Older private")
+        self.assertContains(response, "QR code recognized")
+        self.assertNotContains(response, "Kwame Identity")
+        self.assertNotContains(response, "ID-001")
+        self.assertNotContains(response, "General Science")
+        self.assertNotContains(response, "Latest exeat request")
+        self.assertNotContains(response, "Approved departure")
+        self.assertNotContains(response, "Gate departure")
+        self.assertNotContains(response, "Approved")
+        self.assertNotContains(response, "portrait")
         self.assertIn("no-store", response["Cache-Control"])
         self.assertEqual(response["X-Robots-Tag"], "noindex, nofollow")
 
@@ -370,9 +350,16 @@ class StudentIdCardTests(TestCase):
             )
         )
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "No exeat request has been recorded")
+        self.assertContains(response, "QR code recognized")
 
         response = self.client.get(
             reverse("core:public_student_exeat", args=[uuid.uuid4()])
         )
+        self.assertEqual(response.status_code, 404)
+
+    def test_public_student_photo_endpoint_is_removed(self):
+        response = self.client.get(
+            f"/verify/student/{self.student.public_token}/photo/"
+        )
+
         self.assertEqual(response.status_code, 404)

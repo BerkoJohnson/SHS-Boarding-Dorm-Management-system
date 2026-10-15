@@ -109,6 +109,8 @@ media/
 *.pyc
 *.db
 *.pid
+node_modules/
+staticfiles/
 
 # Ignore Django Migrations in Development if you are working on team
 

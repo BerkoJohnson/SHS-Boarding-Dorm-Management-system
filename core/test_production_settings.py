@@ -3,7 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from django.test import SimpleTestCase
+from django.http import HttpResponse
+from django.test import RequestFactory, SimpleTestCase, override_settings
+
+from schoolsystem.security import ContentSecurityPolicyReportOnlyMiddleware
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +24,7 @@ class ProductionSettingsTests(SimpleTestCase):
         secure_hsts_seconds=None,
         hsts_subdomains=None,
         hsts_preload=None,
+        csp_report_uri=None,
     ):
         environment = os.environ.copy()
         environment["DJANGO_SECRET_KEY"] = secret_key
@@ -34,12 +38,15 @@ class ProductionSettingsTests(SimpleTestCase):
         environment.pop("SECURE_HSTS_SECONDS", None)
         environment.pop("SECURE_HSTS_INCLUDE_SUBDOMAINS", None)
         environment.pop("SECURE_HSTS_PRELOAD", None)
+        environment.pop("CSP_REPORT_URI", None)
         if secure_hsts_seconds is not None:
             environment["SECURE_HSTS_SECONDS"] = secure_hsts_seconds
         if hsts_subdomains is not None:
             environment["SECURE_HSTS_INCLUDE_SUBDOMAINS"] = hsts_subdomains
         if hsts_preload is not None:
             environment["SECURE_HSTS_PRELOAD"] = hsts_preload
+        if csp_report_uri is not None:
+            environment["CSP_REPORT_URI"] = csp_report_uri
         environment["TENANCY_ENABLED"] = "false"
         return subprocess.run(
             [
@@ -48,7 +55,11 @@ class ProductionSettingsTests(SimpleTestCase):
                 "import schoolsystem.settings.production as settings; "
                 "print(settings.SECURE_HSTS_SECONDS, "
                 "settings.SECURE_HSTS_INCLUDE_SUBDOMAINS, "
-                "settings.SECURE_HSTS_PRELOAD)",
+                "settings.SECURE_HSTS_PRELOAD); "
+                "print(settings.CSP_REPORT_ONLY_POLICY); "
+                "print('Content-Security-Policy-Report-Only'); "
+                "print('schoolsystem.security.ContentSecurityPolicyReportOnlyMiddleware' "
+                "in settings.MIDDLEWARE)",
             ],
             cwd=PROJECT_ROOT,
             env=environment,
@@ -203,6 +214,57 @@ class ProductionSettingsTests(SimpleTestCase):
         )
         self.assertNotEqual(invalid_result.returncode, 0)
         self.assertIn("SECURE_HSTS_INCLUDE_SUBDOMAINS=true", invalid_result.stderr)
+
+    def test_production_settings_install_a_report_only_csp(self):
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Content-Security-Policy-Report-Only", result.stdout)
+        self.assertIn("script-src 'self'", result.stdout)
+        self.assertIn("style-src 'self'", result.stdout)
+        self.assertNotIn("'unsafe-inline'", result.stdout)
+        self.assertIn("True", result.stdout)
+
+    def test_csp_reporting_endpoint_must_be_same_origin_path_or_https(self):
+        valid_result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            csp_report_uri="/security/csp-report/",
+        )
+        self.assertEqual(valid_result.returncode, 0, valid_result.stderr)
+        self.assertIn("report-uri /security/csp-report/", valid_result.stdout)
+
+        invalid_result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            csp_report_uri="//attacker.example/report",
+        )
+        self.assertNotEqual(invalid_result.returncode, 0)
+        self.assertIn("CSP_REPORT_URI must be a safe", invalid_result.stderr)
+
+    @override_settings(CSP_REPORT_ONLY_POLICY="default-src 'self'")
+    def test_report_only_csp_middleware_adds_policy_without_overwriting_header(self):
+        middleware = ContentSecurityPolicyReportOnlyMiddleware(
+            lambda request: HttpResponse("ok")
+        )
+        request = RequestFactory().get("/")
+
+        response = middleware(request)
+
+        self.assertEqual(
+            response["Content-Security-Policy-Report-Only"],
+            "default-src 'self'",
+        )
+        existing_response = HttpResponse("ok")
+        existing_response["Content-Security-Policy-Report-Only"] = "existing-policy"
+        unchanged = middleware.process_response(request, existing_response)
+        self.assertEqual(
+            unchanged["Content-Security-Policy-Report-Only"],
+            "existing-policy",
+        )
 
     def test_neon_profile_uses_pg_variables_and_requires_ssl(self):
         result = subprocess.run(
