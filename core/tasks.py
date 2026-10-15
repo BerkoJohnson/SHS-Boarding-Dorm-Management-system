@@ -154,6 +154,13 @@ def _dispatch_queued_sms_deliveries_for_current_tenant() -> int:
     if not SMSConfiguration.is_enabled():
         return 0
 
+    tenant_schema = None
+    if settings.TENANCY_ENABLED:
+        from django_pgschemas.schema import get_current_schema
+
+        schema = get_current_schema()
+        tenant_schema = getattr(schema, "schema_name", None) if schema else None
+
     now = timezone.now()
     SMSDelivery.objects.filter(
         status=SMSDelivery.Status.PROCESSING,
@@ -173,7 +180,7 @@ def _dispatch_queued_sms_deliveries_for_current_tenant() -> int:
         .values_list("pk", flat=True)[:100]
     )
     for delivery_id in queued_ids:
-        enqueue_sms_delivery_task(delivery_id)
+        enqueue_sms_delivery_task(delivery_id, tenant_schema=tenant_schema)
     return len(queued_ids)
 
 

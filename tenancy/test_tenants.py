@@ -339,3 +339,73 @@ class TenantTaskDecoratorTests(SimpleTestCase):
 
         self.assertEqual(received_kwargs["tenant_schema"], "test_schema")
         self.assertEqual(received_kwargs["arg1"], "val1")
+
+
+class CeleryWorkerLifecycleTests(SimpleTestCase):
+    @patch("django.db.connections.all")
+    def test_worker_process_init_closes_inherited_connections(self, mock_connections_all):
+        from schoolsystem.celery import close_db_connections_on_worker_init
+
+        conn1 = Mock()
+        conn2 = Mock()
+        mock_connections_all.return_value = [conn1, conn2]
+
+        close_db_connections_on_worker_init()
+
+        conn1.close.assert_called_once()
+        conn2.close.assert_called_once()
+
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("django_pgschemas.schema.activate_public")
+    @patch("django.db.close_old_connections")
+    def test_task_prerun_resets_schema_and_cleans_old_connections(
+        self, mock_close_old, mock_activate_public
+    ):
+        from schoolsystem.celery import reset_connections_and_schema_on_task_prerun
+
+        reset_connections_and_schema_on_task_prerun()
+
+        mock_close_old.assert_called_once()
+        mock_activate_public.assert_called_once()
+
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("django_pgschemas.schema.activate_public")
+    @patch("django.db.close_old_connections")
+    def test_task_postrun_resets_schema_and_cleans_old_connections(
+        self, mock_close_old, mock_activate_public
+    ):
+        from schoolsystem.celery import reset_connections_and_schema_on_task_postrun
+
+        reset_connections_and_schema_on_task_postrun()
+
+        mock_activate_public.assert_called_once()
+        mock_close_old.assert_called_once()
+
+
+class SmsServiceNullSchemaTests(SimpleTestCase):
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("django_pgschemas.schema.get_current_schema", return_value=None)
+    def test_enqueue_sms_delivery_task_handles_none_schema(self, mock_schema):
+        from core.services.sms import enqueue_sms_delivery_task
+
+        with self.assertRaisesMessage(
+            RuntimeError,
+            "SMS delivery tasks must be queued with a school tenant.",
+        ):
+            enqueue_sms_delivery_task("delivery-uuid-123")
+
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("core.models.SMSConfiguration.is_enabled", return_value=True)
+    @patch("core.services.sms.get_exeat_sms_targets", return_value=[("Parent", "0240000000", "guardian")])
+    @patch("django_pgschemas.schema.get_current_schema", return_value=None)
+    def test_enqueue_exeat_event_sms_handles_none_schema(
+        self, mock_schema, mock_targets, mock_enabled
+    ):
+        from core.services.sms import enqueue_exeat_event_sms
+
+        with self.assertRaisesMessage(
+            RuntimeError,
+            "SMS deliveries must be queued inside a school tenant.",
+        ):
+            enqueue_exeat_event_sms(Mock(), "departure")
+

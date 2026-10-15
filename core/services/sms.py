@@ -165,13 +165,12 @@ def enqueue_exeat_event_sms(
 
     recipients = get_exeat_sms_targets(exeat, event_type)
     deliveries = []
-    tenant_schema = (
-        get_current_schema().schema_name
-        if settings.TENANCY_ENABLED
-        else None
-    )
-    if tenant_schema == "public":
-        raise RuntimeError("SMS deliveries must be queued inside a school tenant.")
+    tenant_schema = None
+    if settings.TENANCY_ENABLED:
+        schema = get_current_schema()
+        tenant_schema = getattr(schema, "schema_name", None) if schema else None
+        if not tenant_schema or tenant_schema == "public":
+            raise RuntimeError("SMS deliveries must be queued inside a school tenant.")
     for recipient_name, phone_number, audience in recipients:
         dedupe_key = f"{event_type}:{exeat.pk}:{phone_number}:{occurrence_key}"
         delivery, created = SMSDelivery.objects.get_or_create(
@@ -202,8 +201,10 @@ def enqueue_sms_delivery_task(delivery_id: str, *, tenant_schema=None) -> None:
     from core.tasks import send_sms_delivery_task
 
     if settings.TENANCY_ENABLED:
-        tenant_schema = tenant_schema or get_current_schema().schema_name
-        if tenant_schema == "public":
+        if not tenant_schema:
+            schema = get_current_schema()
+            tenant_schema = getattr(schema, "schema_name", None) if schema else None
+        if not tenant_schema or tenant_schema == "public":
             raise RuntimeError(
                 "SMS delivery tasks must be queued with a school tenant."
             )
