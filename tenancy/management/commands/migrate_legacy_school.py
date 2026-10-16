@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files import File
 from django.core.files.storage import default_storage
+from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection, transaction
 from django.utils import timezone
@@ -114,6 +115,15 @@ class Command(BaseCommand):
                 "refusing to resume legacy adoption."
             )
         with tenant:
+            # Apply the tenant app migrations before copying any rows. A freshly
+            # created tenant schema has no tables yet, so the row-copy step below
+            # would otherwise fail its table/column checks. Scope the runner to
+            # just this schema so existing tenants are left untouched. This runs
+            # outside the data-copy transaction because the migration runner
+            # issues DDL (CREATE TABLE) that should not be rolled back by a later
+            # error.
+            call_command("migrate", schemas=[schema_name], verbosity=0)
+
             with transaction.atomic():
                 self._copy_rows(tables, schema_name)
                 self._copy_files(schema_name)

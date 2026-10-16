@@ -506,6 +506,7 @@ To migrate an existing single-school installation from the `public` schema into 
      --settings=schoolsystem.settings.production
    ```
 4. **How It Works**:
+   * **Self-Migrating**: Creates the new schema and applies the tenant app migrations to it before copying any rows, so a fresh cutover does not require a separate `migrate --schema <name>` step first.
    * Uses Kahn's topological sort algorithm to copy tables in foreign-key dependency order.
    * **Superuser-Free**: Does not execute `DISABLE TRIGGER ALL`, ensuring full compatibility with cloud databases like Neon, AWS RDS, and Supabase.
    * Namespaces referenced uploads from `students/photos/...` to `tenants/atebubu_shs/students/photos/...`.
