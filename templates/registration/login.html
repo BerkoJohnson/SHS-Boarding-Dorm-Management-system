@@ -16,6 +16,7 @@
   <script src="{% static 'js/alpine.min.js' %}" defer></script>
 
     <style>
+        [x-cloak] { display: none !important; }
         /* Custom styles matching app aesthetic */
         .glass-panel {
             background: rgba(255, 255, 255, 1);
@@ -92,7 +93,10 @@
                         <input :type="show ? 'text' : 'password'" name="{{ form.password.html_name }}" id="{{ form.password.id_for_label }}" 
                                class="block w-full pl-10 pr-10 py-2.5 bg-slate-50/80 border border-slate-200 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500 focus:bg-white transition-colors" 
                                placeholder="••••••••" required>
-                        <button type="button" @click="show = !show" class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600">
+                        <button type="button" @click="show = !show" 
+                                aria-label="Toggle password visibility"
+                                :aria-pressed="show.toString()"
+                                class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600">
                             <svg x-show="!show" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />

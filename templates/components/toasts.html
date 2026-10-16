@@ -155,11 +155,21 @@
     window.setTimeout(() => toast.remove(), 4500);
   });
 
-  document.body.addEventListener("htmx:responseError", () => {
+  document.body.addEventListener("htmx:responseError", (event) => {
+    const customMessage = event.detail?.elt?.getAttribute("data-error-message");
     document.body.dispatchEvent(new CustomEvent("showToast", {
       detail: {
         level: "error",
-        message: "The attendance update failed. Please try again.",
+        message: customMessage || "An error occurred while communicating with the server. Please try again.",
+      },
+    }));
+  });
+
+  document.body.addEventListener("htmx:sendError", () => {
+    document.body.dispatchEvent(new CustomEvent("showToast", {
+      detail: {
+        level: "error",
+        message: "Network error. Please check your connection and try again.",
       },
     }));
   });

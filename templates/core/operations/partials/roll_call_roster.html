@@ -59,6 +59,10 @@
         {% if not current_session.is_expired %}
           <script>
             (() => {
+              if (window._rollCallTimer) {
+                window.clearInterval(window._rollCallTimer);
+                window._rollCallTimer = null;
+              }
               const countdown = document.querySelector("[data-roll-call-countdown]");
               if (!countdown) return;
               const expiresAt = Date.parse(countdown.dataset.expiresAt);
@@ -67,9 +71,13 @@
                 countdown.textContent = seconds
                   ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
                   : "Expired";
+                if (!seconds && window._rollCallTimer) {
+                  window.clearInterval(window._rollCallTimer);
+                  window._rollCallTimer = null;
+                }
               };
               updateCountdown();
-              window.setInterval(updateCountdown, 1000);
+              window._rollCallTimer = window.setInterval(updateCountdown, 1000);
             })();
           </script>
         {% endif %}
