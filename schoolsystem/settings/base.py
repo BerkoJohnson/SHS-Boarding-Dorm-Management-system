@@ -174,7 +174,7 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
         "OPTIONS": {
             "min_length": 8,
-        }
+        },
     },
     {
         "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
@@ -216,13 +216,9 @@ STATICFILES_DIRS = [
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(BASE_DIR / "media"))).resolve()
 PRIVATE_STUDENT_PHOTO_ROOT = BASE_DIR / ".private" / "student_photos"
-MEDIA_STORAGE_BACKEND = os.getenv(
-    "MEDIA_STORAGE_BACKEND", "filesystem"
-).strip().lower()
+MEDIA_STORAGE_BACKEND = os.getenv("MEDIA_STORAGE_BACKEND", "filesystem").strip().lower()
 if MEDIA_STORAGE_BACKEND not in {"filesystem", "neon_s3"}:
-    raise ValueError(
-        "MEDIA_STORAGE_BACKEND must be either 'filesystem' or 'neon_s3'"
-    )
+    raise ValueError("MEDIA_STORAGE_BACKEND must be either 'filesystem' or 'neon_s3'")
 
 
 # Email
@@ -252,8 +248,7 @@ if MEDIA_STORAGE_BACKEND == "neon_s3":
         "AWS_SECRET_ACCESS_KEY": os.getenv("AWS_SECRET_ACCESS_KEY", "").strip(),
     }
     missing_storage_settings = [
-        name for name, value in neon_storage_environment.items()
-        if not value
+        name for name, value in neon_storage_environment.items() if not value
     ]
     if missing_storage_settings:
         raise ValueError(
@@ -284,11 +279,15 @@ LOGIN_REDIRECT_URL = "core:dashboard"
 LOGOUT_REDIRECT_URL = "core:login"
 
 
-
 # SMS Configuration (SMSOnlineGH)
 SMS_ONLINE_GH_API_KEY = os.getenv("SMS_ONLINE_GH_API_KEY", "")
 SMS_SENDER_ID = os.getenv("SMS_SENDER_ID", "ATSEC")
-SMS_ENABLED = os.getenv("SMS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+SMS_ENABLED = os.getenv("SMS_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 SMS_TIME_ZONE = os.getenv("SMS_TIME_ZONE", TIME_ZONE)
 SMS_HTTP_TIMEOUT = float(os.getenv("SMS_HTTP_TIMEOUT", "10"))
 SMS_MAX_ATTEMPTS = int(os.getenv("SMS_MAX_ATTEMPTS", "5"))

@@ -2,9 +2,16 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 from django.core.exceptions import ValidationError
+from django.core.management.base import CommandError
 from django.http import Http404
 from django.test import RequestFactory, SimpleTestCase, override_settings
 
+from tenancy.management.commands.migrate_legacy_school import (
+    Command as LegacyMigrationCommand,
+)
+from tenancy.management.commands.set_school_status import (
+    _pending_tenant_migrations,
+)
 from tenancy.middleware import VerifiedDomainRoutingMiddleware
 from tenancy.models import Domain, Tenant, normalize_domain
 
@@ -114,6 +121,56 @@ class DomainNormalizationTests(SimpleTestCase):
         ):
             with self.subTest(value=value), self.assertRaises(ValidationError):
                 normalize_domain(value)
+
+
+class LegacyMigrationDependencyTests(SimpleTestCase):
+    def test_tables_are_sorted_by_foreign_key_dependencies(self):
+        tables = ["core_child", "core_parent", "core_unrelated"]
+        dependencies = {
+            "core_child": {"core_parent"},
+            "core_parent": set(),
+            "core_unrelated": set(),
+        }
+
+        result = LegacyMigrationCommand._stable_topological_sort(
+            tables,
+            dependencies,
+        )
+
+        self.assertLess(result.index("core_parent"), result.index("core_child"))
+        self.assertEqual(set(result), set(tables))
+
+    def test_circular_foreign_keys_abort_legacy_copy(self):
+        tables = ["core_first", "core_second"]
+        dependencies = {
+            "core_first": {"core_second"},
+            "core_second": {"core_first"},
+        }
+
+        with self.assertRaisesMessage(
+            CommandError,
+            "circular foreign-key dependencies: core_first, core_second",
+        ):
+            LegacyMigrationCommand._stable_topological_sort(tables, dependencies)
+
+
+class TenantActivationMigrationCheckTests(SimpleTestCase):
+    @override_settings(TENANTS={"default": {"APPS": ["django.contrib.auth"]}})
+    @patch("tenancy.management.commands.set_school_status.MigrationExecutor")
+    def test_reports_unapplied_tenant_migrations(self, migration_executor):
+        tenant = MagicMock()
+        executor = migration_executor.return_value
+        executor.loader.graph.leaf_nodes.return_value = [("auth", "0001_initial")]
+        executor.migration_plan.return_value = [
+            (SimpleNamespace(app_label="auth", name="0001_initial"), False),
+            (SimpleNamespace(app_label="tenancy", name="0001_initial"), False),
+        ]
+
+        pending = _pending_tenant_migrations(tenant)
+
+        self.assertEqual(pending, ["auth.0001_initial"])
+        tenant.__enter__.assert_called_once_with()
+        tenant.__exit__.assert_called_once()
 
 
 class VerifiedDomainRoutingTests(SimpleTestCase):
@@ -408,4 +465,3 @@ class SmsServiceNullSchemaTests(SimpleTestCase):
             "SMS deliveries must be queued inside a school tenant.",
         ):
             enqueue_exeat_event_sms(Mock(), "departure")
-

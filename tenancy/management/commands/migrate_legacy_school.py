@@ -190,11 +190,14 @@ class Command(BaseCommand):
                 if (
                     child in table_set
                     and parent in table_set
-                    and child != parent
                 ):
                     dependencies[child].add(parent)
 
-        # Kahn's algorithm — stable topological sort.
+        return Command._stable_topological_sort(tables, dependencies)
+
+    @staticmethod
+    def _stable_topological_sort(tables, dependencies):
+        dependencies = {table: set(dependencies[table]) for table in tables}
         sorted_tables = []
         no_deps = [t for t in tables if not dependencies[t]]
         while no_deps:
@@ -209,10 +212,12 @@ class Command(BaseCommand):
                 ):
                     no_deps.append(t)
 
-        # Append any remaining tables (circular FKs — unlikely but safe).
-        for t in tables:
-            if t not in sorted_tables:
-                sorted_tables.append(t)
+        remaining = [table for table in tables if table not in sorted_tables]
+        if remaining:
+            raise CommandError(
+                "Cannot safely copy tables with circular foreign-key "
+                f"dependencies: {', '.join(remaining)}."
+            )
         return sorted_tables
 
     def _copy_rows(self, tables, schema_name):

@@ -12,7 +12,11 @@ An enterprise school management system designed for Senior High Schools, featuri
 3. [Local Development Setup (Zero to Running)](#3-local-development-setup-zero-to-running)
 4. [Cloud Production Deployment (Render + Neon)](#4-cloud-production-deployment-render--neon)
 5. [Database Management & Migrations](#5-database-management--migrations)
-6. [Multi-School Tenancy Rollout & Pilot Onboarding](#6-multi-school-tenancy-rollout--pilot-onboarding)
+6. [Multi-School Tenancy Rollout & Platform CLI Management](#6-multi-school-tenancy-rollout--platform-cli-management)
+   * [6.1 Tenancy Architecture & Directory Isolation](#61-tenancy-architecture--directory-isolation)
+   * [6.2 Multi-School Tenant Provisioning Runbook](#62-multi-school-tenant-provisioning-runbook)
+   * [6.3 Existing-School Cutover (`migrate_legacy_school`)](#63-existing-school-cutover-migrate_legacy_school)
+   * [6.4 Platform CLI Management Suite](#64-platform-cli-management-suite-tenant-administration--billing)
 7. [Background Workers & Scheduled Tasks (Celery & Celery Beat)](#7-background-workers--scheduled-tasks-celery--celery-beat)
 8. [Daily Operations, Shell & Disaster Recovery](#8-daily-operations-shell--disaster-recovery)
 9. [Core System Workflows & Access Control](#9-core-system-workflows--access-control)
@@ -77,10 +81,11 @@ The platform operates in one of two architectural modes controlled by the `TENAN
    * Ideal for standalone single-school installations or local feature development.
 
 2. **Multi-School Tenancy Mode (`TENANCY_ENABLED=true`)**:
-   * **Public Schema**: Contains global platform tables (`tenancy_tenant`, `tenancy_domain`, `django_celery_beat`, and `django_content_type`).
-   * **Tenant Schemas**: Each school receives a dedicated PostgreSQL schema (`achimota_shs`, `atebubu_shs`) containing all school operational data (`auth_user`, `core_*`, and `django_session`).
+   * **Public Schema**: Contains global platform tables (`tenancy_tenant`, `tenancy_domain`, `django_celery_beat`) and the public `django_content_type` registry.
+   * **Tenant Schemas**: Each school receives a dedicated PostgreSQL schema (`achimota_shs`, `atebubu_shs`) containing school operational data (`auth_user`, tenant-local `django_content_type`, `core_*`, and `django_session`).
    * **Connection Hygiene**: Requests and Celery tasks reset the search path to `public` in `finally` blocks, preventing schema contamination across persistent connections (`CONN_MAX_AGE`).
    * **Dynamic CSRF**: Inspects `Origin` headers against verified tenant domains with signal-based cache invalidation and protocol downgrade protection.
+   * **Platform operations**: `PLATFORM_ADMIN_DOMAIN` exposes a status-only JSON endpoint; it is not a browser-based admin interface. Manage tenants with the documented Django management commands.
 
 ---
 
@@ -360,13 +365,13 @@ When multi-tenancy is disabled, migrations operate against the `public` schema u
 In multi-tenant mode, migrations are divided into two categories:
 
 #### 1. Public Schema Migrations (Shared Platform Tables)
-Applies migrations for `tenancy`, `django_celery_beat`, and `django_content_type`:
+Applies migrations for `tenancy`, `django_celery_beat`, and the public `django_content_type` registry:
 ```powershell
 .\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
 ```
 
 #### 2. Tenant Schemas Migrations (School Operational Data)
-Applies migrations for `auth`, `core`, and `sessions` across all active tenant schemas:
+Applies migrations for `contenttypes`, `auth`, `core`, and `sessions` across all active tenant schemas:
 ```powershell
 # Migrate all tenant schemas at once
 .\.venv\Scripts\python.exe .\manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
@@ -380,7 +385,7 @@ Applies migrations for `auth`, `core`, and `sessions` across all active tenant s
 
 ---
 
-## 6. Multi-School Tenancy Rollout & Pilot Onboarding
+## 6. Multi-School Tenancy Rollout & Platform CLI Management
 
 ### 6.1 Architecture & Isolation Guarantees
 
@@ -404,7 +409,7 @@ Follow this runbook to onboard and verify a new school:
                   │
 [ Step 5: Seed Synthetic Rehearsal ] ──> python manage.py seed_synthetic_pilot (Optional)
                   │
-[ Step 6: Create School Admin ] ──> python manage.py createsuperuser --schema=<name>
+[ Step 6: Create School Admin ] ──> python manage.py runschema createsuperuser --schema=<name>
                   │
 [ Step 7: Verify & Activate ] ──> python manage.py set_school_status --activate
                   │
@@ -458,13 +463,13 @@ $env:SYNTHETIC_PILOT_DATABASE = "<exact database name>"
 #### Step 6: Create the Institutional Superuser
 Provision the school's head administrator account inside its tenant schema:
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py createsuperuser `
+.\.venv\Scripts\python.exe .\manage.py runschema createsuperuser `
   --schema achimota_shs `
   --settings=schoolsystem.settings.production
 ```
 
 #### Step 7: Validate and Activate the School
-The `set_school_status` command inspects PostgreSQL `information_schema` to confirm tables exist and a domain is attached before activating:
+The `set_school_status` command confirms a verified domain, the tenant schema and configuration table exist, and all tenant-app migrations are applied before activating:
 ```powershell
 .\.venv\Scripts\python.exe .\manage.py set_school_status `
   --schema "achimota_shs" `
@@ -506,6 +511,316 @@ To migrate an existing single-school installation from the `public` schema into 
    * Leaves the source `public` data completely untouched for a safe fallback.
 5. Validate data inside `atebubu_shs`, then activate the school and restart services.
 
+### 6.4 Platform CLI Management Suite (Tenant Administration & Billing)
+
+The Eden Platform provides 7 centralized management commands for day-to-day operations across schools, resource capacity auditing, termly billing calculation, feature flag control, and emergency support token generation.
+
+All commands support human-friendly terminal tables (with ANSI color codes and Windows-safe ASCII indicators) and a `--json` flag for automated pipelines. Every administrative change is permanently recorded in the immutable `PlatformAuditLog` table.
+
+```powershell
+# Quick Reference of All 7 Platform Management Commands
+.\.venv\Scripts\python.exe .\manage.py tenant_list --all
+.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=<schema_name> --verify
+.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=<schema_name>
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=<schema_name> --generate-pdf
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema_name> --list
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=<schema_name> --status
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema_name> --show
+```
+
+---
+
+#### 1. `tenant_list` — School Inventory & Routing Inspection
+
+Inspect all schools registered on the platform, view their active status, assigned subscription plan tier, enrolled student headcounts, and primary domain routing addresses.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_list [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--all` | Flag | `True` | Lists every school registered on the platform, whether active or inactive. |
+| `--active` | Flag | — | Filters the list to display **only active** schools currently serving web traffic. |
+| `--inactive` | Flag | — | Filters the list to display **only inactive** schools (e.g. newly provisioned schools not yet launched, or schools suspended for vacation). |
+| `--plan` | String | — | Filters schools by subscription tier. Choices: `free`, `starter`, `standard`, `premium`, `pilot`, `enterprise`. |
+| `--json` | Flag | — | Suppresses terminal tables and outputs raw, machine-readable JSON data with student totals and tenant details. |
+| `--operator` | String | `"cli"` | Sets the administrator username or identifier recorded in the permanent audit trail. |
+
+**Practical Examples**:
+```powershell
+# View all registered schools in a formatted terminal table
+.\.venv\Scripts\python.exe .\manage.py tenant_list --all
+
+# View only currently active schools
+.\.venv\Scripts\python.exe .\manage.py tenant_list --active
+
+# Export active schools and student counts as JSON
+.\.venv\Scripts\python.exe .\manage.py tenant_list --active --json
+```
+
+---
+
+#### 2. `tenant_backup` — Schema-Isolated Database & Media Backup
+
+Exports an isolated school database schema using PostgreSQL's native `pg_dump`, calculates a cryptographic SHA-256 integrity hash, optionally compresses all media uploads (photos and crests), and tests the dump file header.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_backup (--schema=<name> | --all) [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--schema` | String | *Required unless `--all`* | The exact schema name of the school to back up (e.g. `atebubu_test`). |
+| `--all` | Flag | — | Automatically loops through and backs up every active school schema on the platform sequentially. |
+| `--output-dir` | Path | `.private/backups/tenants/` | Custom folder on disk where backup `.dump` and `.sha256` files will be stored. |
+| `--format` | String | `custom` | Dump format: `custom` (compressed binary archive for `pg_restore`, recommended) or `sql` (plain SQL text). |
+| `--include-media` | Flag | — | Packages the school's private photos, crests, and file uploads into a compressed `.tar.gz` archive companion file. |
+| `--verify` | Flag | — | Immediately executes `pg_restore -l` against the generated dump file to prove the file is uncorrupted and readable. |
+| `--json` | Flag | — | Outputs the backup metadata (file paths, sizes, SHA-256 hashes, timestamps) as JSON. |
+| `--operator` | String | `"cli"` | Records who triggered the backup in the audit log. |
+
+**Practical Examples**:
+```powershell
+# Create an isolated backup of Atebubu SHS with header verification
+.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=atebubu_test --verify
+
+# Create a complete backup of Atebubu SHS including student photos and crest uploads
+.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=atebubu_test --include-media --verify
+
+# Sequentially back up all active schools across the entire platform
+.\.venv\Scripts\python.exe .\manage.py tenant_backup --all
+```
+
+---
+
+#### 3. `tenant_usage` — Resource Consumption & Capacity Tracking
+
+Aggregates operational activity inside a school's schema (enrolled learners, staff user accounts, dormitories, sent/failed SMS notifications, exeat permits, and ID card exports) and checks them against plan quotas.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_usage (--schema=<name> | --all) [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--schema` | String | *Required unless `--all`* | Target school schema name to inspect. |
+| `--all` | Flag | — | Generates a high-level capacity summary table across all active schools. |
+| `--start-date` | String (`YYYY-MM-DD`) | 30 days ago | Beginning of the usage window for counting SMS dispatches, exeat requests, and roll calls. |
+| `--end-date` | String (`YYYY-MM-DD`) | Today | End of the usage window for counting operational events. |
+| `--json` | Flag | — | Outputs all capacity metrics, progress percentages, and cost calculations as JSON. |
+| `--operator` | String | `"cli"` | Administrator identifier recorded in the audit log. |
+
+**Capacity Status Badges**:
+* `[OK]`: Usage is healthy (under 80% of quota).
+* `[WARNING]`: Approaching limit (between 80% and 99% of quota).
+* `[EXCEEDED]`: Quota exceeded (100% or above); school should upgrade plan tier.
+
+**Practical Examples**:
+```powershell
+# View 30-day operational usage and capacity for Atebubu SHS
+.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=atebubu_test
+
+# Inspect usage over a specific academic term window
+.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=atebubu_test --start-date=2026-09-01 --end-date=2026-12-15
+
+# View platform-wide capacity across all active schools
+.\.venv\Scripts\python.exe .\manage.py tenant_usage --all
+```
+
+---
+
+#### 4. `tenant_invoice` — 3-Pillar Termly Billing & PDF Generation
+
+Calculates and manages commercial billing invoices according to the Eden 3-pillar formula:
+1. **Software Subscription**: Base platform fee + (Students × Monthly rate × 3 months), or flat pilot agreement fee.
+2. **Cloud Infrastructure**: Render compute/workers/Redis + Neon database hosting allocation with service markup margin.
+3. **SMS Deliverability**: Actual delivered parent/guardian SMS messages charged at SMSOnlineGH cost basis with service markup margin.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=<name> [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--schema` | String | *Required* | Target school schema name to invoice or manage. |
+| `--billing-start` | String (`YYYY-MM-DD`) | 1st of current month | Start date of the invoiced term or billing cycle. |
+| `--billing-end` | String (`YYYY-MM-DD`) | End of current month | End date of the invoiced term or billing cycle. |
+| `--generate-pdf` | Flag | — | Renders a formal, printable PDF invoice file saved to `.private/invoices/`. |
+| `--output` | Path | `.private/invoices/` | Custom folder on disk where PDF invoices will be written. |
+| `--list` | Flag | — | Lists all historical invoices generated for this school, showing payment status and outstanding balances. |
+| `--show` | String | — | Displays the full itemized breakdown of a specific invoice number (e.g. `--show=INV-ATEBUBU_TEST-202610-001`). |
+| `--mark-paid` | String | — | Marks a specific invoice as paid (e.g. `--mark-paid=INV-ATEBUBU_TEST-202610-001`). |
+| `--payment-ref` | String | `""` | Payment transaction ID (e.g. Mobile Money reference code, bank transfer slip) recorded when marking as paid. |
+| `--cancel` | String | — | Cancels an unpaid draft or issued invoice. |
+| `--json` | Flag | — | Outputs invoice data and itemized calculations as JSON. |
+| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
+
+**Practical Examples**:
+```powershell
+# Generate a new termly invoice and create a PDF file
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --generate-pdf
+
+# List all invoices and payment balances for a school
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --list
+
+# View line items for a specific invoice
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --show=INV-ATEBUBU_TEST-202610-001
+
+# Mark an invoice as paid with a Mobile Money transaction reference
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --mark-paid=INV-ATEBUBU_TEST-202610-001 --payment-ref="MTN-MOMO-9482019"
+```
+
+---
+
+#### 5. `tenant_features` — Subsystem Feature Flags & Capacity Quotas
+
+Inspects, enables, disables, and adjusts resource boundaries on individual school subscriptions.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<name> [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--schema` | String | *Required* | Target school schema name. |
+| `--list` | Flag | `True` (default) | Displays a table of all boolean features and numeric capacity limits with current states. |
+| `--enable` | String | — | Turns ON a feature by name (`roll_call`, `exeat_gate`, `student_id_cards`, `sms_dispatch`, `roster_import`, `advanced_reports`, `priority_support`). |
+| `--disable` | String | — | Turns OFF a feature by name. |
+| `--set-limit` | String (`key=value`) | — | Adjusts a numeric quota boundary. Keys: `max_students`, `max_staff`, `max_dormitories`, `max_sms_monthly`. |
+| `--reset-to-plan` | Flag | — | Resets all features and limits back to the standard defaults of the school's assigned plan tier. |
+| `--json` | Flag | — | Outputs features and limits as JSON. |
+| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
+
+**Practical Examples**:
+```powershell
+# View all feature entitlements and limits for Atebubu SHS
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --list
+
+# Enable SMS dispatch and student ID card printing
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --enable=sms_dispatch
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --enable=student_id_cards
+
+# Increase learner capacity limit to 2,000 students
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --set-limit=max_students=2000
+
+# Reset all features back to plan tier defaults
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --reset-to-plan
+```
+
+---
+
+#### 6. `support_access` — Cryptographic Time-Bound Support Tokens
+
+Generates, verifies, and revokes temporary access tokens when platform engineers need to troubleshoot a school's schema. Tokens are 256-bit URL-safe random secrets, hashed with `bcrypt` (cost=12), and automatically expire.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=<name> [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--schema` | String | *Required* | Target school schema name requiring support access. |
+| `--generate` | Flag | — | Generates a new 256-bit temporary token and prints it once. The plaintext is never stored in the database. |
+| `--ttl-hours` | Integer | `4` | How many hours the token will remain valid before automatically expiring (valid range: 1 to 168 hours / 7 days). |
+| `--verify` | String | — | Verifies whether a candidate plaintext token is currently valid and active for this school schema. |
+| `--revoke` | Flag | — | Immediately revokes and invalidates the active support token, blocking any further use. |
+| `--status` | Flag | `True` (default) | Shows whether an active token exists, its expiration time, remaining minutes, and recent support audit history. |
+| `--reason` | String | `""` | Compliance description explaining why access was granted or revoked (permanently logged). |
+| `--json` | Flag | — | Outputs token status and audit trail as JSON. |
+| `--operator` | String | `"cli"` | Administrator username recorded in the audit log. |
+
+**Practical Examples**:
+```powershell
+# Check if an active support token exists for Atebubu SHS
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --status
+
+# Generate a 4-hour support token for troubleshooting
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --generate --ttl-hours=4 --reason="Investigating SMS sync failures"
+
+# Verify a token provided by an operator
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --verify="TOKEN_STRING_HERE"
+
+# Immediately revoke active support access
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --revoke --reason="Troubleshooting completed"
+```
+
+---
+
+#### 7. `tenant_subscription` — Contract Pricing, Plan Tiers & Margins
+
+Configures commercial contract parameters for each school, including plan tier, termly base fees, per-student monthly rates, SMSOnlineGH packaging presets, and Render/Neon cloud infrastructure cost-recovery margins.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<name> [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--schema` | String | *Required* | Target school schema name. |
+| `--show` | Flag | `True` (default) | Displays current contract terms, plan tier, pricing rates, cloud hosting allocation, and SMS packages. |
+| `--set-plan` | String | — | Sets the commercial tier: `free`, `starter`, `standard`, `premium`, `pilot`, `enterprise`. |
+| `--set-base-fee` | Decimal | — | Sets the base platform fee in Ghana Cedis charged at the beginning of each academic term (e.g. `1000.00`). |
+| `--set-rate-per-student` | Decimal | — | Sets the monthly rate charged per enrolled student (e.g. `0.65`). |
+| `--set-infra-cost` | Decimal | — | Sets the monthly cloud hosting cost basis in GHS (default: `150.00`, representing the school's share of Render + Neon). |
+| `--set-infra-margin` | Decimal | — | Sets the service markup percentage applied to hosting costs (default: `15.0` for a 15% margin). |
+| `--include-hosting` | Flag | — | Ensures the cloud hosting fee is itemized as a separate charge line on termly invoices. |
+| `--exclude-hosting` | Flag | — | Omit cloud hosting fees from invoices (useful if hosting is absorbed into the base subscription). |
+| `--set-sms-package` | Integer | — | Selects a standard SMSOnlineGH package preset: `10`, `20`, `50`, `100`, `200`, `500`, `1000`, `2000`, `3000`, `5000`. Auto-calculates unit cost basis. |
+| `--set-sms-cost-basis` | Decimal | — | Sets a custom unit cost basis per SMS message (e.g. `0.02620`). |
+| `--set-sms-margin` | Decimal | — | Sets the service markup percentage applied to SMS messages (default: `15.0` for 15% margin). |
+| `--set-rate-per-sms` | Decimal | — | Directly overrides the final rate charged to the school per SMS message (e.g. `0.0301`). |
+| `--set-currency` | String | — | Sets the 3-letter ISO 4217 currency code (default: `GHS`). |
+| `--apply-plan-defaults` | Flag | — | When changing `--set-plan`, also resets feature flags and quotas to match the new tier's defaults. |
+| `--json` | Flag | — | Outputs contract settings as JSON. |
+| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
+
+**Standard Plan Tiers & Termly Rates**:
+* **Free / Trial**: GH₵0 base fee, GH₵0/student (up to 50 students).
+* **Starter (Essential)**: GH₵500 base/term, GH₵0.50/student/mo (up to 500 students, 10 staff, 10 dorms).
+* **Standard (Recommended)**: GH₵1,000 base/term, GH₵0.65/student/mo (up to 1,500 students, 40 staff, 40 dorms).
+* **Premium (Advanced)**: GH₵2,000 base/term, GH₵0.80/student/mo (up to 2,500 students, 75 staff, 60 dorms).
+* **Pilot (Atebubu SHS)**: Flat GH₵2,500/term agreement (includes up to 2,000 students, full exeat & QR IDs).
+
+**Practical Examples**:
+```powershell
+# View contract and billing rates for Atebubu SHS
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=atebubu_test --show
+
+# Configure Atebubu SHS under the official Pilot agreement
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=atebubu_test --set-plan=pilot --apply-plan-defaults
+
+# Configure a school on the Standard tier with plan feature defaults
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=amanten_shs --set-plan=standard --apply-plan-defaults
+
+# Apply the GH₵500 SMS package preset (19,083 credits @ GH₵0.02620) with a 15% service markup
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=amanten_shs --set-sms-package=500 --set-sms-margin=15.0
+
+# Adjust Render & Neon cloud hosting allocation to GH₵150/mo with 15% markup
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=amanten_shs --set-infra-cost=150.00 --set-infra-margin=15.0
+```
+
 ---
 
 ## 7. Background Workers & Scheduled Tasks (Celery & Celery Beat)
@@ -539,9 +854,9 @@ All scheduled periodic tasks are defined in `CELERY_BEAT_SCHEDULE` and automatic
 
 In multi-tenant mode, querying the database in a standard shell defaults to `public`, where `auth_user` and `core_*` tables do not exist. Use one of two tenant-aware patterns:
 
-#### Method 1: Using the `--schema` CLI Flag (Recommended)
+#### Method 1: Run the Shell in a Tenant Schema (Recommended)
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py shell --schema achimota_shs --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py runschema shell --schema achimota_shs --settings=schoolsystem.settings.production
 ```
 
 #### Method 2: Dynamic Schema Switching Inside the Shell
@@ -628,7 +943,7 @@ END $$;
 
 After truncating, re-seed the required `SchoolConfiguration` singleton:
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py shell --schema achimota_shs -c "from core.models import SchoolConfiguration; SchoolConfiguration.objects.get_or_create(id=1, defaults={'name': 'Achimota Senior High', 'short_name': 'ACHIMOTA'})"
+.\.venv\Scripts\python.exe .\manage.py runschema shell --schema achimota_shs -c "from core.models import SchoolConfiguration; SchoolConfiguration.objects.get_or_create(id=1, defaults={'name': 'Achimota Senior High', 'short_name': 'ACHIMOTA'})"
 ```
 
 #### Scenario B: Complete Decommissioning (Dropping a Tenant Schema)
@@ -736,7 +1051,7 @@ Administrators can import student rosters via modern Excel (`.xlsx`) or UTF-8 CS
 * **Cause**: Running database queries while connected to the `public` schema in multi-tenant mode (`TENANCY_ENABLED=true`).
 * **Fix**: Activate a tenant schema before querying:
   ```powershell
-  python manage.py shell --schema achimota_shs
+  python manage.py runschema shell --schema achimota_shs
   ```
 
 ### 10.4 Dynamic CSRF Origin Rejection

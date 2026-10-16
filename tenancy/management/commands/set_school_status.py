@@ -1,8 +1,29 @@
+from django.apps import AppConfig
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 
 from tenancy.models import Domain, Tenant
+
+
+def _pending_tenant_migrations(tenant):
+    with tenant:
+        executor = MigrationExecutor(connection)
+        tenant_app_labels = {
+            AppConfig.create(app_config).label
+            for app_config in settings.TENANTS["default"]["APPS"]
+        }
+        targets = [
+            target
+            for app_label in tenant_app_labels
+            for target in executor.loader.graph.leaf_nodes(app_label)
+        ]
+        return [
+            f"{migration.app_label}.{migration.name}"
+            for migration, backwards in executor.migration_plan(targets)
+            if not backwards and migration.app_label in tenant_app_labels
+        ]
 
 
 class Command(BaseCommand):
@@ -58,6 +79,15 @@ class Command(BaseCommand):
                         f"Schema '{tenant.schema_name}' has not been migrated. "
                         "Run migrations before activating."
                     )
+
+            pending_migrations = _pending_tenant_migrations(tenant)
+            if pending_migrations:
+                migration_list = ", ".join(pending_migrations)
+                raise CommandError(
+                    f"Schema '{tenant.schema_name}' has unapplied tenant "
+                    f"migrations: {migration_list}. Run 'migrate "
+                    f"--schema={tenant.schema_name}' before activating."
+                )
 
         tenant.is_active = options["activate"]
         tenant.save(update_fields=["is_active"])
