@@ -2,14 +2,17 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.test.client import RequestFactory
 
 from tenancy.entitlements import (
     entitlement_value,
     ensure_quota_available,
     feature_enabled,
+    quota_guard,
     quota_limit,
+    quota_lock_key,
+    reserve_quota,
     tenant_feature_required,
 )
 
@@ -78,3 +81,41 @@ class TenantEntitlementTests(SimpleTestCase):
 
         with self.assertRaises(PermissionDenied):
             report_view(RequestFactory().get("/reports/"))
+
+
+class QuotaLockKeyTests(SimpleTestCase):
+    """The advisory-lock key must be deterministic and tenant/quota specific."""
+
+    def test_lock_key_is_stable_and_distinct(self):
+        first = quota_lock_key("school_a", "max_students")
+        self.assertEqual(first, quota_lock_key("school_a", "max_students"))
+        self.assertNotEqual(first, quota_lock_key("school_b", "max_students"))
+        self.assertNotEqual(first, quota_lock_key("school_a", "max_staff"))
+        self.assertIsInstance(first, int)
+        self.assertTrue(-(2**63) <= first < 2**63)
+
+
+class QuotaGuardTransactionTests(TestCase):
+    """Behaviour of the transaction-scoped quota guard helpers."""
+
+    @override_settings(TENANCY_ENABLED=True)
+    def test_reserve_quota_raises_when_limit_reached(self):
+        with patch("tenancy.entitlements.quota_limit", return_value=1):
+            with self.assertRaises(ValidationError):
+                with reserve_quota("max_students", lambda: 1):
+                    pass
+
+    @override_settings(TENANCY_ENABLED=True)
+    def test_reserve_quota_allows_under_limit(self):
+        entered = False
+        with patch("tenancy.entitlements.quota_limit", return_value=5):
+            with reserve_quota("max_students", lambda: 1):
+                entered = True
+        self.assertTrue(entered)
+
+    @override_settings(TENANCY_ENABLED=False)
+    def test_quota_guard_runs_block_when_tenancy_disabled(self):
+        entered = False
+        with quota_guard("max_students"):
+            entered = True
+        self.assertTrue(entered)

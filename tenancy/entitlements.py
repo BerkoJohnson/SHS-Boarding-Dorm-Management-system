@@ -1,7 +1,10 @@
+import hashlib
+from contextlib import contextmanager
 from functools import wraps
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -69,6 +72,62 @@ def ensure_quota_available(key, current, additional=1, *, schema_name=None):
         raise ValidationError(
             f"The tenant {label} limit of {limit} has been reached."
         )
+
+
+def quota_lock_key(schema_name, key):
+    """Derive a stable signed 64-bit advisory-lock key from schema + quota type.
+
+    PostgreSQL advisory locks take a single ``bigint``. Hashing ``schema:key``
+    keeps distinct tenant/quota pairs on distinct locks without exceeding the
+    signed 64-bit range.
+    """
+    digest = hashlib.sha256(f"{schema_name}:{key}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+@contextmanager
+def quota_guard(key, *, schema_name=None):
+    """Serialize a quota check with its write under a transaction-scoped lock.
+
+    Opens a transaction, takes a PostgreSQL ``pg_advisory_xact_lock`` keyed by
+    the tenant schema and quota type, then yields. The lock is held until the
+    surrounding transaction commits or rolls back, so the limit check and the
+    row write it guards cannot interleave with another writer for the same
+    tenant/quota pair (closing the check-then-write race).
+
+    On non-PostgreSQL backends, or when tenancy is disabled, this degrades to a
+    plain atomic block because there are no cross-tenant quotas to protect.
+    """
+    with transaction.atomic():
+        if settings.TENANCY_ENABLED and connection.vendor == "postgresql":
+            target_schema = schema_name or _current_schema_name() or "public"
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(%s)",
+                    [quota_lock_key(target_schema, key)],
+                )
+        yield
+
+
+@contextmanager
+def reserve_quota(key, current, additional=1, *, schema_name=None):
+    """Guard a quota check and the write it authorizes.
+
+    ``current`` may be a callable so the live count is taken *inside* the lock
+    (avoiding a stale count). Wrap the write in the same ``with`` block::
+
+        with reserve_quota("max_dormitories", Dormitory.objects.count):
+            super().save(*args, **kwargs)
+    """
+    with quota_guard(key, schema_name=schema_name):
+        current_value = current() if callable(current) else current
+        ensure_quota_available(
+            key,
+            current_value,
+            additional=additional,
+            schema_name=schema_name,
+        )
+        yield
 
 
 def tenant_feature_required(feature):

@@ -83,25 +83,32 @@ def send_sms_delivery_task(
         return False
     if delivery.status != SMSDelivery.Status.QUEUED:
         return False
-    from tenancy.entitlements import sms_quota_allows
-
-    if not sms_quota_allows(0, exclude_delivery_id=delivery.pk):
-        logger.warning(
-            "SMS delivery %s remains queued because the monthly SMS limit was reached",
-            delivery_id,
-        )
-        return False
+    from tenancy.entitlements import quota_guard, sms_quota_allows
 
     attempted_at = timezone.now()
-    claimed = SMSDelivery.objects.filter(
-        pk=delivery.pk,
-        status=SMSDelivery.Status.QUEUED,
-    ).update(
-        status=SMSDelivery.Status.PROCESSING,
-        attempts=F("attempts") + 1,
-        last_attempted_at=attempted_at,
-        updated_at=attempted_at,
-    )
+    with transaction.atomic():
+        # Serialize the monthly-SMS check with the status transition that
+        # consumes the delivery's budget slot.
+        with quota_guard("max_sms_monthly", schema_name=tenant_schema):
+            if not sms_quota_allows(
+                0,
+                exclude_delivery_id=delivery.pk,
+                schema_name=tenant_schema,
+            ):
+                logger.warning(
+                    "SMS delivery %s remains queued because the monthly SMS limit was reached",
+                    delivery_id,
+                )
+                return False
+            claimed = SMSDelivery.objects.filter(
+                pk=delivery.pk,
+                status=SMSDelivery.Status.QUEUED,
+            ).update(
+                status=SMSDelivery.Status.PROCESSING,
+                attempts=F("attempts") + 1,
+                last_attempted_at=attempted_at,
+                updated_at=attempted_at,
+            )
     if not claimed:
         return False
     delivery.status = SMSDelivery.Status.PROCESSING

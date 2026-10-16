@@ -12,7 +12,7 @@ from django.utils import timezone
 from django_pgschemas.schema import get_current_schema
 
 from core.models import Exeat, HouseMaster, SMSConfiguration, SMSDelivery, SchoolConfiguration
-from tenancy.entitlements import sms_quota_allows
+from tenancy.entitlements import quota_guard, sms_quota_allows
 
 logger = logging.getLogger(__name__)
 GUARDIAN_AUDIENCE = "guardian"
@@ -178,27 +178,30 @@ def enqueue_exeat_event_sms(
         if existing is not None:
             deliveries.append(existing)
             continue
-        if not sms_quota_allows():
-            logger.warning(
-                "SMS delivery for %s was not queued because the tenant monthly SMS limit was reached",
-                phone_number,
-            )
-            continue
-        delivery, created = SMSDelivery.objects.get_or_create(
-            dedupe_key=dedupe_key,
-            defaults={
-                "exeat": exeat,
-                "event_type": event_type,
-                "recipient_name": recipient_name,
-                "phone_number": phone_number,
-                "message": build_exeat_event_message(
-                    exeat,
-                    event_type,
-                    audience=audience,
-                ),
-                "status": SMSDelivery.Status.QUEUED,
-            },
-        )
+        with transaction.atomic():
+            # Serialize the monthly-SMS check with the row that consumes budget.
+            with quota_guard("max_sms_monthly", schema_name=tenant_schema):
+                if not sms_quota_allows(schema_name=tenant_schema):
+                    logger.warning(
+                        "SMS delivery for %s was not queued because the tenant monthly SMS limit was reached",
+                        phone_number,
+                    )
+                    continue
+                delivery, created = SMSDelivery.objects.get_or_create(
+                    dedupe_key=dedupe_key,
+                    defaults={
+                        "exeat": exeat,
+                        "event_type": event_type,
+                        "recipient_name": recipient_name,
+                        "phone_number": phone_number,
+                        "message": build_exeat_event_message(
+                            exeat,
+                            event_type,
+                            audience=audience,
+                        ),
+                        "status": SMSDelivery.Status.QUEUED,
+                    },
+                )
         deliveries.append(delivery)
         if created:
             transaction.on_commit(

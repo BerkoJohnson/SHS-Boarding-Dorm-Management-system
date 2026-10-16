@@ -546,47 +546,54 @@ def import_student_roster(uploaded_file):
         item.student.status == Student.EnrollmentStatus.ENROLLED
         for item in staged
     )
-    if enrolled_to_import:
-        from tenancy.entitlements import ensure_quota_available
-
-        try:
-            ensure_quota_available(
-                "max_students",
-                Student.objects.filter(
-                    status=Student.EnrollmentStatus.ENROLLED
-                ).count(),
-                enrolled_to_import,
-            )
-        except ValidationError as error:
-            return 0, error.messages
 
     try:
         with transaction.atomic():
-            created_guardians = {}
-            for item in staged:
-                if item.guardian_phone:
-                    guardian = next(
-                        (
-                            guardian
-                            for guardian in guardians_by_phone.get(
-                                item.guardian_phone, []
-                            )
-                            if guardian.full_name.casefold()
-                            == item.guardian_name.casefold()
-                        ),
-                        None,
-                    )
-                    if guardian is None:
-                        guardian = created_guardians.get(item.guardian_phone)
-                    if guardian is None:
-                        guardian = Guardian.objects.create(
-                            full_name=item.guardian_name,
-                            phone_number=item.guardian_phone,
-                            alt_phone_number=item.guardian_alt_phone or None,
+            from tenancy.entitlements import (
+                ensure_quota_available,
+                quota_guard,
+            )
+
+            # Hold the tenant quota lock across the cap check and the inserts so
+            # two concurrent imports cannot both pass the check and overshoot.
+            with quota_guard("max_students"):
+                if enrolled_to_import:
+                    try:
+                        ensure_quota_available(
+                            "max_students",
+                            Student.objects.filter(
+                                status=Student.EnrollmentStatus.ENROLLED
+                            ).count(),
+                            enrolled_to_import,
                         )
-                        created_guardians[item.guardian_phone] = guardian
-                    item.student.guardian = guardian
-                item.student.save()
+                    except ValidationError as error:
+                        return 0, error.messages
+
+                created_guardians = {}
+                for item in staged:
+                    if item.guardian_phone:
+                        guardian = next(
+                            (
+                                guardian
+                                for guardian in guardians_by_phone.get(
+                                    item.guardian_phone, []
+                                )
+                                if guardian.full_name.casefold()
+                                == item.guardian_name.casefold()
+                            ),
+                            None,
+                        )
+                        if guardian is None:
+                            guardian = created_guardians.get(item.guardian_phone)
+                        if guardian is None:
+                            guardian = Guardian.objects.create(
+                                full_name=item.guardian_name,
+                                phone_number=item.guardian_phone,
+                                alt_phone_number=item.guardian_alt_phone or None,
+                            )
+                            created_guardians[item.guardian_phone] = guardian
+                        item.student.guardian = guardian
+                    item.student.save()
     except IntegrityError:
         return 0, [
             "The roster could not be imported because a student identifier was "

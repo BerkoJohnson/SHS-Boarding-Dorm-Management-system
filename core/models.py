@@ -265,10 +265,14 @@ class Dormitory(BaseModel):
 
     def save(self, *args, **kwargs):
         if self._state.adding:
-            from tenancy.entitlements import ensure_quota_available
+            from tenancy.entitlements import reserve_quota
 
-            ensure_quota_available("max_dormitories", Dormitory.objects.count())
-        super().save(*args, **kwargs)
+            # Enforce the dormitory quota and perform the insert inside the same
+            # transaction-scoped advisory lock so concurrent creates cannot
+            # overshoot the plan limit.
+            with reserve_quota("max_dormitories", Dormitory.objects.count):
+                return super().save(*args, **kwargs)
+        return super().save(*args, **kwargs)
 
 
 class DormitoryRoom(BaseModel):
@@ -739,14 +743,17 @@ class Student(BaseModel):
                 self.status == self.EnrollmentStatus.ENROLLED
                 and previous_status != self.EnrollmentStatus.ENROLLED
             ):
-                from tenancy.entitlements import ensure_quota_available
+                from tenancy.entitlements import ensure_quota_available, quota_guard
 
-                ensure_quota_available(
-                    "max_students",
-                    Student.objects.filter(
-                        status=self.EnrollmentStatus.ENROLLED
-                    ).count(),
-                )
+                # Take the tenant quota lock for the surrounding transaction so
+                # this check and the insert below cannot race another enrollment.
+                with quota_guard("max_students"):
+                    ensure_quota_available(
+                        "max_students",
+                        Student.objects.filter(
+                            status=self.EnrollmentStatus.ENROLLED
+                        ).count(),
+                    )
             self.full_clean()
             super().save(*args, **kwargs)
         
@@ -1667,17 +1674,24 @@ def ensure_user_profile(sender, instance, created, **kwargs):
 
 @receiver(pre_save, sender=settings.AUTH_USER_MODEL)
 def enforce_staff_account_quota(sender, instance, **kwargs):
+    # Fixture loading (loaddata) and other raw saves must not be quota-checked.
+    if kwargs.get("raw"):
+        return
     if not instance.is_staff or not settings.TENANCY_ENABLED:
         return
     existing = sender.objects.filter(pk=instance.pk).first() if instance.pk else None
     if existing and existing.is_staff:
         return
-    from tenancy.entitlements import ensure_quota_available
+    from tenancy.entitlements import ensure_quota_available, quota_guard
 
-    ensure_quota_available(
-        "max_staff",
-        sender.objects.filter(is_staff=True).count(),
-    )
+    # Defence in depth: CoreConfig also wraps User.save so this check and the
+    # insert share one transaction-scoped advisory lock. Re-acquiring the same
+    # transaction-level lock is re-entrant and therefore safe.
+    with quota_guard("max_staff"):
+        ensure_quota_available(
+            "max_staff",
+            sender.objects.filter(is_staff=True).count(),
+        )
 
 
 def get_user_profile(user):

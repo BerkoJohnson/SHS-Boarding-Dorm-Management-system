@@ -42,14 +42,17 @@ class TenantStaffQuotaFormMixin:
             and not self.instance.is_staff
             and settings.TENANCY_ENABLED
         ):
-            from tenancy.entitlements import ensure_quota_available
+            from tenancy.entitlements import ensure_quota_available, quota_guard
 
             user_model = get_user_model()
             try:
-                ensure_quota_available(
-                    "max_staff",
-                    user_model.objects.filter(is_staff=True).count(),
-                )
+                # The admin change view runs inside a transaction, so acquiring
+                # the quota lock here holds it until the user row is written.
+                with quota_guard("max_staff"):
+                    ensure_quota_available(
+                        "max_staff",
+                        user_model.objects.filter(is_staff=True).count(),
+                    )
             except ValidationError as error:
                 raise forms.ValidationError(error.messages) from error
         return is_staff

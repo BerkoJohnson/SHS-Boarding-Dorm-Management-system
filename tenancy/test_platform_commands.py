@@ -13,14 +13,21 @@ Tests verify:
 
 from datetime import date, timedelta
 from decimal import Decimal
+import hashlib
 import json
 from io import StringIO
-from unittest.mock import patch
+from pathlib import Path
+import tempfile
+from unittest.mock import Mock, patch
 
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connection
 from django.test import TestCase
 from django.utils import timezone
+
+from tenancy.management.commands.tenant_restore import Command as TenantRestoreCommand
 
 from tenancy.models import (
     InvoiceStatus,
@@ -159,6 +166,50 @@ class TenantUsageCommandTests(BasePlatformCommandTestCase):
         out, _ = self._call("tenant_usage", "--all", "--json")
         data = json.loads(out)
         self.assertEqual(data["total_tenants"], 1)  # only active tenants included in --all
+
+    def _report_for(self, schema="atebubu_test"):
+        out, _ = self._call("tenant_usage", f"--schema={schema}", "--json")
+        return json.loads(out)["reports"][0]
+
+    def test_limits_inherit_plan_defaults(self):
+        # The pilot plan's defaults must be reported, not "unlimited".
+        report = self._report_for()
+        self.assertEqual(report["students"]["limit"], 2000)
+        self.assertEqual(report["staff"]["limit"], 40)
+        self.assertEqual(report["dormitories"]["limit"], 40)
+        self.assertEqual(report["sms"]["monthly_limit"], 10000)
+
+    def test_limits_use_tenant_overrides(self):
+        self.sub.features = {"max_students": 123, "max_sms_monthly": 7}
+        self.sub.save(update_fields=["features"])
+
+        report = self._report_for()
+        self.assertEqual(report["students"]["limit"], 123)
+        self.assertEqual(report["sms"]["monthly_limit"], 7)
+        # Untouched limits still inherit the plan defaults.
+        self.assertEqual(report["staff"]["limit"], 40)
+        self.assertEqual(report["dormitories"]["limit"], 40)
+
+    def test_limits_unlimited_for_enterprise(self):
+        self.sub.plan_tier = PlanTier.ENTERPRISE
+        self.sub.features = {}
+        self.sub.save(update_fields=["plan_tier", "features"])
+
+        report = self._report_for()
+        self.assertIsNone(report["students"]["limit"])
+        self.assertIsNone(report["staff"]["limit"])
+        self.assertIsNone(report["dormitories"]["limit"])
+        self.assertIsNone(report["sms"]["monthly_limit"])
+
+    def test_terminal_report_shows_effective_limits(self):
+        out, _ = self._call("tenant_usage", "--schema=atebubu_test")
+        self.assertIn("/ 2000", out)  # inherited pilot student limit
+
+        self.sub.plan_tier = PlanTier.ENTERPRISE
+        self.sub.features = {}
+        self.sub.save(update_fields=["plan_tier", "features"])
+        out, _ = self._call("tenant_usage", "--schema=atebubu_test")
+        self.assertIn("[UNLIMITED]", out)
 
 
 class TenantInvoiceCommandTests(BasePlatformCommandTestCase):
@@ -308,3 +359,185 @@ class TenantSubscriptionCommandTests(BasePlatformCommandTestCase):
         self.assertEqual(self.sub.infra_cost_basis_monthly, Decimal("200.00"))
         self.assertEqual(self.sub.infra_margin_percent, Decimal("20.00"))
         self.assertEqual(self.sub.effective_monthly_hosting_charge, Decimal("240.00"))
+
+
+class TenantRestoreCommandTests(BasePlatformCommandTestCase):
+    """Safety checks for the tenant_restore command."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.backup_root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        super().tearDown()
+
+    def _write_backup(self, schema, content=b"DUMMY-DUMP-CONTENT", name="restore.dump"):
+        """Create a dump + matching .sha256 checksum inside the backup root."""
+        base = self.backup_root / schema
+        base.mkdir(parents=True, exist_ok=True)
+        dump = base / name
+        dump.write_bytes(content)
+        checksum = hashlib.sha256(content).hexdigest()
+        dump.with_name(f"{dump.name}.sha256").write_text(
+            f"{checksum}  {dump.name}\n", encoding="utf-8"
+        )
+        return dump
+
+    @staticmethod
+    def _fake_pg_restore(toc_schema):
+        def fake_run(cmd, *args, **kwargs):
+            proc = Mock()
+            proc.returncode = 0
+            proc.stderr = ""
+            proc.stdout = ""
+            if "-l" in cmd:
+                proc.stdout = (
+                    "; dummy archive\n"
+                    f"1; 2615 2200 SCHEMA - {toc_schema} postgres\n"
+                )
+            return proc
+
+        return fake_run
+
+    def _restore_args(self, schema, dump):
+        return (
+            "tenant_restore",
+            f"--schema={schema}",
+            f"--dump={dump}",
+            f"--backup-dir={self.backup_root}",
+        )
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_refuses_reserved_public_schema(self, _which):
+        with self.assertRaises(CommandError) as ctx:
+            self._call("tenant_restore", "--schema=public", "--dump=whatever.dump")
+        self.assertIn("reserved", str(ctx.exception).lower())
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_refuses_unsafe_dump_path_outside_backup_dir(self, _which):
+        with tempfile.TemporaryDirectory() as outside:
+            dump = Path(outside) / "outside.dump"
+            dump.write_bytes(b"data")
+            with self.assertRaises(CommandError) as ctx:
+                self._call(
+                    "tenant_restore",
+                    "--schema=atebubu_test",
+                    f"--dump={dump}",
+                    f"--backup-dir={self.backup_root}",
+                )
+        self.assertIn("outside the approved backup directory", str(ctx.exception))
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_refuses_missing_checksum(self, _which):
+        dump = self._write_backup("atebubu_test")
+        dump.with_name(f"{dump.name}.sha256").unlink()
+        with self.assertRaises(CommandError) as ctx:
+            self._call(*self._restore_args("atebubu_test", dump))
+        self.assertIn("Checksum file", str(ctx.exception))
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_refuses_checksum_mismatch(self, _which):
+        dump = self._write_backup("atebubu_test", content=b"REAL-CONTENT")
+        dump.with_name(f"{dump.name}.sha256").write_text(
+            "0" * 64 + "  restore.dump\n", encoding="utf-8"
+        )
+        with self.assertRaises(CommandError) as ctx:
+            self._call(*self._restore_args("atebubu_test", dump))
+        self.assertIn("integrity check failed", str(ctx.exception))
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_refuses_schema_mismatch(self, _which):
+        dump = self._write_backup("atebubu_test")
+        with patch(
+            "tenancy.management.commands.tenant_restore.subprocess.run",
+            side_effect=self._fake_pg_restore("other_schema"),
+        ):
+            with self.assertRaises(CommandError) as ctx:
+                self._call(*self._restore_args("atebubu_test", dump))
+        self.assertIn("Schema mismatch", str(ctx.exception))
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_refuses_registered_tenant_collision(self, _which):
+        dump = self._write_backup("atebubu_test")
+        with patch(
+            "tenancy.management.commands.tenant_restore.subprocess.run",
+            side_effect=self._fake_pg_restore("atebubu_test"),
+        ):
+            with self.assertRaises(CommandError) as ctx:
+                self._call(*self._restore_args("atebubu_test", dump))
+        self.assertIn("registered to a tenant", str(ctx.exception))
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_refuses_nonempty_schema(self, _which):
+        schema = "restore_nonempty"
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            cursor.execute(f'CREATE SCHEMA "{schema}"')
+            cursor.execute(f'CREATE TABLE "{schema}".t (id integer)')
+        try:
+            dump = self._write_backup(schema)
+            with patch(
+                "tenancy.management.commands.tenant_restore.subprocess.run",
+                side_effect=self._fake_pg_restore(schema),
+            ):
+                with self.assertRaises(CommandError) as ctx:
+                    self._call(*self._restore_args(schema, dump))
+            self.assertIn("not empty", str(ctx.exception))
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_dry_run_passes_for_clean_target(self, _which):
+        schema = "restore_clean"
+        dump = self._write_backup(schema)
+        with patch(
+            "tenancy.management.commands.tenant_restore.subprocess.run",
+            side_effect=self._fake_pg_restore(schema),
+        ):
+            out, _ = self._call(
+                *self._restore_args(schema, dump), "--dry-run", "--json"
+            )
+        data = json.loads(out)
+        self.assertEqual(data["status"], "dry_run")
+        self.assertEqual(data["schema_name"], schema)
+
+    @patch("shutil.which", return_value="/usr/bin/pg_restore")
+    def test_successful_restore_never_cleans(self, _which):
+        schema = "restore_success"
+        dump = self._write_backup(schema)
+        captured = {}
+
+        def fake_run(cmd, *args, **kwargs):
+            captured["cmd"] = cmd
+            proc = Mock()
+            proc.returncode = 0
+            proc.stderr = ""
+            proc.stdout = ""
+            if "-l" in cmd:
+                proc.stdout = f"1; 2615 2200 SCHEMA - {schema} postgres\n"
+            return proc
+
+        with patch(
+            "tenancy.management.commands.tenant_restore.subprocess.run",
+            side_effect=fake_run,
+        ):
+            with patch.object(
+                TenantRestoreCommand,
+                "_schema_state",
+                side_effect=[(False, True), (True, False)],
+            ):
+                out, _ = self._call(*self._restore_args(schema, dump), "--json")
+
+        data = json.loads(out)
+        self.assertEqual(data["status"], "success")
+
+        restore_cmd = captured["cmd"]
+        self.assertNotIn("--clean", restore_cmd)
+        self.assertNotIn("--if-exists", restore_cmd)
+        self.assertIn("--exit-on-error", restore_cmd)
+        self.assertTrue(
+            PlatformAuditLog.objects.filter(action="tenant_restore").exists()
+        )

@@ -161,11 +161,15 @@ class Command(BaseCommand):
                 defaults={"plan_tier": PlanTier.FREE},
             )
 
-        features = sub.features or {}
-        max_students = features.get("max_students")
-        max_staff = features.get("max_staff")
-        max_dormitories = features.get("max_dormitories")
-        max_sms_monthly = features.get("max_sms_monthly")
+        # Resolve *effective* limits: a tenant override in ``features`` wins,
+        # otherwise fall back to the plan-tier default in feature_defaults.py
+        # (a resolved value of None means the resource is unlimited).
+        from tenancy.entitlements import quota_limit
+
+        max_students = quota_limit("max_students", schema_name=tenant.schema_name)
+        max_staff = quota_limit("max_staff", schema_name=tenant.schema_name)
+        max_dormitories = quota_limit("max_dormitories", schema_name=tenant.schema_name)
+        max_sms_monthly = quota_limit("max_sms_monthly", schema_name=tenant.schema_name)
 
         # 2. Check if schema exists
         with connection.cursor() as cursor:
