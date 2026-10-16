@@ -19,6 +19,7 @@ from django.contrib.auth import logout
 from django.contrib import messages
 from django.views.decorators.cache import never_cache
 from django.utils.http import url_has_allowed_host_and_scheme
+from tenancy.entitlements import tenant_feature_required
 from .models import (
     Student,
     Exeat,
@@ -284,6 +285,7 @@ def dashboard_view(request):
 
 @login_required
 @role_required(*EXEAT_ROLES)
+@tenant_feature_required("exeat_gate")
 def exeat_list_view(request):
     """Lists all exeats with multi-parameter HTMX search and filtering."""
     query = request.GET.get('q', '').strip()
@@ -418,6 +420,7 @@ def exeat_list_view(request):
 
 @login_required
 @role_required(*EXEAT_APPROVAL_ROLES)
+@tenant_feature_required("exeat_gate")
 def exeat_approvals_hub_view(request):
     """
     Phase 4.1: Dedicated PENDING APPROVALS HUB view (optimized workflow surface
@@ -758,6 +761,7 @@ def student_registration_view(request, student_pk=None):
 
 @login_required
 @role_required(*STUDENT_MANAGEMENT_ROLES)
+@tenant_feature_required("roster_import")
 def student_roster_import_view(request):
     form = StudentRosterUploadForm(request.POST or None, request.FILES or None)
     errors = []
@@ -789,6 +793,7 @@ def student_roster_import_view(request):
 
 @login_required
 @role_required(*STUDENT_MANAGEMENT_ROLES)
+@tenant_feature_required("roster_import")
 def student_import_template_view(request):
     response = HttpResponse(
         "Admission No.,Index Number,Full Name,Gender,Date of Birth,Programme,"
@@ -891,6 +896,7 @@ def public_student_photo_view(request, token):
 
 @login_required
 @role_required(*STUDENT_MANAGEMENT_ROLES)
+@tenant_feature_required("student_id_cards")
 def student_id_card_view(request, student_pk):
     layout = request.GET.get("layout", "classic")
     if layout not in STUDENT_ID_LAYOUTS:
@@ -922,6 +928,7 @@ def student_id_card_view(request, student_pk):
 @login_required
 @role_required(*STUDENT_MANAGEMENT_ROLES)
 @require_POST
+@tenant_feature_required("student_id_cards")
 def student_rotate_public_token_view(request, student_pk):
     student = get_object_or_404(Student, pk=student_pk)
     student.public_token = uuid.uuid4()
@@ -934,6 +941,7 @@ def student_rotate_public_token_view(request, student_pk):
 
 
 @never_cache
+@tenant_feature_required("student_id_cards")
 def public_student_exeat_view(request, token):
     student = get_object_or_404(
         Student.objects.select_related("programme", "house", "class_group"),
@@ -1148,6 +1156,7 @@ def incident_create_view(request):
 
 @login_required
 @role_required(*EXEAT_ROLES)
+@tenant_feature_required("exeat_gate")
 def student_search_view(request):
     """
     HTMX live autocomplete endpoint for searching students when issuing an exeat pass.
@@ -1175,6 +1184,7 @@ def student_search_view(request):
 
 @login_required
 @role_required(*EXEAT_CREATE_ROLES)
+@tenant_feature_required("exeat_gate")
 def exeat_create_view(request):
     """
     Issues a new official student Exeat / Leave Pass.
@@ -1288,6 +1298,7 @@ def exeat_create_view(request):
 
 @login_required
 @role_required(*EXEAT_ROLES)
+@tenant_feature_required("exeat_gate")
 def exeat_detail_view(request, pk):
     """
     Renders the official details and printable exeat pass slip for a student.
@@ -1321,6 +1332,7 @@ def exeat_detail_view(request, pk):
 
 @login_required
 @role_required(*EXEAT_APPROVAL_ROLES)
+@tenant_feature_required("exeat_gate")
 def exeat_approval_review_view(request, pk):
     """
     Phase 4.2: Dedicated Step-2 REVIEW PAGE.
@@ -1488,6 +1500,7 @@ def exeat_approval_review_view(request, pk):
 @login_required
 @role_required(*EXEAT_ROLES)
 @require_http_methods(["GET", "POST"])
+@tenant_feature_required("exeat_gate")
 def exeat_reconcile_view(request, pk):
     exeat = get_object_or_404(
         filter_queryset_by_house(
@@ -1539,6 +1552,7 @@ def exeat_reconcile_view(request, pk):
 @login_required
 @role_required(*EXEAT_ROLES)
 @require_POST
+@tenant_feature_required("exeat_gate")
 def exeat_action_view(request, pk, action):
     """
     Processes quick workflow actions from the table 3-dots context menu:
@@ -1962,6 +1976,7 @@ def global_search_view(request):
 @login_required
 @ensure_csrf_cookie
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_sessions_view(request):
     """Render house-scoped roll-call sessions without gate-security data."""
     house_scope = get_house_scope(request.user)
@@ -2115,6 +2130,7 @@ def roll_call_sessions_view(request):
 
 @login_required
 @role_required(*GATE_ROLES)
+@tenant_feature_required("exeat_gate")
 def gate_security_view(request):
     """Render school-wide gate operations without roll-call data."""
     house_scope = get_gate_house_scope(request.user)
@@ -2276,6 +2292,7 @@ def gate_security_view(request):
 
 @login_required
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_create_session_view(request):
     """Starts a new Roll Call muster session for a House and populates boarders."""
     if request.method == 'POST':
@@ -2320,6 +2337,7 @@ def roll_call_create_session_view(request):
 @login_required
 @require_POST
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_delete_session_view(request, session_pk):
     """Delete an owned roll call, or any roll call as a system administrator."""
     profile = get_user_profile(request.user)
@@ -2343,6 +2361,7 @@ def roll_call_delete_session_view(request, session_pk):
 @login_required
 @require_POST
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_notification_read_view(request, notification_pk):
     notification = get_object_or_404(
         RollCallNotification,
@@ -2358,6 +2377,7 @@ def roll_call_notification_read_view(request, notification_pk):
 @login_required
 @require_POST
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_complete_session_view(request, session_pk):
     """Marks a roll call session as completed."""
     session = get_object_or_404(
@@ -2388,6 +2408,7 @@ def roll_call_complete_session_view(request, session_pk):
 @login_required
 @require_POST
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_mark_all_present_view(request, session_pk):
     """Bulk action corrects explicitly absent students to PRESENT."""
     session = get_object_or_404(
@@ -2415,6 +2436,7 @@ def roll_call_mark_all_present_view(request, session_pk):
 @login_required
 @require_POST
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_update_entry_view(request, entry_pk):
     """HTMX inline status update for an individual student attendance entry."""
     entry = get_object_or_404(
@@ -2558,6 +2580,7 @@ def roll_call_update_entry_view(request, entry_pk):
 @login_required
 @require_POST
 @role_required(*ROLL_CALL_ROLES)
+@tenant_feature_required("roll_call")
 def roll_call_resolve_absence_follow_up_view(request, follow_up_pk):
     """Resolve a pending absence without treating it as misconduct by default."""
     follow_up = get_object_or_404(
@@ -2664,6 +2687,7 @@ def roll_call_resolve_absence_follow_up_view(request, follow_up_pk):
 @login_required
 @role_required(*GATE_ROLES)
 @require_POST
+@tenant_feature_required("exeat_gate")
 def gate_terminal_action_view(request, exeat_pk, action):
     """
     Rapid Gate Security terminal action to record departures and returns.
@@ -2745,6 +2769,7 @@ def gate_terminal_action_view(request, exeat_pk, action):
 
 @login_required
 @role_required(*GATE_ROLES)
+@tenant_feature_required("exeat_gate")
 def gate_verify_pass_view(request):
     """
     Real-time lookup for Gate Officers scanning or typing student passes.
@@ -2777,6 +2802,7 @@ def gate_verify_pass_view(request):
 # -----------------------------------------------------------------------------
 @login_required
 @role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
 def reports_dashboard_view(request):
     """Show scoped summary metrics and a selectable detailed operational report."""
     return render(request, 'core/reports/dashboard.html', _reports_context(request))
@@ -2784,6 +2810,7 @@ def reports_dashboard_view(request):
 
 @login_required
 @role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
 def reports_print_view(request):
     """Render only the authorized detailed report for browser printing or PDF."""
     context = _reports_context(request)
@@ -2975,6 +3002,7 @@ def set_sms_enabled_view(request):
 @login_required
 @role_required(StaffRole.ADMIN)
 @require_POST
+@tenant_feature_required("student_id_cards")
 def create_student_id_export_view(request):
     """Queue a background export of all enrolled students' card images."""
     layout = request.POST.get("layout", "crest").strip().lower()
@@ -3010,6 +3038,7 @@ def create_student_id_export_view(request):
 
 @login_required
 @role_required(StaffRole.ADMIN)
+@tenant_feature_required("student_id_cards")
 def download_student_id_export_view(request, export_id):
     """Serve the generated student ID export ZIP for the admin user."""
     export = get_object_or_404(StudentIDExport, pk=export_id, requested_by=request.user)

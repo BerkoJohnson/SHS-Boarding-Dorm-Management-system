@@ -2,6 +2,8 @@
 
 > [!CAUTION]
 > **5 critical production blockers** must be fixed before this branch can be merged. Several will cause immediate crashes or data leakage in production.
+>
+> **Status note (2026-10-15):** This is a historical audit. The critical findings have since received code changes; refer to the current source and the disposition notes below before treating any entry as an open defect.
 
 ---
 
@@ -128,19 +130,19 @@ Activating a tenant only checks for a verified domain. It never verifies whether
 | 16 | No DB-level regex constraint on `schema_name` — hyphens cause `search_path` SQL syntax errors | `migrations/0001_initial.py` |
 | 17 | `tenant_upload_path` crashes with `AttributeError` if `get_current_schema()` returns `None` | `core/models.py` |
 | 18 | IPv6 addresses malfunction in middleware — `[::1]:8000` splits on `:` producing `[` | `tenancy/middleware.py` |
-| 19 | `provision_school` / `add_school_domain` are not wrapped in `transaction.atomic()` — orphaned schemas on partial failure | Management commands |
+| 19 | Provisioning metadata and domain promotion/creation are transactional; schema migrations intentionally run after provisioning metadata commits so failed migrations can be retried while the tenant remains inactive | `provision_school.py`, `add_school_domain.py` |
 | 20 | `migrate_legacy_school` may exceed the 30-second `statement_timeout` on large datasets | `migrate_legacy_school.py` |
-| 21 | `TENANTS["public"]` lacks a `URLCONF` definition | `settings/base.py` |
-| 22 | `ContentType` is isolated in `PUBLIC_APPS` while `auth.Permission` (which FKs to it) is in `TENANT_APPS` — potential cross-schema FK issues | `settings/base.py` |
-| 23 | `django.contrib.staticfiles` appears in both `PUBLIC_APPS` and `TENANT_APPS` | `settings/base.py` |
+| 21 | Not a defect: `django-pgschemas` rejects `URLCONF` on the public schema; the default tenant has its URL configuration | `settings/base.py` |
+| 22 | Not a defect: `django-pgschemas` warns (`pgschemas.W002`) if `contenttypes` is assigned to tenant schemas; keep it public-only | `settings/base.py` |
+| 23 | Not present: `django.contrib.staticfiles` appears only in `TENANT_APPS` | `settings/base.py` |
 
 ---
 
 ## 🧪 Test Coverage Gaps
 
-- **Zero integration tests** with real PostgreSQL schema switching
+- A focused PostgreSQL schema-switching and app-routing integration test now lives in `tenancy/postgres_integration.py` (run it explicitly with `TENANCY_ENABLED=true`).
 - All 3,207 lines in [`core/tests.py`](file:///c:/RebuildEden/project%201/core/tests.py) assume single-tenant mode
-- [`test_tenants.py`](file:///c:/RebuildEden/project%201/tenancy/test_tenants.py) is 100% mock-based — no live DB schema validation
+- [`test_tenants.py`](file:///c:/RebuildEden/project%201/tenancy/test_tenants.py) remains unit/mock-based; the integration test is separate and PostgreSQL-only
 - Running `manage.py test` with `TENANCY_ENABLED=True` will likely **break the entire existing test suite** because `TestCase` creates tables in the public schema while `TenantAppsRouter` routes queries to tenant schemas
 
 ---
@@ -149,8 +151,8 @@ Activating a tenant only checks for a verified domain. It never verifies whether
 
 | Location | Claim | Reality |
 |---|---|---|
-| README §Multi-school tenancy | *"The schema is created and migrated automatically"* | Only the schema namespace is created; migrations are NOT run |
-| README §Existing-school cutover | Implies `migrate_legacy_school` works end-to-end | FK violation on alphabetical table copy breaks it |
+| README §Multi-school tenancy | Provisioning says tenant migrations run automatically | Matches `provision_school`, which migrates the schema and leaves it inactive if migration fails |
+| README §Existing-school cutover | Describes foreign-key-safe table copy | The command topologically orders tables and stops with an error if dependencies are cyclic |
 
 ---
 

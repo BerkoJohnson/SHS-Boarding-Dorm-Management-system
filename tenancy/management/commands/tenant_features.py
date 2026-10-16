@@ -20,6 +20,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
+from tenancy.feature_defaults import PLAN_DEFAULTS
 from tenancy.models import PlanTier, PlatformAuditLog, Tenant, TenantSubscription
 
 BOOLEAN_FEATURES = {
@@ -38,88 +39,6 @@ LIMIT_FEATURES = {
     "max_dormitories": "Maximum configured dormitories",
     "max_sms_monthly": "Monthly SMS send limit (0=unlimited)",
 }
-
-PLAN_DEFAULTS = {
-    "free": {
-        "roll_call": True,
-        "exeat_gate": False,
-        "student_id_cards": False,
-        "sms_dispatch": False,
-        "roster_import": False,
-        "advanced_reports": False,
-        "priority_support": False,
-        "max_students": 50,
-        "max_staff": 5,
-        "max_dormitories": 2,
-        "max_sms_monthly": 0,
-    },
-    "starter": {
-        "roll_call": True,
-        "exeat_gate": False,
-        "student_id_cards": False,
-        "sms_dispatch": False,
-        "roster_import": True,
-        "advanced_reports": False,
-        "priority_support": False,
-        "max_students": 500,
-        "max_staff": 10,
-        "max_dormitories": 10,
-        "max_sms_monthly": 0,
-    },
-    "standard": {
-        "roll_call": True,
-        "exeat_gate": True,
-        "student_id_cards": True,
-        "sms_dispatch": True,
-        "roster_import": True,
-        "advanced_reports": False,
-        "priority_support": True,
-        "max_students": 1500,
-        "max_staff": 40,
-        "max_dormitories": 40,
-        "max_sms_monthly": 5000,
-    },
-    "premium": {
-        "roll_call": True,
-        "exeat_gate": True,
-        "student_id_cards": True,
-        "sms_dispatch": True,
-        "roster_import": True,
-        "advanced_reports": True,
-        "priority_support": True,
-        "max_students": 2500,
-        "max_staff": 75,
-        "max_dormitories": 60,
-        "max_sms_monthly": 15000,
-    },
-    "pilot": {
-        "roll_call": True,
-        "exeat_gate": True,
-        "student_id_cards": True,
-        "sms_dispatch": True,
-        "roster_import": True,
-        "advanced_reports": False,
-        "priority_support": True,
-        "max_students": 2000,
-        "max_staff": 40,
-        "max_dormitories": 40,
-        "max_sms_monthly": 10000,
-    },
-    "enterprise": {
-        "roll_call": True,
-        "exeat_gate": True,
-        "student_id_cards": True,
-        "sms_dispatch": True,
-        "roster_import": True,
-        "advanced_reports": True,
-        "priority_support": True,
-        "max_students": None,
-        "max_staff": None,
-        "max_dormitories": None,
-        "max_sms_monthly": None,
-    },
-}
-
 
 class Command(BaseCommand):
     """Manage tenant feature flags and quota allocations."""

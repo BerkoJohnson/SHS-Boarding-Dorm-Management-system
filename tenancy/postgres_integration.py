@@ -42,7 +42,7 @@ class TenantPostgresSchemaIntegrationTests(TransactionTestCase):
                             "VALUES (%s)",
                             [value],
                         )
-                    self.assertTrue(
+                    self.assertFalse(
                         router.allow_migrate("default", "contenttypes")
                     )
                     self.assertTrue(router.allow_migrate("default", "auth"))

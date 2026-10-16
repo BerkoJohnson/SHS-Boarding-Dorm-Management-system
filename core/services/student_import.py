@@ -207,6 +207,11 @@ def _choice_value(value, choices, field, location, errors, default=""):
 
 def import_student_roster(uploaded_file):
     """Validate a complete CSV/XLSX roster, then create it atomically."""
+    from tenancy.entitlements import feature_enabled
+
+    if not feature_enabled("roster_import"):
+        return 0, ["This tenant's subscription does not include roster import."]
+
     extension = Path(uploaded_file.name).suffix.lower()
     if extension not in {".csv", ".xlsx"}:
         return 0, ["Upload a CSV or Excel .xlsx file."]
@@ -536,6 +541,24 @@ def import_student_roster(uploaded_file):
 
     if errors:
         return 0, errors
+
+    enrolled_to_import = sum(
+        item.student.status == Student.EnrollmentStatus.ENROLLED
+        for item in staged
+    )
+    if enrolled_to_import:
+        from tenancy.entitlements import ensure_quota_available
+
+        try:
+            ensure_quota_available(
+                "max_students",
+                Student.objects.filter(
+                    status=Student.EnrollmentStatus.ENROLLED
+                ).count(),
+                enrolled_to_import,
+            )
+        except ValidationError as error:
+            return 0, error.messages
 
     try:
         with transaction.atomic():

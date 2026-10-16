@@ -201,16 +201,22 @@ class Command(BaseCommand):
                 status=Student.EnrollmentStatus.ENROLLED
             ).count()
             total_students = Student.objects.count()
-            staff_accounts = User.objects.filter(is_staff=True).count()
+            staff_accounts = User.objects.filter(
+                is_staff=True,
+                is_active=True,
+            ).count()
             dormitories = Dormitory.objects.count()
 
             # SMS Deliverability
+            sms_sent = SMSDelivery.objects.filter(
+                status=SMSDelivery.Status.SENT,
+                sent_at__date__range=(start_date, end_date),
+            ).count()
             sms_period_qs = SMSDelivery.objects.filter(
                 created_at__date__range=(start_date, end_date)
             )
-            sms_sent = sms_period_qs.filter(status=SMSDelivery.Status.SENT).count()
             sms_failed = sms_period_qs.filter(status=SMSDelivery.Status.FAILED).count()
-            sms_queued = SMSDelivery.objects.filter(status=SMSDelivery.Status.QUEUED).count()
+            sms_queued = sms_period_qs.filter(status=SMSDelivery.Status.QUEUED).count()
 
             # Operational events in period
             exeats_count = Exeat.objects.filter(
@@ -378,6 +384,8 @@ class Command(BaseCommand):
         self.stdout.write(f"  +- Delivered:       {sms['sent']:,} messages")
         fail_style = self.style.WARNING if sms["failed"] > 0 else self.style.SUCCESS
         self.stdout.write(f"  +- Failed:          {fail_style(str(sms['failed']))} ({sms['failure_rate_pct']}%)")
+        if sms.get("queued", 0) > 0:
+            self.stdout.write(f"  +- Queued:          {sms['queued']:,} messages")
         billed_sms_str = f"GHS {sms['billed_total']:.2f}"
         self.stdout.write(f"  +- Cost basis:      GHS {sms['cost_basis_total']:.2f} (@ GHS {sms['unit_cost_basis']:.5f}/msg)")
         self.stdout.write(f"  +- Service Margin:  +{sms['margin_percent']:.1f}%")

@@ -12,6 +12,7 @@ from django.utils import timezone
 from django_pgschemas.schema import get_current_schema
 
 from core.models import Exeat, HouseMaster, SMSConfiguration, SMSDelivery, SchoolConfiguration
+from tenancy.entitlements import sms_quota_allows
 
 logger = logging.getLogger(__name__)
 GUARDIAN_AUDIENCE = "guardian"
@@ -173,6 +174,16 @@ def enqueue_exeat_event_sms(
             raise RuntimeError("SMS deliveries must be queued inside a school tenant.")
     for recipient_name, phone_number, audience in recipients:
         dedupe_key = f"{event_type}:{exeat.pk}:{phone_number}:{occurrence_key}"
+        existing = SMSDelivery.objects.filter(dedupe_key=dedupe_key).first()
+        if existing is not None:
+            deliveries.append(existing)
+            continue
+        if not sms_quota_allows():
+            logger.warning(
+                "SMS delivery for %s was not queued because the tenant monthly SMS limit was reached",
+                phone_number,
+            )
+            continue
         delivery, created = SMSDelivery.objects.get_or_create(
             dedupe_key=dedupe_key,
             defaults={
@@ -221,7 +232,12 @@ def enqueue_sms_delivery_task(delivery_id: str, *, tenant_schema=None) -> None:
         logger.exception("Could not queue SMS delivery %s; it remains in the outbox", delivery_id)
 
 
-def send_bulk_sms(phone_numbers: Sequence[str], message: str) -> bool:
+def send_bulk_sms(
+    phone_numbers: Sequence[str],
+    message: str,
+    *,
+    delivery_id: str | None = None,
+) -> bool:
     cleaned_numbers = [
         normalized
         for number in phone_numbers
@@ -229,6 +245,15 @@ def send_bulk_sms(phone_numbers: Sequence[str], message: str) -> bool:
     ]
     if not cleaned_numbers:
         logger.warning("SMS was not sent because the recipient list contains no valid numbers")
+        return False
+    if not SMSConfiguration.is_enabled():
+        logger.warning("SMS was not sent because SMS dispatch is disabled")
+        return False
+    if not sms_quota_allows(
+        len(cleaned_numbers),
+        exclude_delivery_id=delivery_id,
+    ):
+        logger.warning("SMS was not sent because the tenant monthly SMS limit was reached")
         return False
 
     api_key = getattr(settings, "SMS_ONLINE_GH_API_KEY", "")
@@ -268,5 +293,14 @@ def send_bulk_sms(phone_numbers: Sequence[str], message: str) -> bool:
     return False
 
 
-def send_sms(to_phone_number: str, message: str) -> bool:
-    return send_bulk_sms([to_phone_number], message)
+def send_sms(
+    to_phone_number: str,
+    message: str,
+    *,
+    delivery_id: str | None = None,
+) -> bool:
+    return send_bulk_sms(
+        [to_phone_number],
+        message,
+        delivery_id=delivery_id,
+    )

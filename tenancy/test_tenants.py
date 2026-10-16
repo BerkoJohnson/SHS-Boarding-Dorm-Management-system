@@ -441,7 +441,7 @@ class CeleryWorkerLifecycleTests(SimpleTestCase):
 
 class SmsServiceNullSchemaTests(SimpleTestCase):
     @override_settings(TENANCY_ENABLED=True)
-    @patch("django_pgschemas.schema.get_current_schema", return_value=None)
+    @patch("core.services.sms.get_current_schema", return_value=None)
     def test_enqueue_sms_delivery_task_handles_none_schema(self, mock_schema):
         from core.services.sms import enqueue_sms_delivery_task
 
@@ -454,7 +454,7 @@ class SmsServiceNullSchemaTests(SimpleTestCase):
     @override_settings(TENANCY_ENABLED=True)
     @patch("core.models.SMSConfiguration.is_enabled", return_value=True)
     @patch("core.services.sms.get_exeat_sms_targets", return_value=[("Parent", "0240000000", "guardian")])
-    @patch("django_pgschemas.schema.get_current_schema", return_value=None)
+    @patch("core.services.sms.get_current_schema", return_value=None)
     def test_enqueue_exeat_event_sms_handles_none_schema(
         self, mock_schema, mock_targets, mock_enabled
     ):

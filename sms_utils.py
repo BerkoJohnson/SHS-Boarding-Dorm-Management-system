@@ -4,7 +4,12 @@ from core.services.sms import send_bulk_sms as _send_bulk_sms
 from core.services.sms import send_sms as _send_sms
 
 
-def send_sms(to_phone_number: str, message: str) -> bool:
+def send_sms(
+    to_phone_number: str,
+    message: str,
+    *,
+    delivery_id: str | None = None,
+) -> bool:
     """
     Backwards-compatible wrapper around the shared SMSOnlineGH service.
 
@@ -15,10 +20,15 @@ def send_sms(to_phone_number: str, message: str) -> bool:
     Returns:
         bool: Whether the SMS gateway accepted the message.
     """
-    return _send_sms(to_phone_number, message)
+    return _send_sms(to_phone_number, message, delivery_id=delivery_id)
 
 
-def send_bulk_sms(phone_numbers: Sequence[str], message: str) -> bool:
+def send_bulk_sms(
+    phone_numbers: Sequence[str],
+    message: str,
+    *,
+    delivery_id: str | None = None,
+) -> bool:
     """
     Backwards-compatible wrapper for sending SMS to multiple recipients.
 
@@ -29,4 +39,4 @@ def send_bulk_sms(phone_numbers: Sequence[str], message: str) -> bool:
     Returns:
         bool: Whether the SMS gateway accepted the message.
     """
-    return _send_bulk_sms(phone_numbers, message)
+    return _send_bulk_sms(phone_numbers, message, delivery_id=delivery_id)

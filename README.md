@@ -82,7 +82,8 @@ The platform operates in one of two architectural modes controlled by the `TENAN
 
 2. **Multi-School Tenancy Mode (`TENANCY_ENABLED=true`)**:
    * **Public Schema**: Contains global platform tables (`tenancy_tenant`, `tenancy_domain`, `django_celery_beat`) and the public `django_content_type` registry.
-   * **Tenant Schemas**: Each school receives a dedicated PostgreSQL schema (`achimota_shs`, `atebubu_shs`) containing school operational data (`auth_user`, tenant-local `django_content_type`, `core_*`, and `django_session`).
+   * **Tenant Schemas**: Each school receives a dedicated PostgreSQL schema (`achimota_shs`, `atebubu_shs`) containing school operational data (`auth_user`, `core_*`, and `django_session`).
+   * **Shared Content Types**: Keep `django.contrib.contenttypes` in `PUBLIC_APPS` only; `django-pgschemas` emits a warning if it is also assigned to tenant schemas.
    * **Connection Hygiene**: Requests and Celery tasks reset the search path to `public` in `finally` blocks, preventing schema contamination across persistent connections (`CONN_MAX_AGE`).
    * **Dynamic CSRF**: Inspects `Origin` headers against verified tenant domains with signal-based cache invalidation and protocol downgrade protection.
    * **Platform operations**: `PLATFORM_ADMIN_DOMAIN` exposes a status-only JSON endpoint; it is not a browser-based admin interface. Manage tenants with the documented Django management commands.
@@ -371,7 +372,7 @@ Applies migrations for `tenancy`, `django_celery_beat`, and the public `django_c
 ```
 
 #### 2. Tenant Schemas Migrations (School Operational Data)
-Applies migrations for `contenttypes`, `auth`, `core`, and `sessions` across all active tenant schemas:
+Applies migrations for `auth`, `core`, and `sessions` across all active tenant schemas:
 ```powershell
 # Migrate all tenant schemas at once
 .\.venv\Scripts\python.exe .\manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
@@ -722,6 +723,13 @@ Inspects, enables, disables, and adjusts resource boundaries on individual schoo
 # Reset all features back to plan tier defaults
 .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --reset-to-plan
 ```
+
+Feature flags are enforced by tenant application views and service entry points.
+SMS requires both the platform `sms_dispatch` entitlement and the school's local
+SMS configuration switch to be enabled; monthly SMS quotas include sent messages
+and outstanding queued/processing deliveries. Student, staff, and dormitory
+quotas are checked when records are created. `priority_support` records the
+contractual support tier and does not change school application permissions.
 
 ---
 

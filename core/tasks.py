@@ -83,6 +83,14 @@ def send_sms_delivery_task(
         return False
     if delivery.status != SMSDelivery.Status.QUEUED:
         return False
+    from tenancy.entitlements import sms_quota_allows
+
+    if not sms_quota_allows(0, exclude_delivery_id=delivery.pk):
+        logger.warning(
+            "SMS delivery %s remains queued because the monthly SMS limit was reached",
+            delivery_id,
+        )
+        return False
 
     attempted_at = timezone.now()
     claimed = SMSDelivery.objects.filter(
@@ -100,7 +108,11 @@ def send_sms_delivery_task(
     delivery.attempts += 1
     delivery.last_attempted_at = attempted_at
 
-    if send_sms(delivery.phone_number, delivery.message):
+    if send_sms(
+        delivery.phone_number,
+        delivery.message,
+        delivery_id=str(delivery.pk),
+    ):
         delivery.status = SMSDelivery.Status.SENT
         delivery.sent_at = timezone.now()
         delivery.last_error = ""
@@ -355,6 +367,16 @@ def generate_student_id_export(
     export = StudentIDExport.objects.filter(pk=export_id).first()
     if export is None:
         logger.error("Student ID export %s does not exist", export_id)
+        return False
+    from tenancy.entitlements import feature_enabled
+
+    if not feature_enabled("student_id_cards"):
+        export.status = StudentIDExport.Status.FAILED
+        export.error_message = "This tenant's subscription does not include student ID cards."
+        export.finished_at = timezone.now()
+        export.save(
+            update_fields=["status", "error_message", "finished_at", "updated_at"]
+        )
         return False
     if export.status != StudentIDExport.Status.QUEUED:
         logger.warning(

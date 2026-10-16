@@ -479,22 +479,23 @@ class Command(BaseCommand):
             )
             has_schema = bool(cursor.fetchone())
 
-        if has_schema:
-            try:
-                with tenant:
-                    from core.models import SMSDelivery, Student
+        if not has_schema:
+            raise CommandError(
+                f"Tenant schema '{tenant.schema_name}' does not exist; invoice metrics cannot be calculated."
+            )
 
-                    enrolled_status = getattr(
-                        getattr(Student, "EnrollmentStatus", None), "ENROLLED", "Enrolled"
-                    )
-                    enrolled_count = Student.objects.filter(status=enrolled_status).count()
+        with tenant:
+            from core.models import SMSDelivery, Student
 
-                    sms_sent_count = SMSDelivery.objects.filter(
-                        status=SMSDelivery.Status.SENT,
-                        created_at__date__range=(start_date, end_date),
-                    ).count()
-            except Exception:
-                pass
+            enrolled_status = getattr(
+                getattr(Student, "EnrollmentStatus", None), "ENROLLED", "Enrolled"
+            )
+            enrolled_count = Student.objects.filter(status=enrolled_status).count()
+
+            sms_sent_count = SMSDelivery.objects.filter(
+                status=SMSDelivery.Status.SENT,
+                sent_at__date__range=(start_date, end_date),
+            ).count()
 
         line_items: List[Dict[str, Any]] = []
 

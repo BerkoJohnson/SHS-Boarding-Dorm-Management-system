@@ -6,7 +6,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import FileExtensionValidator, RegexValidator
 from django.utils import timezone
 from django.conf import settings
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from PIL import Image, UnidentifiedImageError
 from django_pgschemas.schema import get_current_schema
@@ -253,8 +253,22 @@ class Dormitory(BaseModel):
         ordering = ["house", "gender", "name"]
         unique_together = ("house", "gender", "name")
 
+    def clean(self):
+        super().clean()
+        if self._state.adding:
+            from tenancy.entitlements import ensure_quota_available
+
+            ensure_quota_available("max_dormitories", Dormitory.objects.count())
+
     def __str__(self):
         return f"{self.house.name} - {self.name} ({self.get_gender_display()})"
+
+    def save(self, *args, **kwargs):
+        if self._state.adding:
+            from tenancy.entitlements import ensure_quota_available
+
+            ensure_quota_available("max_dormitories", Dormitory.objects.count())
+        super().save(*args, **kwargs)
 
 
 class DormitoryRoom(BaseModel):
@@ -716,6 +730,23 @@ class Student(BaseModel):
                 DormitoryRoom.objects.select_for_update().filter(
                     pk=self.room_id
                 ).exists()
+            previous_status = None
+            if not self._state.adding:
+                previous_status = Student.objects.filter(pk=self.pk).values_list(
+                    "status", flat=True
+                ).first()
+            if (
+                self.status == self.EnrollmentStatus.ENROLLED
+                and previous_status != self.EnrollmentStatus.ENROLLED
+            ):
+                from tenancy.entitlements import ensure_quota_available
+
+                ensure_quota_available(
+                    "max_students",
+                    Student.objects.filter(
+                        status=self.EnrollmentStatus.ENROLLED
+                    ).count(),
+                )
             self.full_clean()
             super().save(*args, **kwargs)
         
@@ -810,6 +841,13 @@ class Exeat(BaseModel):
 
     def clean(self):
         super().clean()
+        if self._state.adding:
+            from tenancy.entitlements import feature_enabled
+
+            if not feature_enabled("exeat_gate"):
+                raise ValidationError(
+                    "This tenant's subscription does not include exeat management."
+                )
         # 1. Day students validation
         if self.student_id and getattr(self, 'student', None) and self.student.residency == Student.ResidencyStatus.DAY:
             raise ValidationError({'student': "Day students do not require boarding exeat passes."})
@@ -1111,9 +1149,18 @@ class SMSConfiguration(models.Model):
     @classmethod
     def is_enabled(cls) -> bool:
         configuration = cls.objects.filter(pk=1).only("enabled").first()
-        if configuration is None:
-            return getattr(settings, "SMS_ENABLED", False)
-        return configuration.enabled
+        local_enabled = (
+            configuration.enabled
+            if configuration is not None
+            else getattr(settings, "SMS_ENABLED", False)
+        )
+        if not local_enabled:
+            return False
+        if settings.TENANCY_ENABLED:
+            from tenancy.entitlements import feature_enabled
+
+            return feature_enabled("sms_dispatch")
+        return True
 
     def __str__(self):
         return "SMS Notifications"
@@ -1226,6 +1273,13 @@ class StudentIDExport(BaseModel):
         verbose_name_plural = "Student ID image exports"
 
     def save(self, *args, **kwargs):
+        if self._state.adding:
+            from tenancy.entitlements import feature_enabled
+
+            if not feature_enabled("student_id_cards"):
+                raise ValidationError(
+                    "This tenant's subscription does not include student ID cards."
+                )
         if not self.archive_name:
             timestamp = timezone.now().strftime("%Y%m%d-%H%M%S")
             self.archive_name = f"student-id-export-{timestamp}-{uuid.uuid4().hex[:8]}.zip"
@@ -1368,6 +1422,21 @@ class RollCallSession(BaseModel):
         ordering = ["-date", "-created_at"]
         verbose_name = "Roll Call Session"
         verbose_name_plural = "Roll Call Sessions"
+
+    def clean(self):
+        super().clean()
+        if self._state.adding:
+            from tenancy.entitlements import feature_enabled
+
+            if not feature_enabled("roll_call"):
+                raise ValidationError(
+                    "This tenant's subscription does not include roll call."
+                )
+
+    def save(self, *args, **kwargs):
+        if self._state.adding:
+            self.full_clean()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         block = f" - {self.dormitory.name}" if self.dormitory else ""
@@ -1594,6 +1663,21 @@ def ensure_user_profile(sender, instance, created, **kwargs):
     if created:
         role = StaffRole.ADMIN if instance.is_superuser else StaffRole.UNASSIGNED
         UserProfile.objects.get_or_create(user=instance, defaults={'role': role})
+
+
+@receiver(pre_save, sender=settings.AUTH_USER_MODEL)
+def enforce_staff_account_quota(sender, instance, **kwargs):
+    if not instance.is_staff or not settings.TENANCY_ENABLED:
+        return
+    existing = sender.objects.filter(pk=instance.pk).first() if instance.pk else None
+    if existing and existing.is_staff:
+        return
+    from tenancy.entitlements import ensure_quota_available
+
+    ensure_quota_available(
+        "max_staff",
+        sender.objects.filter(is_staff=True).count(),
+    )
 
 
 def get_user_profile(user):

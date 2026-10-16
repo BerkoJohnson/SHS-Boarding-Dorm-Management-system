@@ -22,6 +22,13 @@ from core.models import (
 )
 
 
+def _require_roll_call_entitlement():
+    from tenancy.entitlements import feature_enabled
+
+    if not feature_enabled("roll_call"):
+        raise ValueError("This tenant's subscription does not include roll call.")
+
+
 def create_roll_call_session(
     house: House,
     session_type: str = RollCallSession.SessionType.EVENING,
@@ -51,6 +58,7 @@ def create_roll_call_session(
     Returns:
         RollCallSession: Newly created or existing in-progress session with populated entries.
     """
+    _require_roll_call_entitlement()
     if inspection_date is None:
         inspection_date = timezone.localdate()
 
@@ -139,6 +147,7 @@ def update_entry_status(
     Raises:
         ValueError: If the parent session is already finalized/completed.
     """
+    _require_roll_call_entitlement()
     if new_status not in RollCallEntry.Status.values:
         raise ValueError(f"Invalid roll call status: {new_status}")
     with transaction.atomic():
@@ -225,6 +234,7 @@ def resolve_pending_absence_follow_ups(
 
 def complete_roll_call_session(session: RollCallSession) -> RollCallSession:
     """Finalize a session only after every roster entry has been verified."""
+    _require_roll_call_entitlement()
     with transaction.atomic():
         locked_session = RollCallSession.objects.select_for_update().get(
             pk=session.pk
@@ -269,6 +279,7 @@ def mark_all_present(session: RollCallSession, corrected_by) -> int:
     Returns:
         int: Number of entries updated. Returns 0 if session is already finalized.
     """
+    _require_roll_call_entitlement()
     # Guard: prevent bulk mutations on finalized sessions
     if session.status == RollCallSession.Status.COMPLETED:
         return 0
@@ -315,6 +326,7 @@ def convert_absence_to_disciplinary_record(
     Returns:
         tuple: The conduct record and whether it was newly created.
     """
+    _require_roll_call_entitlement()
     if entry.status != RollCallEntry.Status.ABSENT:
         raise ValueError("Only an absent roll-call entry can be logged as an infraction.")
 
@@ -388,6 +400,7 @@ def resolve_absence_follow_up(
     logged_by: Optional[HouseMaster] = None,
 ) -> Optional[DisciplinaryRecord]:
     """Resolve a pending absence; only confirmed unexcused cases create conduct records."""
+    _require_roll_call_entitlement()
     if resolution not in (
         RollCallAbsenceFollowUp.Status.CONFIRMED,
         RollCallAbsenceFollowUp.Status.EXCUSED,

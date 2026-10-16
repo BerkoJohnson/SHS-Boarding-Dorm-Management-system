@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -88,6 +89,46 @@ class ExeatSMSTests(TestCase):
         SMSConfiguration.objects.update(enabled=True)
         with override_settings(SMS_ENABLED=False):
             self.assertTrue(SMSConfiguration.is_enabled())
+
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("tenancy.entitlements._current_schema_name", return_value="sms-tenant")
+    @patch(
+        "tenancy.entitlements._subscription",
+        return_value=SimpleNamespace(
+            features={"sms_dispatch": False},
+            plan_tier="pilot",
+        ),
+    )
+    def test_platform_sms_entitlement_overrides_local_enabled_switch(
+        self, _subscription, _schema_name
+    ):
+        self.assertFalse(SMSConfiguration.is_enabled())
+
+    @override_settings(TENANCY_ENABLED=True, SMS_ONLINE_GH_API_KEY="test-key")
+    @patch("core.services.sms.requests.post")
+    @patch("tenancy.entitlements._current_schema_name", return_value="sms-tenant")
+    @patch(
+        "tenancy.entitlements._subscription",
+        return_value=SimpleNamespace(
+            features={"sms_dispatch": False},
+            plan_tier="pilot",
+        ),
+    )
+    def test_platform_sms_entitlement_blocks_direct_sender(
+        self, _subscription, _schema_name, post
+    ):
+        from core.services.sms import send_sms
+
+        self.assertFalse(send_sms("+233240000000", "Test message"))
+        post.assert_not_called()
+
+    @patch("core.services.sms.sms_quota_allows", return_value=False)
+    @patch("core.services.sms.requests.post")
+    def test_monthly_quota_blocks_direct_sender(self, post, _quota):
+        from core.services.sms import send_sms
+
+        self.assertFalse(send_sms("+233240000000", "Test message"))
+        post.assert_not_called()
 
     def test_disabled_setting_blocks_new_sms_outbox_records(self):
         SMSConfiguration.objects.update(enabled=False)
@@ -204,7 +245,11 @@ class ExeatSMSTests(TestCase):
         self.assertEqual(delivery.status, SMSDelivery.Status.SENT)
         self.assertEqual(delivery.attempts, 1)
         self.assertIsNotNone(delivery.sent_at)
-        send_sms.assert_called_once_with(delivery.phone_number, delivery.message)
+        send_sms.assert_called_once_with(
+            delivery.phone_number,
+            delivery.message,
+            delivery_id=str(delivery.pk),
+        )
 
     @override_settings(SMS_ENABLED=True, SMS_MAX_ATTEMPTS=2)
     @patch("core.services.sms.send_sms", return_value=False)
@@ -224,7 +269,9 @@ class ExeatSMSTests(TestCase):
         delivery.refresh_from_db()
         self.assertEqual(delivery.status, SMSDelivery.Status.QUEUED)
         self.assertEqual(delivery.attempts, 1)
-        send_sms.assert_called_once_with(delivery.phone_number, delivery.message)
+        send_sms.assert_called_once_with(
+            delivery.phone_number, delivery.message, delivery_id=str(delivery.pk)
+        )
 
 
 class SMSConfigurationViewTests(TestCase):

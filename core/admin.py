@@ -1,5 +1,10 @@
 from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin as AuthUserAdmin
+from django.contrib.auth.forms import UserChangeForm, UserCreationForm
+from django.core.exceptions import ValidationError
 from django import forms
+from django.conf import settings
 from .models import (
     Student,
     Programme,
@@ -27,6 +32,46 @@ from .models import (
     RollCallAbsenceFollowUp,
 )
 from .widgets import PrivateStudentPhotoInput
+
+
+class TenantStaffQuotaFormMixin:
+    def clean_is_staff(self):
+        is_staff = self.cleaned_data["is_staff"]
+        if (
+            is_staff
+            and not self.instance.is_staff
+            and settings.TENANCY_ENABLED
+        ):
+            from tenancy.entitlements import ensure_quota_available
+
+            user_model = get_user_model()
+            try:
+                ensure_quota_available(
+                    "max_staff",
+                    user_model.objects.filter(is_staff=True).count(),
+                )
+            except ValidationError as error:
+                raise forms.ValidationError(error.messages) from error
+        return is_staff
+
+
+class TenantUserChangeForm(TenantStaffQuotaFormMixin, UserChangeForm):
+    pass
+
+
+class TenantUserCreationForm(TenantStaffQuotaFormMixin, UserCreationForm):
+    pass
+
+
+class TenantUserAdmin(AuthUserAdmin):
+    form = TenantUserChangeForm
+    add_form = TenantUserCreationForm
+
+
+user_model = get_user_model()
+if admin.site.is_registered(user_model):
+    admin.site.unregister(user_model)
+admin.site.register(user_model, TenantUserAdmin)
 
 
 @admin.register(UserProfile)

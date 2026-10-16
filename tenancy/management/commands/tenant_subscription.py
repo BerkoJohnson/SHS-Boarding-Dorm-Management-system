@@ -22,7 +22,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from tenancy.management.commands.tenant_features import PLAN_DEFAULTS
+from tenancy.feature_defaults import PLAN_DEFAULTS
 from tenancy.models import PlanTier, PlatformAuditLog, Tenant, TenantSubscription
 
 # SMSOnlineGH packages: package_price -> (credits, unit_cost_basis)
@@ -153,7 +153,7 @@ class Command(BaseCommand):
             "--set-sms-package",
             type=int,
             choices=list(SMS_PACKAGES.keys()),
-            help="Apply SMSOnlineGH package tier preset (e.g. 500 for GH₵500 package).",
+            help="Apply SMSOnlineGH package tier preset (e.g. 500 for GHS 500 package).",
         )
         parser.add_argument(
             "--set-sms-cost-basis",
