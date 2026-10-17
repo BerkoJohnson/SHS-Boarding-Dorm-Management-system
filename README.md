@@ -1125,8 +1125,20 @@ Header names are matched case-insensitively and accept common aliases (for examp
 
 ### 10.3 `UndefinedTable` Error in Django Shell or Tests
 * **Symptom**: `django.db.utils.ProgrammingError: relation "auth_user" does not exist`.
-* **Cause**: Running database queries while connected to the `public` schema in multi-tenant mode (`TENANCY_ENABLED=true`).
-* **Fix**: Activate a tenant schema before querying:
+* **Cause**: In multi-tenant mode (`TENANCY_ENABLED=true`), `auth` and `core` tables are created in tenant schemas, not `public`. A fresh Django test database has no tenants yet, so ordinary `TestCase` tests run against `public` without those tables.
+* **Fix for the legacy `core` test suite**: Use the dedicated test settings, which disable tenancy before loading the application settings and use a separate test database:
+  ```powershell
+  .\.venv\Scripts\python.exe .\manage.py test core --settings=schoolsystem.settings.test
+  ```
+  This runs `core` tests in single-school mode; it does not validate schema isolation. Run platform/tenancy tests using the normal development settings:
+  ```powershell
+  .\.venv\Scripts\python.exe .\manage.py test tenancy
+  ```
+  To test actual tenant-schema behavior, run the tenancy PostgreSQL integration tests with tenancy enabled and a PostgreSQL database:
+  ```powershell
+  .\.venv\Scripts\python.exe .\manage.py test tenancy.test_postgres_integration
+  ```
+* **For interactive shell queries in multi-tenant mode**: Activate a tenant schema before querying:
   ```powershell
   python manage.py runschema shell --schema achimota_shs
   ```

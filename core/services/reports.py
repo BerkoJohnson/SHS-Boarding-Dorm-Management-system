@@ -1,7 +1,7 @@
 """
 Service layer for reporting and statistics aggregation.
 """
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Q, Sum
 from django.utils import timezone
 from core.models import (
     Student,
@@ -14,6 +14,7 @@ from core.models import (
     House,
     Dormitory,
     DormitoryRoom,
+    SMSDelivery,
 )
 
 _DORMITORY_GENDER_LABELS = {"M": "Boys Dormitory", "F": "Girls Dormitory"}
@@ -40,6 +41,9 @@ _SEVERITY_LABELS = {
     "Minor": "Minor Offense",
     "Major": "Major Offense",
     "Critical": "Critical Infraction",
+}
+_ROLL_CALL_ENTRY_STATUS_LABELS = {
+    choice.value: choice.label for choice in RollCallEntry.Status
 }
 
 
@@ -131,6 +135,46 @@ def get_dashboard_metrics(house_id=None):
 
 def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None, term_id=None):
     """Build a scoped, printable detail report as column labels and row values."""
+    if report_type == "placement_exceptions":
+        return _placement_exception_report(house_id=house_id)
+    if report_type == "attendance_league":
+        return _attendance_league_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "overdue_register":
+        return _overdue_register_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "gate_conflicts":
+        return _gate_conflict_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "approval_turnaround":
+        return _approval_turnaround_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "exeat_analytics":
+        return _exeat_analytics_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "room_register":
+        return _room_register_report(house_id=house_id)
+
     if report_type == "housing":
         houses = House.objects.all().order_by("display_order", "name")
         if house_id is not None:
@@ -664,4 +708,1167 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
             "Incident descriptions are free text; similar cases may use different wording.",
         ),
         "point_in_time": False,
+    }
+
+
+def _resolve_report_period(term=None, date_from=None, date_to=None):
+    start = term.start_date if term is not None else date_from
+    end = term.end_date if term is not None else date_to
+    if date_from is not None and (start is None or date_from > start):
+        start = date_from
+    if date_to is not None and (end is None or date_to < end):
+        end = date_to
+    return start, end
+
+
+def get_boarding_kpi_pack(
+    house_id=None, term=None, date_from=None, date_to=None
+):
+    """Build a scoped boarding and student-welfare KPI pack."""
+    now = timezone.now()
+    start, end = _resolve_report_period(term, date_from, date_to)
+
+    boarders = Student.objects.filter(residency=Student.ResidencyStatus.BOARDING)
+    day_students = Student.objects.filter(residency=Student.ResidencyStatus.DAY)
+    if house_id is not None:
+        boarders = boarders.filter(house_id=house_id)
+        day_students = day_students.filter(house_id=house_id)
+
+    total_boarders = boarders.count()
+    placed_boarders = boarders.filter(dormitory__isnull=False).count()
+    awaiting_dorm = boarders.filter(dormitory__isnull=True).count()
+    awaiting_room = boarders.filter(
+        dormitory__isnull=False, room__isnull=True
+    ).count()
+    day_student_count = day_students.count()
+
+    dormitories = Dormitory.objects.all()
+    if house_id is not None:
+        dormitories = dormitories.filter(house_id=house_id)
+    configured_beds = dormitories.aggregate(total=Sum("capacity"))["total"] or 0
+    over_capacity_dorms = (
+        dormitories.annotate(
+            occupied=Count(
+                "boarders",
+                filter=Q(boarders__residency=Student.ResidencyStatus.BOARDING),
+            )
+        )
+        .filter(occupied__gt=F("capacity"))
+        .count()
+    )
+    occupancy = round(placed_boarders * 100 / configured_beds, 1) if configured_beds else 0
+
+    exeats = Exeat.objects.all()
+    if house_id is not None:
+        exeats = exeats.filter(student__house_id=house_id)
+    if term is not None:
+        exeats = exeats.filter(academic_term=term)
+    if start is not None:
+        exeats = exeats.filter(expected_departure__date__gte=start)
+    if end is not None:
+        exeats = exeats.filter(expected_departure__date__lte=end)
+    exeat_total = exeats.count()
+    exeat_pending = exeats.filter(status=Exeat.Status.PENDING).count()
+    exeat_approved = exeats.filter(status=Exeat.Status.APPROVED).count()
+    exeat_rejected = exeats.filter(status=Exeat.Status.REJECTED).count()
+
+    active_qs = (
+        Exeat.objects.filter(status=Exeat.Status.APPROVED)
+        .filter(
+            Q(
+                movement__actual_departure__isnull=False,
+                movement__actual_return__isnull=True,
+            )
+            | Q(
+                reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+                reconciliation__actual_return__isnull=True,
+            )
+        )
+        .distinct()
+    )
+    if house_id is not None:
+        active_qs = active_qs.filter(student__house_id=house_id)
+    active_out = active_qs.count()
+    overdue = active_qs.filter(expected_return__lte=now).count()
+
+    sessions = RollCallSession.objects.filter(
+        status=RollCallSession.Status.COMPLETED
+    )
+    if house_id is not None:
+        sessions = sessions.filter(house_id=house_id)
+    if term is not None:
+        sessions = sessions.filter(academic_term=term)
+    if start is not None:
+        sessions = sessions.filter(date__gte=start)
+    if end is not None:
+        sessions = sessions.filter(date__lte=end)
+    attendance = sessions.aggregate(
+        expected=Count("entries"),
+        present=Count("entries", filter=Q(entries__status=RollCallEntry.Status.PRESENT)),
+    )
+    expected_marks = attendance["expected"] or 0
+    present_marks = attendance["present"] or 0
+    attendance_rate = (
+        round(present_marks * 100 / expected_marks, 1) if expected_marks else 0
+    )
+
+    incidents = DisciplinaryRecord.objects.all()
+    if house_id is not None:
+        incidents = incidents.filter(student__house_id=house_id)
+    if term is not None:
+        incidents = incidents.filter(academic_term=term)
+    if start is not None:
+        incidents = incidents.filter(created_at__date__gte=start)
+    if end is not None:
+        incidents = incidents.filter(created_at__date__lte=end)
+    active_incidents = incidents.filter(corrected_at__isnull=True)
+    active_incident_count = active_incidents.count()
+    students_with_incidents = (
+        active_incidents.values("student_id").distinct().count()
+    )
+    repeat_students = (
+        active_incidents.values("student_id")
+        .annotate(incident_count=Count("id"))
+        .filter(incident_count__gte=2)
+        .count()
+    )
+
+    exeat_type_rows = [
+        (
+            _EXEAT_TYPE_LABELS.get(row["exeat_type"], row["exeat_type"]),
+            row["count"],
+        )
+        for row in exeats.values("exeat_type")
+        .annotate(count=Count("id"))
+        .order_by("-count", "exeat_type")
+    ]
+    attendance_rows = [
+        (
+            row["house__name"],
+            row["expected"],
+            row["present"],
+            f'{round(row["present"] * 100 / row["expected"], 1) if row["expected"] else 0}%',
+        )
+        for row in sessions.values("house__name")
+        .annotate(
+            expected=Count("entries"),
+            present=Count(
+                "entries", filter=Q(entries__status=RollCallEntry.Status.PRESENT)
+            ),
+        )
+        .order_by("house__name")
+    ]
+    severity_rows = [
+        (
+            _SEVERITY_LABELS.get(row["severity"], row["severity"]),
+            row["count"],
+        )
+        for row in active_incidents.values("severity")
+        .annotate(count=Count("id"))
+        .order_by("severity")
+    ]
+
+    return {
+        "title": "Boarding Termly KPI Pack",
+        "layout": "boarding_kpi",
+        "point_in_time": False,
+        "kpi_tiles": (
+            ("Boarders", total_boarders, "indigo"),
+            ("Day students", day_student_count, "indigo"),
+            ("Configured beds", configured_beds, "sky"),
+            ("Occupancy", f"{occupancy}%", "emerald"),
+            ("Awaiting dorm placement", awaiting_dorm, "amber"),
+            ("Awaiting room placement", awaiting_room, "amber"),
+            ("Over-capacity dormitories", over_capacity_dorms, "rose"),
+            ("Currently out", active_out, "sky"),
+            ("Overdue returns", overdue, "rose"),
+            ("Exeats in period", exeat_total, "violet"),
+            ("Attendance", f"{attendance_rate}%", "emerald"),
+            ("Active incidents", active_incident_count, "rose"),
+            ("Students with incidents", students_with_incidents, "violet"),
+            ("Repeat students (2+)", repeat_students, "amber"),
+        ),
+        "sections": (
+            {
+                "title": "Exeats by type",
+                "headers": ("Exeat type", "Passes"),
+                "rows": exeat_type_rows,
+            },
+            {
+                "title": "Attendance by house",
+                "headers": ("House", "Marks expected", "Present", "Attendance"),
+                "rows": attendance_rows,
+            },
+            {
+                "title": "Active conduct by severity",
+                "headers": ("Severity", "Active cases"),
+                "rows": severity_rows,
+            },
+        ),
+        "highlights": (
+            f"Exeats: {exeat_pending} pending, {exeat_approved} approved, "
+            f"{exeat_rejected} rejected in the selected period.",
+            "Occupancy compares placed boarders against configured dormitory capacity.",
+            "Attendance counts completed roll calls only; Present ÷ Expected marks.",
+        ),
+        "record_count": total_boarders,
+    }
+
+
+def _placement_exception_report(house_id=None):
+    boarders = Student.objects.filter(residency=Student.ResidencyStatus.BOARDING)
+    if house_id is not None:
+        boarders = boarders.filter(house_id=house_id)
+
+    rows = []
+    unplaced = boarders.filter(dormitory__isnull=True).select_related("house")
+    for student in unplaced:
+        rows.append(
+            (
+                "Unplaced boarder",
+                student.house.name if student.house else "Unassigned",
+                "No dormitory",
+                student.full_name,
+            )
+        )
+
+    roomless = boarders.filter(
+        dormitory__isnull=False, room__isnull=True
+    ).select_related("house", "dormitory")
+    for student in roomless:
+        rows.append(
+            (
+                "Room not assigned",
+                student.house.name if student.house else "Unassigned",
+                student.dormitory.name,
+                student.full_name,
+            )
+        )
+
+    mismatches = (
+        boarders.filter(dormitory__isnull=False)
+        .filter(Q(house__isnull=True) | ~Q(house_id=F("dormitory__house_id")))
+        .select_related("house", "dormitory", "dormitory__house")
+    )
+    for student in mismatches:
+        rows.append(
+            (
+                "House/dormitory mismatch",
+                student.house.name if student.house else "Unassigned",
+                f"{student.dormitory.name} ({student.dormitory.house.name})",
+                student.full_name,
+            )
+        )
+
+    day_misassigned = Student.objects.filter(
+        residency=Student.ResidencyStatus.DAY,
+    ).exclude(dormitory__isnull=True).select_related("house", "dormitory")
+    if house_id is not None:
+        day_misassigned = day_misassigned.filter(house_id=house_id)
+    for student in day_misassigned:
+        rows.append(
+            (
+                "Day student in dormitory",
+                student.house.name if student.house else "Unassigned",
+                student.dormitory.name,
+                student.full_name,
+            )
+        )
+
+    dormitories = Dormitory.objects.select_related("house").annotate(
+        occupied=Count(
+            "boarders",
+            filter=Q(boarders__residency=Student.ResidencyStatus.BOARDING),
+        )
+    )
+    if house_id is not None:
+        dormitories = dormitories.filter(house_id=house_id)
+    over_dorms = dormitories.filter(occupied__gt=F("capacity"))
+    for dormitory in over_dorms:
+        rows.append(
+            (
+                "Over-capacity dormitory",
+                dormitory.house.name,
+                dormitory.name,
+                f"{dormitory.occupied}/{dormitory.capacity}",
+            )
+        )
+
+    rooms = DormitoryRoom.objects.select_related(
+        "dormitory", "dormitory__house"
+    ).annotate(
+        occupied=Count(
+            "students",
+            filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+        )
+    )
+    if house_id is not None:
+        rooms = rooms.filter(dormitory__house_id=house_id)
+    over_rooms = rooms.filter(occupied__gt=F("capacity"))
+    for room in over_rooms:
+        rows.append(
+            (
+                "Over-capacity room",
+                room.dormitory.house.name,
+                f"{room.dormitory.name} / {room.name}",
+                f"{room.occupied}/{room.capacity}",
+            )
+        )
+
+    return {
+        "title": "Placement Exception Queue",
+        "headers": ("Exception", "House", "Location", "Detail"),
+        "rows": rows,
+        "summary": (
+            ("Unplaced boarders", unplaced.count()),
+            ("Rooms not assigned", roomless.count()),
+            ("House/dormitory mismatches", mismatches.count()),
+            ("Day students in dormitory", day_misassigned.count()),
+            ("Over-capacity dormitories", over_dorms.count()),
+            ("Over-capacity rooms", over_rooms.count()),
+            ("Total exceptions", len(rows)),
+        ),
+        "highlights": (
+            "Each row is one action item; resolve by editing placement on the student record.",
+            "Over-capacity counts students beyond a dormitory or room's configured capacity.",
+        ),
+        "point_in_time": True,
+    }
+
+
+def _attendance_league_report(house_id=None, date_from=None, date_to=None, term_id=None):
+    sessions = RollCallSession.objects.filter(
+        status=RollCallSession.Status.COMPLETED
+    )
+    if house_id is not None:
+        sessions = sessions.filter(house_id=house_id)
+    if date_from:
+        sessions = sessions.filter(date__gte=date_from)
+    if date_to:
+        sessions = sessions.filter(date__lte=date_to)
+    if term_id:
+        sessions = sessions.filter(academic_term_id=term_id)
+
+    aggregates = sessions.values("house__name").annotate(
+        session_count=Count("id", distinct=True),
+        expected=Count("entries"),
+        present=Count("entries", filter=Q(entries__status=RollCallEntry.Status.PRESENT)),
+        absent=Count("entries", filter=Q(entries__status=RollCallEntry.Status.ABSENT)),
+        on_exeat=Count(
+            "entries", filter=Q(entries__status=RollCallEntry.Status.ON_EXEAT)
+        ),
+        infirmary=Count(
+            "entries", filter=Q(entries__status=RollCallEntry.Status.INFIRMARY)
+        ),
+        activity=Count(
+            "entries",
+            filter=Q(entries__status=RollCallEntry.Status.OFFICIAL_ACTIVITY),
+        ),
+        unmarked=Count(
+            "entries", filter=Q(entries__status=RollCallEntry.Status.UNMARKED)
+        ),
+    )
+    ranked = []
+    for row in aggregates:
+        expected = row["expected"] or 0
+        rate = round(row["present"] * 100 / expected, 1) if expected else 0
+        ranked.append((row, rate))
+    ranked.sort(key=lambda item: (-item[1], item[0]["house__name"] or ""))
+
+    rows = [
+        (
+            rank,
+            row["house__name"] or "Unassigned",
+            row["session_count"],
+            row["expected"],
+            row["present"],
+            row["absent"],
+            row["on_exeat"],
+            row["infirmary"],
+            row["activity"],
+            row["unmarked"],
+            f"{rate}%",
+        )
+        for rank, (row, rate) in enumerate(ranked, start=1)
+    ]
+    total_expected = sum(row[3] for row in rows)
+    total_present = sum(row[4] for row in rows)
+    overall = round(total_present * 100 / total_expected, 1) if total_expected else 0
+
+    return {
+        "title": "House Attendance League",
+        "headers": (
+            "Rank",
+            "House",
+            "Sessions",
+            "Expected",
+            "Present",
+            "Absent",
+            "On Exeat",
+            "Infirmary",
+            "Activity",
+            "Unmarked",
+            "Attendance",
+        ),
+        "rows": rows,
+        "summary": (
+            ("Houses ranked", len(rows)),
+            ("Completed sessions", sum(row[2] for row in rows)),
+            ("Attendance overall", f"{overall}%"),
+            ("Highest", f"{rows[0][1]} ({rows[0][10]})" if rows else "—"),
+            ("Lowest", f"{rows[-1][1]} ({rows[-1][10]})" if rows else "—"),
+        ),
+        "highlights": (
+            "Attendance = Present marks / Expected marks across completed roll calls only.",
+            "Houses with no completed roll-call records in the period are not ranked.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _overdue_register_report(house_id=None, date_from=None, date_to=None, term_id=None):
+    now = timezone.now()
+    exeats = Exeat.objects.filter(status=Exeat.Status.APPROVED)
+    if house_id is not None:
+        exeats = exeats.filter(student__house_id=house_id)
+    if date_from:
+        exeats = exeats.filter(expected_return__date__gte=date_from)
+    if date_to:
+        exeats = exeats.filter(expected_return__date__lte=date_to)
+    if term_id:
+        exeats = exeats.filter(academic_term_id=term_id)
+
+    records = exeats.values(
+        "exeat_number",
+        "student__full_name",
+        "student__house__name",
+        "exeat_type",
+        "expected_return",
+        actual_departure=F("movement__actual_departure"),
+        actual_return=F("movement__actual_return"),
+        reconciled_departure=F("reconciliation__actual_departure"),
+        reconciled_return=F("reconciliation__actual_return"),
+        reconciliation_outcome=F("reconciliation__outcome"),
+    )
+    rows = []
+    overdue_now = 0
+    late_returned = 0
+    max_late = 0.0
+    for exeat in records:
+        expected_return = exeat["expected_return"]
+        actual_return = exeat["actual_return"] or exeat["reconciled_return"]
+        departed = exeat["actual_departure"] or exeat["reconciled_departure"]
+        is_out = (
+            departed is not None and actual_return is None
+        ) or (
+            exeat["reconciliation_outcome"]
+            == ExeatReconciliation.Outcome.STUDENT_OUT
+            and actual_return is None
+        )
+
+        if is_out and expected_return and now >= expected_return:
+            hours_late = round((now - expected_return).total_seconds() / 3600, 1)
+            state = "OVERDUE - still out"
+            overdue_now += 1
+        elif actual_return and expected_return and actual_return > expected_return:
+            hours_late = round(
+                (actual_return - expected_return).total_seconds() / 3600, 1
+            )
+            state = "Returned late"
+            late_returned += 1
+        else:
+            continue
+
+        max_late = max(max_late, hours_late)
+        rows.append(
+            (
+                exeat["exeat_number"],
+                exeat["student__full_name"],
+                exeat["student__house__name"] or "Unassigned",
+                _EXEAT_TYPE_LABELS.get(exeat["exeat_type"], exeat["exeat_type"]),
+                expected_return,
+                actual_return or "Still out",
+                f"{hours_late}h",
+                state,
+            )
+        )
+    rows.sort(key=lambda row: row[4])
+
+    return {
+        "title": "Overdue & Late-Return Register",
+        "headers": (
+            "Pass",
+            "Student",
+            "House",
+            "Type",
+            "Expected Return",
+            "Recorded Return",
+            "Delay",
+            "State",
+        ),
+        "rows": rows,
+        "summary": (
+            ("Currently overdue", overdue_now),
+            ("Returned late in period", late_returned),
+            ("Total exceptions", len(rows)),
+            ("Maximum delay", f"{max_late}h" if rows else "—"),
+        ),
+        "highlights": (
+            "Includes passes still out past expected return and passes returned after expected return.",
+            "Departed/returned timestamps come from the gate log, falling back to reconciled records.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _gate_conflict_report(house_id=None, date_from=None, date_to=None, term_id=None):
+    """Report roll-call marks that conflicted with logged gate departures."""
+    entries = RollCallEntry.objects.filter(gate_conflict_at__isnull=False)
+    if house_id is not None:
+        entries = entries.filter(session__house_id=house_id)
+    if date_from:
+        entries = entries.filter(session__date__gte=date_from)
+    if date_to:
+        entries = entries.filter(session__date__lte=date_to)
+    if term_id:
+        entries = entries.filter(session__academic_term_id=term_id)
+
+    data = entries.values(
+        "session__date",
+        "session__session_type",
+        "session__house__name",
+        "student__full_name",
+        "student__house__name",
+        "student__dormitory__name",
+        "status",
+        "gate_conflict_at",
+        "gate_conflict_note",
+        "gate_conflict_reviewed_at",
+        "gate_conflict_reviewed_by__username",
+    ).order_by("-gate_conflict_at")
+    headers = (
+        "Session Date",
+        "Session",
+        "House",
+        "Student",
+        "Student House",
+        "Dormitory",
+        "Roll-call status",
+        "Conflict logged",
+        "Note",
+        "Review",
+    )
+    rows = []
+    pending_rows = []
+    present_count = 0
+    absent_count = 0
+    for entry in data:
+        reviewed_at = entry["gate_conflict_reviewed_at"]
+        review_state = (
+            f"Reviewed {timezone.localtime(reviewed_at):%Y-%m-%d %H:%M}"
+            if reviewed_at
+            else "Pending review"
+        )
+        status_label = _ROLL_CALL_ENTRY_STATUS_LABELS.get(
+            entry["status"], entry["status"]
+        )
+        row = (
+            entry["session__date"],
+            _ROLL_CALL_TYPE_LABELS.get(
+                entry["session__session_type"],
+                entry["session__session_type"],
+            ),
+            entry["session__house__name"] or "Unassigned",
+            entry["student__full_name"],
+            entry["student__house__name"] or "Unassigned",
+            entry["student__dormitory__name"] or "Unassigned",
+            status_label,
+            timezone.localtime(entry["gate_conflict_at"]),
+            entry["gate_conflict_note"] or "—",
+            review_state,
+        )
+        rows.append(row)
+        if not reviewed_at:
+            pending_rows.append(row)
+        if entry["status"] == RollCallEntry.Status.PRESENT:
+            present_count += 1
+        if entry["status"] == RollCallEntry.Status.ABSENT:
+            absent_count += 1
+
+    return {
+        "title": "Gate / Roll-call Conflict Report",
+        "headers": headers,
+        "rows": rows,
+        "summary": (
+            ("Conflicts", len(rows)),
+            ("Pending review", len(pending_rows)),
+            ("Reviewed", len(rows) - len(pending_rows)),
+            ("Still marked Present", present_count),
+            ("Marked Absent", absent_count),
+        ),
+        "sections": (
+            {
+                "title": "Conflicts still pending review",
+                "headers": headers,
+                "rows": pending_rows,
+            },
+        ),
+        "highlights": (
+            "A gate conflict means the roll-call mark disagreed with the gate log when the departure was reconciled.",
+            "Pending-review rows have not yet been acknowledged by a housemaster.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _approval_turnaround_report(
+    house_id=None, date_from=None, date_to=None, term_id=None
+):
+    """Summarize decision volume and approximate approval turnaround."""
+    exeats = Exeat.objects.exclude(status=Exeat.Status.PENDING)
+    if house_id is not None:
+        exeats = exeats.filter(student__house_id=house_id)
+    if date_from:
+        exeats = exeats.filter(created_at__date__gte=date_from)
+    if date_to:
+        exeats = exeats.filter(created_at__date__lte=date_to)
+    if term_id:
+        exeats = exeats.filter(academic_term_id=term_id)
+
+    data = exeats.values(
+        "exeat_number",
+        "student__full_name",
+        "student__house__name",
+        "exeat_type",
+        "status",
+        "created_at",
+        "updated_at",
+        "expected_departure",
+        "approved_by__full_name",
+    ).order_by("-created_at")
+    rows = []
+    turnarounds = []
+    approver_totals = {}
+    type_totals = {}
+    approved = rejected = cancelled = 0
+    for exeat in data:
+        submitted = exeat["created_at"]
+        decided = exeat["updated_at"]
+        turnaround = (
+            round((decided - submitted).total_seconds() / 3600, 1)
+            if submitted and decided
+            else None
+        )
+        lead_time = (
+            round(
+                (exeat["expected_departure"] - submitted).total_seconds() / 3600,
+                1,
+            )
+            if submitted and exeat["expected_departure"]
+            else None
+        )
+        if turnaround is not None:
+            turnarounds.append(turnaround)
+
+        if exeat["status"] == Exeat.Status.APPROVED:
+            approved += 1
+        elif exeat["status"] == Exeat.Status.REJECTED:
+            rejected += 1
+        elif exeat["status"] == Exeat.Status.CANCELLED:
+            cancelled += 1
+
+        type_label = _EXEAT_TYPE_LABELS.get(
+            exeat["exeat_type"], exeat["exeat_type"]
+        )
+        rows.append(
+            (
+                exeat["exeat_number"],
+                exeat["student__full_name"],
+                exeat["student__house__name"] or "Unassigned",
+                type_label,
+                timezone.localtime(submitted) if submitted else "—",
+                _EXEAT_STATUS_LABELS.get(exeat["status"], exeat["status"]),
+                timezone.localtime(decided) if decided else "—",
+                f"{turnaround}h" if turnaround is not None else "—",
+                timezone.localtime(exeat["expected_departure"])
+                if exeat["expected_departure"]
+                else "—",
+                f"{lead_time}h" if lead_time is not None else "—",
+                exeat["approved_by__full_name"] or "—",
+            )
+        )
+
+        approver = exeat["approved_by__full_name"] or "Unassigned"
+        totals = approver_totals.setdefault(
+            approver, {"decisions": 0, "hours": 0.0, "measured": 0}
+        )
+        totals["decisions"] += 1
+        if turnaround is not None:
+            totals["hours"] += turnaround
+            totals["measured"] += 1
+        type_totals[type_label] = type_totals.get(type_label, 0) + 1
+
+    approver_rows = [
+        (
+            name,
+            totals["decisions"],
+            (
+                f"{round(totals['hours'] / totals['measured'], 1)}h"
+                if totals["measured"]
+                else "—"
+            ),
+        )
+        for name, totals in sorted(
+            approver_totals.items(),
+            key=lambda item: (-item[1]["decisions"], item[0]),
+        )
+    ]
+    type_rows = [
+        (name, count)
+        for name, count in sorted(
+            type_totals.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+    average = round(sum(turnarounds) / len(turnarounds), 1) if turnarounds else None
+
+    return {
+        "title": "Exeat Approval Turnaround & Rejection",
+        "headers": (
+            "Pass",
+            "Student",
+            "House",
+            "Type",
+            "Submitted",
+            "Decision",
+            "Decided",
+            "Turnaround",
+            "Expected Departure",
+            "Lead Time",
+            "Approver",
+        ),
+        "rows": rows,
+        "summary": (
+            ("Decided passes", len(rows)),
+            ("Approved", approved),
+            ("Rejected", rejected),
+            ("Cancelled", cancelled),
+            ("Avg turnaround", f"{average}h" if average is not None else "—"),
+            ("Fastest", f"{min(turnarounds)}h" if turnarounds else "—"),
+            ("Slowest", f"{max(turnarounds)}h" if turnarounds else "—"),
+        ),
+        "sections": (
+            {
+                "title": "Turnaround by approver",
+                "headers": ("Approver", "Decisions", "Avg turnaround"),
+                "rows": approver_rows,
+            },
+            {
+                "title": "Decisions by leave type",
+                "headers": ("Exeat type", "Decisions"),
+                "rows": type_rows,
+            },
+        ),
+        "highlights": (
+            "There is no dedicated approval timestamp; updated_at is only an approximation and can shift if a record is edited later.",
+            "Lead time is scheduled departure minus request creation (how much notice was given).",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _exeat_analytics_report(
+    house_id=None, date_from=None, date_to=None, term_id=None
+):
+    """Analyze exeat types, free-text destinations, and scheduled durations."""
+    exeats = Exeat.objects.all()
+    if house_id is not None:
+        exeats = exeats.filter(student__house_id=house_id)
+    if date_from:
+        exeats = exeats.filter(expected_departure__date__gte=date_from)
+    if date_to:
+        exeats = exeats.filter(expected_departure__date__lte=date_to)
+    if term_id:
+        exeats = exeats.filter(academic_term_id=term_id)
+
+    records = exeats.values(
+        "exeat_type", "destination", "expected_departure", "expected_return"
+    )
+    total = 0
+    type_totals = {}
+    destination_totals = {}
+    duration_buckets = {
+        "Under 6 hours": 0,
+        "6–24 hours": 0,
+        "1–3 days": 0,
+        "3–7 days": 0,
+        "Over 7 days": 0,
+    }
+    durations = []
+    for record in records:
+        total += 1
+        departure = record["expected_departure"]
+        expected_return = record["expected_return"]
+        hours = (
+            (expected_return - departure).total_seconds() / 3600
+            if departure and expected_return
+            else None
+        )
+        if hours is not None and hours >= 0:
+            durations.append(hours)
+
+        type_label = _EXEAT_TYPE_LABELS.get(
+            record["exeat_type"], record["exeat_type"]
+        )
+        totals = type_totals.setdefault(
+            type_label, {"count": 0, "hours": 0.0, "measured": 0}
+        )
+        totals["count"] += 1
+        if hours is not None and hours >= 0:
+            totals["hours"] += hours
+            totals["measured"] += 1
+
+        destination = (record["destination"] or "").strip() or "Not stated"
+        destination_totals[destination] = destination_totals.get(destination, 0) + 1
+
+        if hours is not None and hours >= 0:
+            if hours < 6:
+                duration_buckets["Under 6 hours"] += 1
+            elif hours < 24:
+                duration_buckets["6–24 hours"] += 1
+            elif hours < 72:
+                duration_buckets["1–3 days"] += 1
+            elif hours < 168:
+                duration_buckets["3–7 days"] += 1
+            else:
+                duration_buckets["Over 7 days"] += 1
+
+    type_rows = [
+        (
+            label,
+            totals["count"],
+            f"{round(totals['count'] * 100 / total, 1) if total else 0}%",
+            (
+                f"{round(totals['hours'] / totals['measured'], 1)}h"
+                if totals["measured"]
+                else "—"
+            ),
+        )
+        for label, totals in sorted(
+            type_totals.items(), key=lambda item: (-item[1]["count"], item[0])
+        )
+    ]
+    destination_rows = [
+        (destination, count)
+        for destination, count in sorted(
+            destination_totals.items(), key=lambda item: (-item[1], item[0])
+        )[:15]
+    ]
+    average = round(sum(durations) / len(durations), 1) if durations else None
+
+    return {
+        "title": "Exeat Type, Destination & Duration Analytics",
+        "headers": ("Exeat type", "Passes", "Share", "Avg duration"),
+        "rows": type_rows,
+        "summary": (
+            ("Passes in period", total),
+            ("Avg duration", f"{average}h" if average is not None else "—"),
+            ("Longest", f"{round(max(durations), 1)}h" if durations else "—"),
+            ("Shortest", f"{round(min(durations), 1)}h" if durations else "—"),
+            ("Distinct destinations", len(destination_totals)),
+        ),
+        "sections": (
+            {
+                "title": "Top destinations",
+                "headers": ("Destination", "Passes"),
+                "rows": destination_rows,
+            },
+            {
+                "title": "Duration distribution",
+                "headers": ("Duration band", "Passes"),
+                "rows": list(duration_buckets.items()),
+            },
+        ),
+        "highlights": (
+            "Destinations are free text, so similar entries may appear separately.",
+            "Duration uses scheduled departure and return; actual gate times are covered by the exeat compliance report.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _room_register_report(house_id=None):
+    """Summarize room capacity, boarding occupancy, and vacancies."""
+    rooms = DormitoryRoom.objects.select_related(
+        "dormitory", "dormitory__house"
+    ).annotate(
+        occupied=Count(
+            "students",
+            filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+        )
+    )
+    if house_id is not None:
+        rooms = rooms.filter(dormitory__house_id=house_id)
+    rooms = rooms.order_by(
+        "dormitory__house__display_order",
+        "dormitory__house__name",
+        "dormitory__name",
+        "name",
+    )
+
+    headers = (
+        "House",
+        "Dormitory",
+        "Room",
+        "Gender",
+        "Capacity",
+        "Occupied",
+        "Vacant",
+        "Occupancy",
+        "Status",
+    )
+    rows = []
+    over_capacity_rows = []
+    empty_rows = []
+    total_capacity = 0
+    total_occupied = 0
+    for room in rooms:
+        capacity = room.capacity
+        occupied = room.occupied
+        vacant = capacity - occupied
+        occupancy = round(occupied * 100 / capacity, 1) if capacity else 0
+        if occupied > capacity:
+            status = f"Over capacity by {occupied - capacity}"
+        elif vacant == 0:
+            status = "At capacity"
+        elif occupied == 0:
+            status = "Empty"
+        else:
+            status = f"{vacant} spaces available"
+        row = (
+            room.dormitory.house.name,
+            room.dormitory.name,
+            room.name,
+            _DORMITORY_GENDER_LABELS.get(room.dormitory.gender, "—"),
+            capacity,
+            occupied,
+            max(0, vacant),
+            f"{occupancy}%",
+            status,
+        )
+        rows.append(row)
+        total_capacity += capacity
+        total_occupied += occupied
+        if occupied > capacity:
+            over_capacity_rows.append(row)
+        if occupied == 0:
+            empty_rows.append(row)
+
+    total_occupancy = (
+        round(total_occupied * 100 / total_capacity, 1) if total_capacity else 0
+    )
+    return {
+        "title": "Room Bed-Allocation & Vacancy Register",
+        "headers": headers,
+        "rows": rows,
+        "summary": (
+            ("Rooms", len(rows)),
+            ("Total room capacity", total_capacity),
+            ("Boarders in rooms", total_occupied),
+            ("Vacant beds", max(0, total_capacity - total_occupied)),
+            ("Room occupancy", f"{total_occupancy}%"),
+            ("Over-capacity rooms", len(over_capacity_rows)),
+            ("Empty rooms", len(empty_rows)),
+        ),
+        "sections": (
+            {
+                "title": "Over-capacity rooms",
+                "headers": headers,
+                "rows": over_capacity_rows,
+            },
+            {
+                "title": "Empty rooms",
+                "headers": headers,
+                "rows": empty_rows,
+            },
+        ),
+        "highlights": (
+            "Vacancy is room capacity minus boarders currently assigned to that room.",
+            "Empty rooms are ready for allocation and are worth surfacing during intake.",
+        ),
+        "point_in_time": True,
+    }
+
+
+def get_boarding_demographics(house_id=None):
+    """Summarize boarding population by programme, house, gender, and level."""
+    boarders = Student.objects.filter(residency=Student.ResidencyStatus.BOARDING)
+    if house_id is not None:
+        boarders = boarders.filter(house_id=house_id)
+
+    total = boarders.count()
+    gender_rows = [
+        ("Male", boarders.filter(gender=Student.Gender.MALE).count()),
+        ("Female", boarders.filter(gender=Student.Gender.FEMALE).count()),
+    ]
+    programme_rows = [
+        (
+            row["programme__name"] or "Unassigned",
+            row["total"],
+            row["male"],
+            row["female"],
+        )
+        for row in boarders.values("programme__name")
+        .annotate(
+            total=Count("id"),
+            male=Count("id", filter=Q(gender=Student.Gender.MALE)),
+            female=Count("id", filter=Q(gender=Student.Gender.FEMALE)),
+        )
+        .order_by("-total", "programme__name")
+    ]
+    house_rows = [
+        (
+            row["house__name"] or "Unassigned",
+            row["total"],
+            row["male"],
+            row["female"],
+        )
+        for row in boarders.values("house__name")
+        .annotate(
+            total=Count("id"),
+            male=Count("id", filter=Q(gender=Student.Gender.MALE)),
+            female=Count("id", filter=Q(gender=Student.Gender.FEMALE)),
+        )
+        .order_by("house__name")
+    ]
+    level_totals = {}
+    for student in boarders.select_related("class_group"):
+        level = student.level
+        label = getattr(level, "label", str(level))
+        level_totals[label] = level_totals.get(label, 0) + 1
+    level_rows = sorted(level_totals.items())
+
+    return {
+        "title": "Boarders Demographics & Programme Distribution",
+        "layout": "distribution",
+        "point_in_time": True,
+        "distribution": (
+            {"title": "By gender", "rows": gender_rows},
+            {
+                "title": "By programme",
+                "rows": [(row[0], row[1]) for row in programme_rows],
+            },
+            {"title": "By form level", "rows": level_rows},
+        ),
+        "summary": (
+            ("Boarders", total),
+            ("Houses", len(house_rows)),
+            ("Programmes", len(programme_rows)),
+            ("Male", gender_rows[0][1]),
+            ("Female", gender_rows[1][1]),
+        ),
+        "sections": (
+            {
+                "title": "Programme by house composition",
+                "headers": ("Programme", "Boarders", "Male", "Female"),
+                "rows": programme_rows,
+            },
+            {
+                "title": "House by gender composition",
+                "headers": ("House", "Boarders", "Male", "Female"),
+                "rows": house_rows,
+            },
+        ),
+        "record_count": total,
+    }
+
+
+def get_sms_usage_summary(
+    house_id=None, date_from=None, date_to=None, term_id=None
+):
+    """Summarize delivery health and tenant-level monthly SMS quota usage."""
+    from tenancy.entitlements import quota_limit, sms_monthly_usage
+
+    deliveries = SMSDelivery.objects.all()
+    if date_from:
+        deliveries = deliveries.filter(created_at__date__gte=date_from)
+    if date_to:
+        deliveries = deliveries.filter(created_at__date__lte=date_to)
+    if term_id:
+        deliveries = deliveries.filter(exeat__academic_term_id=term_id)
+    if house_id is not None:
+        deliveries = deliveries.filter(exeat__student__house_id=house_id)
+
+    total = deliveries.count()
+    by_status = {
+        row["status"]: row["count"]
+        for row in deliveries.values("status").annotate(count=Count("id"))
+    }
+    sent = by_status.get(SMSDelivery.Status.SENT, 0)
+    queued = by_status.get(SMSDelivery.Status.QUEUED, 0)
+    processing = by_status.get(SMSDelivery.Status.PROCESSING, 0)
+    failed = by_status.get(SMSDelivery.Status.FAILED, 0)
+    attempted = sent + failed
+    success_rate = round(sent * 100 / attempted, 1) if attempted else 0
+
+    event_rows = [
+        (
+            dict(SMSDelivery.EventType.choices).get(
+                row["event_type"], row["event_type"]
+            ),
+            row["count"],
+        )
+        for row in deliveries.values("event_type")
+        .annotate(count=Count("id"))
+        .order_by("-count", "event_type")
+    ]
+    failure_rows = [
+        (row["last_error"] or "No error text", row["count"])
+        for row in deliveries.filter(status=SMSDelivery.Status.FAILED)
+        .values("last_error")
+        .annotate(count=Count("id"))
+        .order_by("-count", "last_error")[:10]
+    ]
+    used = sms_monthly_usage()
+    limit = quota_limit("max_sms_monthly")
+    percent = round(used * 100 / limit, 1) if limit else None
+
+    return {
+        "title": "SMS Delivery & Usage",
+        "layout": "sms_usage",
+        "point_in_time": False,
+        "gauge": {"used": used, "limit": limit, "percent": percent},
+        "kpi_tiles": (
+            ("Sent", sent, "emerald"),
+            ("Queued", queued, "amber"),
+            ("Processing", processing, "sky"),
+            ("Failed", failed, "rose"),
+            ("Success rate", f"{success_rate}%", "violet"),
+            ("Deliveries in period", total, "indigo"),
+        ),
+        "summary": (
+            ("Sent", sent),
+            ("Queued", queued),
+            ("Processing", processing),
+            ("Failed", failed),
+            ("Success rate", f"{success_rate}%"),
+            ("This month", f"{used}" + (f" / {limit}" if limit else "")),
+        ),
+        "sections": (
+            {
+                "title": "Deliveries by event",
+                "headers": ("Event", "Messages"),
+                "rows": event_rows,
+            },
+            {
+                "title": "Failure reasons",
+                "headers": ("Error", "Messages"),
+                "rows": failure_rows,
+            },
+        ),
+        "highlights": (
+            "This-month usage counts sent messages plus outstanding queued/processing items, matching the platform quota calculation.",
+            "The monthly quota is tenant-wide; the other delivery figures follow the selected filters.",
+            "A null monthly limit means the plan has no SMS cap configured.",
+        ),
+        "record_count": total,
     }

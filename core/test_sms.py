@@ -273,6 +273,10 @@ class ExeatSMSTests(TestCase):
             delivery.phone_number, delivery.message, delivery_id=str(delivery.pk)
         )
 
+    @override_settings(TENANCY_ENABLED=False)
+    def test_delivery_task_ignores_malformed_identifier(self):
+        self.assertFalse(send_sms_delivery_task.run("delivery-uuid-123"))
+
 
 class SMSConfigurationViewTests(TestCase):
     def setUp(self):

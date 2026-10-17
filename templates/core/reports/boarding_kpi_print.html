@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ report.title }} | {{ school_configuration.name }}</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; color: #172033; }
+    body { margin: 0; background: #f1f5f9; }
+    .report { max-width: 1200px; margin: 32px auto; padding: 32px; background: #fff; }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; padding-bottom: 14px; border-bottom: 1px solid #cbd5e1; }
+    .brand-mark { display: grid; width: 44px; height: 44px; flex: none; place-items: center; border: 1px dashed #64748b; color: #475569; font-size: 9px; font-weight: 700; }
+    .brand-logo { width: 44px; height: 44px; flex: none; object-fit: contain; }
+    .brand-name { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: .04em; }
+    .brand-details { margin: 3px 0 0; color: #64748b; font-size: 10px; }
+    .toolbar { display: flex; justify-content: flex-end; margin-bottom: 24px; }
+    button { border: 0; border-radius: 6px; background: #172033; color: #fff; padding: 10px 16px; font-weight: 700; cursor: pointer; }
+    h1 { margin: 0; font-size: 24px; }
+    .meta { margin: 8px 0 24px; color: #475569; font-size: 13px; line-height: 1.6; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0 0 18px; }
+    .kpi-item { border: 1px solid #cbd5e1; padding: 8px; }
+    .kpi-item span { display: block; font-size: 10px; text-transform: uppercase; color: #64748b; }
+    .kpi-item strong { display: block; margin-top: 4px; font-size: 16px; }
+    .highlights { margin: 0 0 18px; padding-left: 18px; color: #475569; font-size: 11px; }
+    .error { padding: 12px; border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; }
+    h2 { margin: 22px 0 8px; font-size: 15px; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th, td { border: 1px solid #cbd5e1; padding: 7px; text-align: left; vertical-align: top; }
+    th { background: #e2e8f0; font-size: 10px; text-transform: uppercase; }
+    tr { break-inside: avoid; }
+    @page { size: landscape; margin: 12mm; }
+    @media print {
+      body { background: #fff; }
+      .report { max-width: none; margin: 0; padding: 0; }
+      .no-print { display: none !important; }
+      .kpi-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="report">
+    <div class="toolbar no-print"><button type="button" onclick="window.print()">Print / Save as PDF</button></div>
+    <header class="brand">
+      {% if school_configuration.logo %}
+        <img class="brand-logo" src="{{ school_configuration.logo.url }}" alt="{{ school_configuration.name }} logo">
+      {% else %}
+        <div class="brand-mark">LOGO</div>
+      {% endif %}
+      <div>
+        <p class="brand-name">{{ school_configuration.name }}</p>
+        {% if school_configuration.address or school_configuration.contact_number %}
+          <p class="brand-details">
+            {% if school_configuration.address %}{{ school_configuration.address }}{% endif %}
+            {% if school_configuration.address and school_configuration.contact_number %} · {% endif %}
+            {% if school_configuration.contact_number %}{{ school_configuration.contact_number }}{% endif %}
+          </p>
+        {% endif %}
+      </div>
+    </header>
+    <h1>{{ report.title }}</h1>
+    <p class="meta">
+      <strong>Scope:</strong> {% if user_house_scope %}{{ user_house_scope.name }}{% else %}School-wide{% endif %}<br>
+      <strong>Academic term:</strong> {{ selected_term|default:"All terms" }}<br>
+      {% if selected_date_from %}<strong>From:</strong> {{ selected_date_from|date:"M d, Y" }}<br>{% endif %}
+      {% if selected_date_to %}<strong>To:</strong> {{ selected_date_to|date:"M d, Y" }}<br>{% endif %}
+      <strong>Generated:</strong> {{ report_generated_at|date:"M d, Y H:i T" }}
+    </p>
+    {% if not report_filters_valid %}
+      <p class="error">Invalid report filters. Return to the KPI pack and correct the selected values.</p>
+    {% else %}
+      <div class="kpi-grid">
+        {% for label, value, tone in report.kpi_tiles %}
+          <div class="kpi-item"><span>{{ label }}</span><strong>{{ value }}</strong></div>
+        {% endfor %}
+      </div>
+      {% if report.highlights %}
+        <ul class="highlights">{% for note in report.highlights %}<li>{{ note }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% for section in report.sections %}
+        <h2>{{ section.title }}</h2>
+        <table>
+          <thead><tr>{% for heading in section.headers %}<th>{{ heading }}</th>{% endfor %}</tr></thead>
+          <tbody>
+            {% for row in section.rows %}
+              <tr>{% for value in row %}<td>{{ value|default:"—" }}</td>{% endfor %}</tr>
+            {% empty %}
+              <tr><td colspan="{{ section.headers|length }}">No data for this period.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endfor %}
+    {% endif %}
+  </main>
+</body>
+</html>

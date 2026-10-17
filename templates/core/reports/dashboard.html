@@ -53,6 +53,18 @@
         </div>
       </form>
       {% if report_filters_valid %}
+        <a href="{% url 'core:boarding_kpi' %}"
+           class="inline-flex shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          Termly KPI Pack
+        </a>
+        <a href="{% url 'core:boarding_demographics' %}"
+           class="inline-flex shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          Demographics
+        </a>
+        <a href="{% url 'core:sms_usage' %}"
+           class="inline-flex shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+          SMS Usage
+        </a>
         <a href="{% url 'core:reports_print' %}?{% if request.GET %}{{ request.GET.urlencode }}{% else %}report=housing{% endif %}"
            target="_blank" rel="noopener"
            class="inline-flex shrink-0 items-center justify-center rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100">

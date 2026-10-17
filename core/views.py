@@ -1,3 +1,4 @@
+import csv
 import json
 import mimetypes
 import uuid
@@ -2878,6 +2879,7 @@ def _reports_context(request):
 
     house_scope = get_house_scope(request.user)
     filter_data = request.GET.copy()
+    filter_data.pop("print", None)
     if not filter_data.get("report"):
         filter_data["report"] = "housing"
     report_filters = ReportFilterForm(filter_data)
@@ -2924,6 +2926,217 @@ def _reports_context(request):
         'active_tab': 'reports',
         'school_configuration': SchoolConfiguration.get_solo(),
     }
+
+
+def _csv_safe_value(value):
+    if isinstance(value, str) and value.lstrip(" \t\r\n").startswith(
+        ("=", "+", "-", "@")
+    ):
+        return f"'{value}"
+    return value
+
+
+@login_required
+@role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
+def boarding_kpi_view(request):
+    """Show a scoped boarding KPI pack for the selected term or date range."""
+    from core.services.reports import get_boarding_kpi_pack
+
+    house_scope = get_house_scope(request.user)
+    filter_data = request.GET.copy()
+    filter_data.pop("print", None)
+    if not filter_data and (
+        current_term := AcademicTerm.objects.filter(is_current=True).first()
+    ):
+        filter_data["term"] = str(current_term.pk)
+
+    report_filters = ReportFilterForm(filter_data)
+    report_filters_valid = report_filters.is_valid()
+    cleaned_data = report_filters.cleaned_data
+    term = cleaned_data.get("term") if report_filters_valid else None
+    report = (
+        get_boarding_kpi_pack(
+            house_id=house_scope.pk if house_scope is not None else None,
+            term=term,
+            date_from=cleaned_data.get("date_from"),
+            date_to=cleaned_data.get("date_to"),
+        )
+        if report_filters_valid
+        else {
+            "title": "Boarding Termly KPI Pack",
+            "kpi_tiles": (),
+            "sections": (),
+            "highlights": (),
+        }
+    )
+    context = {
+        "report": report,
+        "report_filters": report_filters,
+        "report_filters_valid": report_filters_valid,
+        "user_house_scope": house_scope,
+        "selected_term": term,
+        "selected_date_from": (
+            cleaned_data.get("date_from") if report_filters_valid else None
+        ),
+        "selected_date_to": (
+            cleaned_data.get("date_to") if report_filters_valid else None
+        ),
+        "report_filter_query": filter_data.urlencode(),
+        "report_generated_at": timezone.localtime(),
+        "active_tab": "reports",
+        "school_configuration": SchoolConfiguration.get_solo(),
+    }
+    template = (
+        "core/reports/boarding_kpi_print.html"
+        if request.GET.get("print") == "1"
+        else "core/reports/boarding_kpi.html"
+    )
+    return render(request, template, context)
+
+
+@login_required
+@role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
+def boarding_kpi_export_view(request):
+    """Export the filtered boarding KPI pack as a CSV file."""
+    from core.services.reports import get_boarding_kpi_pack
+
+    house_scope = get_house_scope(request.user)
+    filter_data = request.GET.copy()
+    filter_data.pop("print", None)
+    if not filter_data and (
+        current_term := AcademicTerm.objects.filter(is_current=True).first()
+    ):
+        filter_data["term"] = str(current_term.pk)
+    report_filters = ReportFilterForm(filter_data)
+    if not report_filters.is_valid():
+        return HttpResponseBadRequest("Invalid KPI report filters.")
+
+    cleaned_data = report_filters.cleaned_data
+    term = cleaned_data.get("term")
+    report = get_boarding_kpi_pack(
+        house_id=house_scope.pk if house_scope is not None else None,
+        term=term,
+        date_from=cleaned_data.get("date_from"),
+        date_to=cleaned_data.get("date_to"),
+    )
+
+    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = 'attachment; filename="boarding-kpi-pack.csv"'
+    writer = csv.writer(response)
+
+    def write_row(values):
+        writer.writerow([_csv_safe_value(value) for value in values])
+
+    write_row(["Boarding Termly KPI Pack"])
+    write_row(["Scope", house_scope.name if house_scope else "School-wide"])
+    write_row(["Academic term", str(term) if term else "All terms"])
+    write_row(["From", cleaned_data.get("date_from") or ""])
+    write_row(["To", cleaned_data.get("date_to") or ""])
+    writer.writerow([])
+    write_row(["Metric", "Value"])
+    for label, value, _tone in report["kpi_tiles"]:
+        write_row([label, value])
+    for section in report["sections"]:
+        writer.writerow([])
+        write_row([section["title"]])
+        write_row(section["headers"])
+        for row in section["rows"]:
+            write_row(row)
+    return response
+
+
+@login_required
+@role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
+def boarding_demographics_view(request):
+    """Show boarding population distributions for the user's authorized scope."""
+    from core.services.reports import get_boarding_demographics
+
+    house_scope = get_house_scope(request.user)
+    report = get_boarding_demographics(
+        house_id=house_scope.pk if house_scope is not None else None,
+    )
+    context = {
+        "report": report,
+        "user_house_scope": house_scope,
+        "report_generated_at": timezone.localtime(),
+        "active_tab": "reports",
+        "school_configuration": SchoolConfiguration.get_solo(),
+    }
+    template = (
+        "core/reports/boarding_demographics_print.html"
+        if request.GET.get("print") == "1"
+        else "core/reports/boarding_demographics.html"
+    )
+    return render(request, template, context)
+
+
+@login_required
+@role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
+def sms_usage_view(request):
+    """Show filtered SMS delivery health and the tenant-wide monthly quota."""
+    from core.services.reports import get_sms_usage_summary
+    from tenancy.entitlements import quota_limit, sms_monthly_usage
+
+    house_scope = get_house_scope(request.user)
+    filter_data = request.GET.copy()
+    filter_data.pop("print", None)
+    report_filters = ReportFilterForm(filter_data)
+    report_filters_valid = report_filters.is_valid()
+    cleaned_data = report_filters.cleaned_data
+    if report_filters_valid:
+        term = cleaned_data.get("term")
+        report = get_sms_usage_summary(
+            house_id=house_scope.pk if house_scope is not None else None,
+            date_from=cleaned_data.get("date_from"),
+            date_to=cleaned_data.get("date_to"),
+            term_id=term.pk if term else None,
+        )
+    else:
+        used = sms_monthly_usage()
+        limit = quota_limit("max_sms_monthly")
+        report = {
+            "title": "SMS Delivery & Usage",
+            "gauge": {
+                "used": used,
+                "limit": limit,
+                "percent": round(used * 100 / limit, 1) if limit else None,
+            },
+            "kpi_tiles": (),
+            "sections": (),
+            "highlights": (),
+        }
+
+    context = {
+        "report": report,
+        "report_filters": report_filters,
+        "report_filters_valid": report_filters_valid,
+        "report_filter_query": filter_data.urlencode(),
+        "user_house_scope": house_scope,
+        "selected_term": (
+            cleaned_data.get("term") if report_filters_valid else None
+        ),
+        "selected_date_from": (
+            cleaned_data.get("date_from") if report_filters_valid else None
+        ),
+        "selected_date_to": (
+            cleaned_data.get("date_to") if report_filters_valid else None
+        ),
+        "report_generated_at": timezone.localtime(),
+        "active_tab": "reports",
+        "school_configuration": SchoolConfiguration.get_solo(),
+    }
+    if not report_filters_valid and request.GET.get("print") == "1":
+        return HttpResponseBadRequest("Invalid SMS report filters.")
+    template = (
+        "core/reports/sms_usage_print.html"
+        if request.GET.get("print") == "1"
+        else "core/reports/sms_usage.html"
+    )
+    return render(request, template, context)
 
 
 # -----------------------------------------------------------------------------

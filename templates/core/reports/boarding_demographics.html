@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Boarders Demographics - {{ school_configuration.name }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-slate-900">Boarders Demographics &amp; Programme Distribution</h1>
+      <p class="mt-1 text-sm text-slate-500">
+        {% if user_house_scope %}{{ user_house_scope.name }}{% else %}School-wide{% endif %} · Current population snapshot
+      </p>
+    </div>
+    <a href="{% url 'core:boarding_demographics' %}?print=1" target="_blank" rel="noopener"
+       class="inline-flex items-center justify-center rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100">
+      Print / Save as PDF
+    </a>
+  </div>
+
+  <section>
+    <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      {% for label, value in report.summary %}
+        <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <p class="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">{{ label }}</p>
+          <p class="mt-0.5 text-lg font-bold leading-5 text-slate-900">{{ value }}</p>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+    {% for group in report.distribution %}
+      <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 class="mb-3 text-sm font-bold text-slate-800">{{ group.title }}</h2>
+        <div class="space-y-3">
+          {% for label, value in group.rows %}
+            <div>
+              <div class="mb-1 flex justify-between text-xs">
+                <span class="font-medium text-slate-700">{{ label }}</span>
+                <span class="text-slate-500">{{ value }}</span>
+              </div>
+              <div class="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                <div class="h-full rounded-full bg-indigo-500"
+                     style="width: {% if report.record_count %}{% widthratio value report.record_count 100 %}{% else %}0{% endif %}%; max-width: 100%;"></div>
+              </div>
+            </div>
+          {% empty %}
+            <p class="py-6 text-center text-sm text-slate-400">No boarders in scope.</p>
+          {% endfor %}
+        </div>
+      </section>
+    {% endfor %}
+  </div>
+
+  {% for section in report.sections %}
+    <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <h2 class="border-b border-slate-200 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-800">{{ section.title }}</h2>
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-left text-xs">
+          <thead class="text-[10px] uppercase tracking-wide text-slate-500">
+            <tr>{% for heading in section.headers %}<th class="whitespace-nowrap border-b border-slate-200 px-3 py-2.5 font-semibold">{{ heading }}</th>{% endfor %}</tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for row in section.rows %}
+              <tr>{% for value in row %}<td class="whitespace-nowrap px-3 py-2.5 text-slate-700">{{ value|default:"—" }}</td>{% endfor %}</tr>
+            {% empty %}
+              <tr><td colspan="{{ section.headers|length }}" class="px-3 py-6 text-center text-slate-500">No data.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endfor %}
+
+  <a href="{% url 'core:reports' %}" class="text-xs font-semibold text-brand-600 hover:text-brand-700">Back to Reports &amp; Stats</a>
+</div>
+{% endblock %}

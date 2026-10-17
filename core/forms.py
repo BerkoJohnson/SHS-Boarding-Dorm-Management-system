@@ -27,6 +27,13 @@ class ReportFilterForm(forms.Form):
         ("attendance", "Roll-call attendance & follow-up"),
         ("exeats", "Exeat & gate compliance"),
         ("discipline", "Disciplinary trends"),
+        ("placement_exceptions", "Placement exception queue"),
+        ("attendance_league", "House attendance league"),
+        ("overdue_register", "Overdue & late-return register"),
+        ("gate_conflicts", "Gate / roll-call conflicts"),
+        ("approval_turnaround", "Exeat approval turnaround"),
+        ("exeat_analytics", "Exeat type & destination analytics"),
+        ("room_register", "Room bed-allocation register"),
     )
 
     report = forms.ChoiceField(

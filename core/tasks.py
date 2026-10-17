@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import uuid
 from contextlib import nullcontext
 from datetime import timedelta
 from functools import wraps
@@ -17,6 +18,21 @@ from django.urls import reverse
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _as_uuid(value):
+    """Return ``value`` as a UUID instance, or ``None`` when it is not valid.
+
+    Task arguments arrive from the broker as plain strings, so a value that is
+    not a well-formed UUID would otherwise raise a ``ValidationError`` deep in
+    the queryset and fail the task instead of being reported clearly.
+    """
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 def _tenant_context(tenant_schema):
@@ -71,8 +87,12 @@ def send_sms_delivery_task(
     from core.models import SMSConfiguration, SMSDelivery
     from core.services.sms import send_sms
 
+    delivery_pk = _as_uuid(delivery_id)
+    if delivery_pk is None:
+        logger.error("SMS delivery %r has an invalid identifier", delivery_id)
+        return False
     delivery = (
-        SMSDelivery.objects.filter(pk=delivery_id)
+        SMSDelivery.objects.filter(pk=delivery_pk)
         .select_related("exeat", "exeat__student")
         .first()
     )
@@ -379,7 +399,11 @@ def generate_student_id_export(
         student_id_export_storage,
     )
 
-    export = StudentIDExport.objects.filter(pk=export_id).first()
+    export_pk = _as_uuid(export_id)
+    if export_pk is None:
+        logger.error("Student ID export %r has an invalid identifier", export_id)
+        return False
+    export = StudentIDExport.objects.filter(pk=export_pk).first()
     if export is None:
         logger.error("Student ID export %s does not exist", export_id)
         return False

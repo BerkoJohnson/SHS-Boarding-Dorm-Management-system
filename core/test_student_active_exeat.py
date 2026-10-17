@@ -61,7 +61,7 @@ class PublicStudentExeatPriorityTests(TestCase):
 
     def test_active_approved_exeat_takes_priority_over_a_newer_request(self):
         now = timezone.now()
-        active_exeat = self.create_exeat(
+        self.create_exeat(
             status=Exeat.Status.APPROVED,
             approved_by=self.approver,
             expected_departure=now - timezone.timedelta(minutes=30),
@@ -75,7 +75,13 @@ class PublicStudentExeatPriorityTests(TestCase):
         response = self.get_public_response()
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["exeat"], active_exeat)
+        self.assertTrue(response.context["approved_exeat_active"])
+        self.assertFalse(response.context["movement_authorized"])
+        self.assertContains(response, "Departure not verified")
+        self.assertNotIn("exeat", response.context)
+        self.assertNotIn("movement", response.context)
+        self.assertNotContains(response, "Private destination")
+        self.assertNotContains(response, "Private reason")
 
     def test_returned_or_expired_approval_is_not_prioritized_as_active(self):
         now = timezone.now()
@@ -96,7 +102,7 @@ class PublicStudentExeatPriorityTests(TestCase):
             expected_departure=now - timezone.timedelta(hours=5),
             expected_return=now - timezone.timedelta(hours=1),
         )
-        latest_exeat = self.create_exeat(
+        self.create_exeat(
             expected_departure=now + timezone.timedelta(hours=1),
             expected_return=now + timezone.timedelta(hours=3),
         )
@@ -104,7 +110,13 @@ class PublicStudentExeatPriorityTests(TestCase):
         response = self.get_public_response()
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["exeat"], latest_exeat)
+        self.assertFalse(response.context["approved_exeat_active"])
+        self.assertFalse(response.context["movement_authorized"])
+        self.assertContains(response, "No active authorization found")
+        self.assertNotIn("exeat", response.context)
+        self.assertNotIn("movement", response.context)
+        self.assertNotContains(response, "Private destination")
+        self.assertNotContains(response, "Private reason")
 
     def test_overdue_departed_exeat_remains_active_until_return(self):
         now = timezone.now()
@@ -126,5 +138,12 @@ class PublicStudentExeatPriorityTests(TestCase):
         response = self.get_public_response()
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["exeat"], overdue_exeat)
-        self.assertIsNone(response.context["movement"].actual_return)
+        self.assertTrue(response.context["approved_exeat_active"])
+        self.assertTrue(response.context["departure_recorded"])
+        self.assertTrue(response.context["movement_authorized"])
+        self.assertContains(response, "Authorized movement")
+        self.assertContains(response, "has not yet been recorded as returned")
+        self.assertNotIn("exeat", response.context)
+        self.assertNotIn("movement", response.context)
+        self.assertNotContains(response, "Private destination")
+        self.assertNotContains(response, "Private reason")
