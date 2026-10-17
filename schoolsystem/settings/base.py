@@ -192,6 +192,42 @@ SESSION_SAVE_EVERY_REQUEST = True  # Refresh the 30-min window on every user act
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True  # Force re-login if browser is closed
 
 
+# -----------------------------------------------------------------------------
+# CACHE & RATE LIMITING
+# -----------------------------------------------------------------------------
+# The cache backs the built-in rate limits below. LocMemCache is per-process,
+# so a multi-worker deployment should point CACHE_BACKEND at a shared backend
+# (e.g. django.core.cache.backends.redis.RedisCache with CACHE_LOCATION set to
+# the Redis URL) for accurate, cluster-wide throttling.
+CACHES = {
+    "default": {
+        "BACKEND": os.getenv(
+            "CACHE_BACKEND",
+            "django.core.cache.backends.locmem.LocMemCache",
+        ),
+        "LOCATION": os.getenv("CACHE_LOCATION", "schoolsystem-cache"),
+    }
+}
+
+# Login throttling: max attempts per client IP within the window (seconds).
+LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "10"))
+LOGIN_RATE_WINDOW = int(os.getenv("LOGIN_RATE_WINDOW", "300"))
+
+# Public "report a concern" throttling: max reports per client IP per window.
+PUBLIC_REPORT_RATE_LIMIT = int(os.getenv("PUBLIC_REPORT_RATE_LIMIT", "5"))
+PUBLIC_REPORT_RATE_WINDOW = int(os.getenv("PUBLIC_REPORT_RATE_WINDOW", "3600"))
+
+# Number of trusted reverse-proxy hops in front of the app. Used to select the
+# real client address from X-Forwarded-For when building rate-limit keys
+# (Render terminates TLS and adds one hop, so the default of 1 is correct).
+TRUSTED_PROXY_COUNT = max(1, int(os.getenv("TRUSTED_PROXY_COUNT", "1")))
+
+# Lifetime of a public student-ID QR token, in days. 0 disables expiry.
+STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS = int(
+    os.getenv("STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS", "0")
+)
+
+
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
@@ -224,11 +260,15 @@ if MEDIA_STORAGE_BACKEND not in {"filesystem", "neon_s3"}:
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-MAILERS = {
-    "default": {
-        "BACKEND": "django.core.mail.backends.console.EmailBackend",
-    },
-}
+# Django 6 still selects the mail transport with EMAIL_BACKEND; there is no
+# MAILERS setting, so a console backend configured under that name was silently
+# ignored and mail fell back to SMTP to localhost. Default to the console
+# backend (safe for staging, never sends real mail) and allow an override.
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.console.EmailBackend",
+).strip()
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@localhost").strip()
 
 STORAGES = {
     "default": {

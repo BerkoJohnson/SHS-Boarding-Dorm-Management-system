@@ -10,7 +10,9 @@ Tests cover:
 
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest import skipUnless
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
@@ -28,6 +30,7 @@ from tenancy.models import (
 )
 
 
+@skipUnless(settings.TENANCY_ENABLED, "Requires TENANCY_ENABLED=true")
 class TenantSubscriptionModelTests(TestCase):
     """Unit tests for the TenantSubscription model."""
 
@@ -119,6 +122,7 @@ class TenantSubscriptionModelTests(TestCase):
         self.assertFalse(TenantSubscription.objects.filter(tenant_id=self.tenant.id).exists())
 
 
+@skipUnless(settings.TENANCY_ENABLED, "Requires TENANCY_ENABLED=true")
 class TenantInvoiceModelTests(TestCase):
     """Unit tests for TenantInvoice and TenantInvoiceLineItem."""
 
@@ -190,6 +194,7 @@ class TenantInvoiceModelTests(TestCase):
             )
 
 
+@skipUnless(settings.TENANCY_ENABLED, "Requires TENANCY_ENABLED=true")
 class PlatformAuditLogModelTests(TestCase):
     """Unit tests for the PlatformAuditLog model."""
 

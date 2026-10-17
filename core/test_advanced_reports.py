@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -8,6 +9,7 @@ from django.utils import timezone
 from core.models import (
     AcademicTerm,
     AcademicYear,
+    ConfigurationAuditLog,
     DisciplinaryRecord,
     Dormitory,
     DormitoryRoom,
@@ -15,7 +17,9 @@ from core.models import (
     ExeatMovement,
     House,
     HouseMaster,
+    MovementConcernReport,
     Programme,
+    RollCallAbsenceFollowUp,
     RollCallEntry,
     RollCallSession,
     SMSDelivery,
@@ -23,9 +27,11 @@ from core.models import (
     Student,
     UserProfile,
 )
+from core.forms import REPORTS_WITHOUT_PERIOD_FILTERS, ReportFilterForm
 from core.services.reports import (
     get_boarding_demographics,
     get_boarding_kpi_pack,
+    get_configuration_audit,
     get_detailed_report,
     get_sms_usage_summary,
 )
@@ -520,6 +526,299 @@ class AdvancedReportsTests(TestCase):
         self.assertContains(response, self.house.name)
         self.assertNotContains(response, self.other_house.name)
 
+    def test_staff_activity_counts_actions_and_unattributed_records_in_scope(self):
+        approver_user = get_user_model().objects.create_user(
+            username="advanced-activity-approver",
+            password="test-password",
+        )
+        activity_housemaster = HouseMaster.objects.create(
+            user=approver_user,
+            full_name="Activity Report Housemaster",
+            staff_id="ADV-ACTIVITY-HM",
+            phone_number="+233200000094",
+            house=self.house,
+        )
+        session = self.create_roll_call(
+            self.house,
+            [self.student],
+            [RollCallEntry.Status.PRESENT],
+        )
+        RollCallSession.objects.filter(pk=session.pk).update(
+            conducted_by=activity_housemaster
+        )
+        approved_exeat = self.create_exeat(
+            self.student,
+            expected_return=timezone.now() + timedelta(hours=2),
+        )
+        Exeat.objects.filter(pk=approved_exeat.pk).update(
+            approved_by=activity_housemaster
+        )
+        DisciplinaryRecord.objects.create(
+            student=self.student,
+            academic_term=self.term,
+            offense="Report activity test",
+            severity=DisciplinaryRecord.Severity.MINOR,
+            action_taken="Warning",
+            logged_by=activity_housemaster,
+        )
+        entry = session.entries.get(student=self.student)
+        RollCallAbsenceFollowUp.objects.create(
+            entry=entry,
+            status=RollCallAbsenceFollowUp.Status.EXCUSED,
+            resolved_by=approver_user,
+            resolved_at=timezone.now(),
+        )
+        self.create_roll_call(
+            self.house,
+            [self.second_student],
+            [RollCallEntry.Status.PRESENT],
+        )
+
+        report = get_detailed_report(
+            "staff_activity",
+            house_id=self.house.pk,
+            term_id=self.term.pk,
+        )
+
+        self.assertEqual(len(report["rows"]), 1)
+        row = report["rows"][0]
+        self.assertEqual(row[0], activity_housemaster.full_name)
+        self.assertEqual(row[2:7], (1, 1, 1, 1, 4))
+        unattributed = dict(report["sections"][0]["rows"])
+        self.assertEqual(unattributed["Roll calls without a conductor"], 1)
+        self.assertEqual(unattributed["Incidents without a logger"], 0)
+
+    def test_welfare_report_combines_medical_exeats_and_infirmary_entries(self):
+        session = self.create_roll_call(
+            self.house,
+            [self.student, self.second_student],
+            [RollCallEntry.Status.INFIRMARY, RollCallEntry.Status.PRESENT],
+        )
+        # Anchor the departure to midday so the computed expected_departure
+        # (expected_return - 4h, see create_exeat) always lands on today's
+        # date. Using now() + 8h rolls into tomorrow when the suite runs after
+        # 20:00 local time, making this assertion time-of-day dependent.
+        expected_return = timezone.now().replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        medical_exeat = self.create_exeat(
+            self.student,
+            expected_return=expected_return,
+        )
+        Exeat.objects.filter(pk=medical_exeat.pk).update(
+            exeat_type=Exeat.ExeatType.MEDICAL
+        )
+        self.create_exeat(
+            self.other_student,
+            expected_return=expected_return,
+        )
+
+        report = get_detailed_report(
+            "welfare_infirmary",
+            house_id=self.house.pk,
+            date_from=timezone.localdate(),
+            date_to=timezone.localdate(),
+            term_id=self.term.pk,
+        )
+
+        self.assertEqual(len(report["rows"]), 1)
+        self.assertEqual(report["rows"][0][0], self.student.full_name)
+        self.assertEqual(report["rows"][0][3:6], (1, 1, 2))
+        self.assertEqual(report["sections"][0]["rows"], [])
+        self.assertEqual(session.house_id, self.house.pk)
+
+    def test_data_completeness_applies_house_scope_and_excludes_day_placement_gaps(self):
+        day_student = Student.objects.create(
+            admission_no="ADV-DAY-COMPLETE",
+            index_number="IDX-ADV-DAY-COMPLETE",
+            full_name="Day Student Completeness",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=self.house,
+            residency=Student.ResidencyStatus.DAY,
+        )
+
+        report = get_detailed_report(
+            "data_completeness",
+            house_id=self.house.pk,
+        )
+        summary = dict(report["summary"])
+        names = [row[0] for row in report["rows"]]
+        checklist = dict(report["sections"][0]["rows"])
+        day_row = next(row for row in report["rows"] if row[0] == day_student.full_name)
+
+        self.assertEqual(summary["Students"], 4)
+        self.assertIn(self.unplaced_student.full_name, names)
+        self.assertNotIn(self.other_student.full_name, names)
+        self.assertEqual(checklist["Boarders without dormitory"], 1)
+        self.assertEqual(checklist["Boarders without room"], 3)
+        self.assertNotIn("No dormitory", day_row[5])
+        self.assertNotIn("No room", day_row[5])
+
+    def test_movement_concern_report_filters_by_house_and_date(self):
+        concern = MovementConcernReport.objects.create(
+            student=self.student,
+            exeat=None,
+            details="Please verify this movement.",
+        )
+        MovementConcernReport.objects.create(
+            student=self.other_student,
+            details="Other house concern.",
+        )
+
+        report = get_detailed_report(
+            "movement_concerns",
+            house_id=self.house.pk,
+            date_from=timezone.localdate(),
+            date_to=timezone.localdate(),
+        )
+
+        self.assertEqual(len(report["rows"]), 1)
+        self.assertEqual(report["rows"][0][1], self.student.full_name)
+        self.assertEqual(report["rows"][0][4], "Open")
+        self.assertIn(concern.details, report["rows"][0][5])
+
+    def test_conduct_normalized_uses_only_scoped_boarder_denominator(self):
+        DisciplinaryRecord.objects.create(
+            student=self.student,
+            academic_term=self.term,
+            offense="Major report test",
+            severity=DisciplinaryRecord.Severity.MAJOR,
+            action_taken="Warning",
+        )
+        DisciplinaryRecord.objects.create(
+            student=self.student,
+            academic_term=self.term,
+            offense="Critical report test",
+            severity=DisciplinaryRecord.Severity.CRITICAL,
+            action_taken="Counselling",
+        )
+
+        report = get_detailed_report(
+            "conduct_normalized",
+            house_id=self.house.pk,
+            term_id=self.term.pk,
+        )
+
+        self.assertEqual(len(report["rows"]), 1)
+        self.assertEqual(report["rows"][0], (self.house.name, 3, 2, 66.7, 1, 1))
+        self.assertEqual(dict(report["summary"])["Boarders"], 3)
+
+    def test_intervention_effectiveness_detects_recurrence_after_correction(self):
+        corrected = DisciplinaryRecord.objects.create(
+            student=self.student,
+            academic_term=self.term,
+            offense="Earlier record",
+            severity=DisciplinaryRecord.Severity.MINOR,
+            action_taken="Warning",
+        )
+        active = DisciplinaryRecord.objects.create(
+            student=self.student,
+            academic_term=self.term,
+            offense="Later record",
+            severity=DisciplinaryRecord.Severity.MINOR,
+            action_taken="Counselling",
+        )
+        correction_time = timezone.now() - timedelta(days=1)
+        DisciplinaryRecord.objects.filter(pk=corrected.pk).update(
+            created_at=correction_time - timedelta(days=2),
+            corrected_at=correction_time,
+        )
+        DisciplinaryRecord.objects.filter(pk=active.pk).update(
+            created_at=correction_time + timedelta(hours=2),
+        )
+
+        report = get_detailed_report(
+            "intervention_effectiveness",
+            house_id=self.house.pk,
+            term_id=self.term.pk,
+        )
+
+        self.assertEqual(len(report["rows"]), 1)
+        self.assertEqual(report["rows"][0][2:5], (2, 1, 1))
+        self.assertEqual(report["rows"][0][6], "Yes")
+        self.assertEqual(report["sections"][0]["rows"], report["rows"])
+
+    def test_configuration_audit_is_date_filtered_and_omits_private_json_details(self):
+        user = get_user_model().objects.create_user(
+            username="audit-report-actor",
+            first_name="Audit",
+            last_name="Actor",
+        )
+        event = ConfigurationAuditLog.objects.create(
+            actor=user,
+            event=ConfigurationAuditLog.Event.SMS_STATE_CHANGED,
+            description="SMS setting changed.",
+            details={"private_token": "must-not-appear"},
+        )
+        ConfigurationAuditLog.objects.create(
+            event=ConfigurationAuditLog.Event.SCHOOL_IDENTITY_CHANGED,
+            description="Outside selected period.",
+        )
+        ConfigurationAuditLog.objects.filter(
+            description="Outside selected period."
+        ).update(created_at=event.created_at - timedelta(days=1))
+
+        report = get_configuration_audit(
+            date_from=event.created_at.date(),
+            date_to=event.created_at.date(),
+        )
+
+        self.assertEqual(report["record_count"], 1)
+        self.assertEqual(report["rows"][0][1], "Audit Actor")
+        self.assertEqual(report["rows"][0][2], "SMS notification state changed")
+        self.assertEqual(report["rows"][0][3], event.description)
+        self.assertNotIn("must-not-appear", repr(report))
+
+    def test_configuration_audit_page_is_admin_only_and_printable(self):
+        admin = get_user_model().objects.create_superuser(
+            username="config-audit-admin",
+            email="config-audit-admin@example.test",
+            password="test-password",
+        )
+        ConfigurationAuditLog.objects.create(
+            actor=admin,
+            event=ConfigurationAuditLog.Event.ACTIVE_TERM_CHANGED,
+            description="Active term changed.",
+        )
+        self.client.force_login(admin)
+
+        page = self.client.get(reverse("core:config_audit"))
+        print_page = self.client.get(
+            reverse("core:config_audit"),
+            {"print": "1", "date_from": str(self.start_date)},
+        )
+        invalid_print = self.client.get(
+            reverse("core:config_audit"),
+            {"print": "1", "date_from": "not-a-date"},
+        )
+
+        self.assertEqual(page.status_code, 200)
+        self.assertTemplateUsed(page, "core/reports/config_audit.html")
+        self.assertContains(page, "Configuration Audit Trail")
+        self.assertEqual(print_page.status_code, 200)
+        self.assertTemplateUsed(print_page, "core/reports/print.html")
+        self.assertEqual(invalid_print.status_code, 400)
+
+        housemaster = get_user_model().objects.create_user(
+            username="config-audit-housemaster",
+            password="test-password",
+        )
+        UserProfile.objects.update_or_create(
+            user=housemaster,
+            defaults={"role": StaffRole.HOUSEMASTER},
+        )
+        HouseMaster.objects.create(
+            user=housemaster,
+            full_name="Config Audit Housemaster",
+            staff_id="ADV-CONFIG-HM",
+            phone_number="+233200000093",
+            house=self.house,
+        )
+        self.client.force_login(housemaster)
+        denied = self.client.get(reverse("core:config_audit"))
+        self.assertEqual(denied.status_code, 302)
+
     def test_kpi_page_print_and_csv_routes_render(self):
         admin = get_user_model().objects.create_superuser(
             username="advanced-reports-admin",
@@ -571,6 +870,12 @@ class AdvancedReportsTests(TestCase):
             "approval_turnaround": "Exeat Approval Turnaround & Rejection",
             "exeat_analytics": "Exeat Type, Destination & Duration Analytics",
             "room_register": "Room Bed-Allocation & Vacancy Register",
+            "staff_activity": "Staff Activity & Workload",
+            "welfare_infirmary": "Welfare & Infirmary Referrals",
+            "data_completeness": "Data Completeness / Register Hygiene",
+            "movement_concerns": "Movement Concern Reports",
+            "conduct_normalized": "Conduct Normalized by House Size",
+            "intervention_effectiveness": "Intervention / Correction Effectiveness",
         }
 
         for report_type, title in titles.items():
@@ -634,3 +939,233 @@ class AdvancedReportsTests(TestCase):
         self.assertEqual(export.status_code, 200)
         self.assertIn(self.house.name.encode(), export.content)
         self.assertNotIn(self.other_house.name.encode(), export.content)
+
+
+class ReportFilterBarAndPaginationTests(TestCase):
+    """Report filter chrome: shared partial, disabled irrelevant filters, tabs, paging."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = get_user_model().objects.create_superuser(
+            username="report-chrome-admin",
+            email="report-chrome-admin@example.test",
+            password="Test-only-password-123!",
+        )
+        cls.house = House.objects.create(name="Chrome House")
+        cls.dormitory = Dormitory.objects.create(
+            house=cls.house,
+            name="Chrome Block",
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=12,
+        )
+        cls.programme = Programme.objects.create(name="Chrome Programme")
+        for index in range(12):
+            Student.objects.create(
+                admission_no=f"CHR-{index:03d}",
+                index_number=f"IDX-CHR-{index:03d}",
+                full_name=f"Chrome Student {index:02d}",
+                gender=Student.Gender.MALE,
+                programme=cls.programme,
+                house=cls.house,
+                dormitory=cls.dormitory,
+            )
+
+    def setUp(self):
+        self.client.force_login(self.admin)
+
+    @staticmethod
+    def _input_tag(html, name):
+        match = re.search(rf'<input[^>]*name="{name}"[^>]*>', html)
+        return match.group(0) if match else ""
+
+    def test_every_report_type_declares_whether_it_uses_period_filters(self):
+        choice_names = {name for name, _label in ReportFilterForm.REPORT_CHOICES}
+        self.assertTrue(REPORTS_WITHOUT_PERIOD_FILTERS <= choice_names)
+        # Exactly these four reports are point-in-time snapshots. Adding a report
+        # type should force a conscious decision about this set.
+        self.assertEqual(
+            REPORTS_WITHOUT_PERIOD_FILTERS,
+            {"housing", "placement_exceptions", "room_register", "data_completeness"},
+        )
+
+    def test_snapshot_reports_disable_the_period_filters(self):
+        response = self.client.get(
+            reverse("core:reports"), {"report": "data_completeness"}
+        )
+        fields = response.context["report_filters"].fields
+        self.assertTrue(fields["date_from"].disabled)
+        self.assertTrue(fields["date_to"].disabled)
+        self.assertTrue(fields["term"].disabled)
+
+        html = response.content.decode()
+        self.assertIn("disabled", self._input_tag(html, "date_from"))
+        self.assertIn("disabled", self._input_tag(html, "date_to"))
+
+    def test_period_reports_keep_the_filters_enabled(self):
+        response = self.client.get(reverse("core:reports"), {"report": "attendance"})
+        fields = response.context["report_filters"].fields
+        self.assertFalse(fields["date_from"].disabled)
+        self.assertFalse(fields["date_to"].disabled)
+        self.assertFalse(fields["term"].disabled)
+
+        html = response.content.decode()
+        self.assertNotIn("disabled", self._input_tag(html, "date_from"))
+
+    def test_config_audit_disables_only_the_term_filter(self):
+        response = self.client.get(reverse("core:config_audit"))
+        fields = response.context["report_filters"].fields
+        self.assertFalse(fields["date_from"].disabled)
+        self.assertTrue(fields["term"].disabled)
+
+    def test_kpi_and_sms_keep_all_period_filters_enabled(self):
+        kpi_fields = self.client.get(reverse("core:boarding_kpi")).context[
+            "report_filters"
+        ].fields
+        self.assertFalse(kpi_fields["term"].disabled)
+        self.assertFalse(kpi_fields["date_from"].disabled)
+
+        sms_fields = self.client.get(reverse("core:sms_usage")).context[
+            "report_filters"
+        ].fields
+        self.assertFalse(sms_fields["date_from"].disabled)
+        self.assertFalse(sms_fields["term"].disabled)
+
+    def test_report_pages_share_a_destination_nav_with_the_active_tab_marked(self):
+        response = self.client.get(reverse("core:reports"))
+        self.assertContains(response, 'aria-label="Boarding reports"')
+        for url_name in (
+            "core:reports",
+            "core:boarding_kpi",
+            "core:boarding_demographics",
+            "core:sms_usage",
+        ):
+            self.assertContains(response, f'href="{reverse(url_name)}"')
+        self.assertContains(response, 'aria-current="page"')
+
+    def test_report_select_auto_submits_and_form_is_shared(self):
+        response = self.client.get(reverse("core:reports"))
+        self.assertContains(response, 'onchange="this.form.submit()"')
+        self.assertContains(response, 'action="/reports/#report-results"')
+
+    def test_long_tables_paginate_ten_rows_at_a_time(self):
+        response = self.client.get(
+            reverse("core:reports"), {"report": "data_completeness"}
+        )
+        page_obj = response.context["report"]["rows_page"]
+        self.assertEqual(page_obj.paginator.count, 12)
+        self.assertEqual(len(page_obj.object_list), 10)
+        self.assertContains(response, "Showing 1\u201310 of 12")
+        # The record count still reflects the whole report, not the visible page.
+        self.assertEqual(response.context["report"]["record_count"], 12)
+
+        second_page = self.client.get(
+            reverse("core:reports"), {"report": "data_completeness", "page": 2}
+        )
+        self.assertEqual(len(second_page.context["report"]["rows_page"].object_list), 2)
+        self.assertContains(second_page, "Page 2 of 2")
+
+    def test_config_audit_paginates_its_events(self):
+        for index in range(12):
+            ConfigurationAuditLog.objects.create(
+                actor=self.admin,
+                event=ConfigurationAuditLog.Event.ACTIVE_TERM_CHANGED,
+                description=f"Audit event {index:02d}",
+            )
+        response = self.client.get(reverse("core:config_audit"))
+        page_obj = response.context["report"]["rows_page"]
+        self.assertEqual(page_obj.paginator.count, 12)
+        self.assertEqual(len(page_obj.object_list), 10)
+        self.assertContains(response, "Showing 1\u201310 of 12")
+
+    def test_print_links_drop_pagination_and_print_keeps_every_row(self):
+        paged = self.client.get(
+            reverse("core:reports"), {"report": "data_completeness", "page": 2}
+        )
+        self.assertIn(
+            f'href="{reverse("core:reports_print")}?report=data_completeness"',
+            paged.content.decode(),
+        )
+
+        printed = self.client.get(
+            reverse("core:reports_print"), {"report": "data_completeness"}
+        )
+        self.assertEqual(printed.status_code, 200)
+        self.assertEqual(len(printed.context["report"]["rows"]), 12)
+        self.assertNotIn("rows_page", printed.context["report"])
+        html = printed.content.decode()
+        self.assertIn("Chrome Student 00", html)
+        self.assertIn("Chrome Student 11", html)
+
+    def test_pagination_controls_swap_the_results_region_via_htmx(self):
+        response = self.client.get(
+            reverse("core:reports"), {"report": "data_completeness"}
+        )
+        html = response.content.decode()
+        self.assertIn('id="report-results-body"', html)
+        self.assertIn('hx-target="#report-results-body"', html)
+        self.assertIn('hx-push-url="true"', html)
+
+    def test_htmx_pagination_returns_only_the_results_fragment(self):
+        response = self.client.get(
+            reverse("core:reports"),
+            {"report": "data_completeness", "page": 2},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(
+            response, "core/reports/partials/report_results.html"
+        )
+        html = response.content.decode()
+        self.assertNotIn("<html", html.lower())
+        self.assertIn("Showing 11\u201312 of 12", html)
+        self.assertEqual(
+            len(response.context["report"]["rows_page"].object_list), 2
+        )
+
+    def test_htmx_requests_render_each_pages_own_fragment(self):
+        cases = (
+            (
+                reverse("core:boarding_kpi"),
+                "core/reports/partials/boarding_kpi_results.html",
+            ),
+            (
+                reverse("core:sms_usage"),
+                "core/reports/partials/sms_usage_results.html",
+            ),
+            (
+                reverse("core:config_audit"),
+                "core/reports/partials/config_audit_results.html",
+            ),
+            (
+                reverse("core:boarding_demographics"),
+                "core/reports/partials/boarding_demographics_results.html",
+            ),
+        )
+        for url, template_name in cases:
+            with self.subTest(template=template_name):
+                response = self.client.get(url, HTTP_HX_REQUEST="true")
+                self.assertEqual(response.status_code, 200)
+                self.assertTemplateUsed(response, template_name)
+                self.assertNotIn("<html", response.content.decode().lower())
+
+    def test_kpi_htmx_pagination_keeps_the_current_term_default(self):
+        current_term = AcademicTerm.objects.create(
+            academic_year=AcademicYear.objects.create(
+                start_date=timezone.localdate() - timedelta(days=30),
+                end_date=timezone.localdate() + timedelta(days=30),
+            ),
+            term=AcademicTerm.TermChoice.TERM_1,
+            start_date=timezone.localdate() - timedelta(days=30),
+            end_date=timezone.localdate() + timedelta(days=30),
+            is_current=True,
+        )
+        response = self.client.get(
+            reverse("core:boarding_kpi"),
+            {"section1_page": "1"},
+            HTTP_HX_REQUEST="true",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.context["report_filters"]["term"].value(),
+            str(current_term.pk),
+        )

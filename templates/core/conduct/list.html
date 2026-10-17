@@ -6,65 +6,7 @@
 {% block content %}
 
 <!-- TOP INCIDENT STATS STRIP -->
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-    
-    <!-- Total Incidents -->
-    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
-        <div>
-            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Active Incidents</span>
-            <div class="text-xl font-bold text-slate-900 tracking-tight mt-0.5">{{ total_incidents }}</div>
-            <div class="text-2xs text-slate-400">Excludes corrected records</div>
-        </div>
-        <div class="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
-        </div>
-    </div>
-
-    <!-- Critical Cases -->
-    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
-        <div>
-            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Critical Infractions</span>
-            <div class="text-xl font-bold text-rose-600 tracking-tight mt-0.5">{{ critical_count }}</div>
-            <div class="text-2xs text-rose-500 font-medium">Disciplinary Committee</div>
-        </div>
-        <div class="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200/60">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-            </svg>
-        </div>
-    </div>
-
-    <!-- Major Offenses -->
-    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
-        <div>
-            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Major Offenses</span>
-            <div class="text-xl font-bold text-amber-600 tracking-tight mt-0.5">{{ major_count }}</div>
-            <div class="text-2xs text-amber-500 font-medium">Internal Sanctions</div>
-        </div>
-        <div class="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200/60">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-        </div>
-    </div>
-
-    <!-- Minor Offenses -->
-    <div class="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex items-center justify-between">
-        <div>
-            <span class="text-2xs font-medium text-slate-500 uppercase tracking-wide">Minor Infractions</span>
-            <div class="text-xl font-bold text-sky-600 tracking-tight mt-0.5">{{ minor_count }}</div>
-            <div class="text-2xs text-sky-500 font-medium">Duty & Work Penalties</div>
-        </div>
-        <div class="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center shrink-0 border border-sky-200/60">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-        </div>
-    </div>
-
-</div>
+{% include "core/conduct/partials/conduct_stats.html" %}
 
 
 <!-- DISCIPLINARY REGISTER CARD -->
@@ -140,8 +82,40 @@
              x-transition:enter="transition ease-out duration-200"
              x-transition:enter-start="opacity-0 -translate-y-2"
              x-transition:enter-end="opacity-100 translate-y-0"
-             class="pt-2 border-t border-slate-200/70 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+             class="pt-2 border-t border-slate-200/70 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
             
+            <!-- Filter: Period (Term / Academic Year) -->
+            <div>
+                <label class="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Period</label>
+                <select name="period" 
+                        class="w-full pl-2.5 pr-8 py-1.5 bg-white text-xs font-medium text-slate-700 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer shadow-2xs">
+                    <option value="all" {% if period_kind == 'all' %}selected{% endif %}>All Time</option>
+                    {% if current_term %}
+                    <option value="current" {% if period_kind == 'current' %}selected{% endif %}>
+                        Current Term ({{ current_term.get_term_display }} · {{ current_term.academic_year.name }})
+                    </option>
+                    {% endif %}
+                    {% if academic_years %}
+                    <optgroup label="Academic Years">
+                        {% for y in academic_years %}
+                        <option value="year:{{ y.pk }}" {% if period_kind == 'year' and period_year_id == y.pk %}selected{% endif %}>
+                            {{ y.name }}
+                        </option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endif %}
+                    {% if academic_terms %}
+                    <optgroup label="Terms">
+                        {% for t in academic_terms %}
+                        <option value="term:{{ t.pk }}" {% if period_kind == 'term' and period_term_id == t.pk %}selected{% endif %}>
+                            {{ t.get_term_display }} · {{ t.academic_year.name }}{% if t.level != 'ALL' %} · {{ t.get_level_display }}{% endif %}
+                        </option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endif %}
+                </select>
+            </div>
+
             <!-- Filter: Severity -->
             <div>
                 <label class="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Severity Level</label>
@@ -183,6 +157,56 @@
     <!-- TABLE -->
     <div id="conduct-table">
         {% include "core/conduct/partials/conduct_table.html" %}
+    </div>
+
+</div>
+
+
+<!-- FULL INCIDENT DETAIL DRAWER (slide-over, loaded on demand via HTMX) -->
+<div x-data="{ detailOpen: false }"
+     @open-incident-detail.window="detailOpen = true"
+     @keydown.escape.window="detailOpen = false">
+
+    <!-- Backdrop -->
+    <div x-show="detailOpen"
+         x-cloak
+         x-transition:enter="ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         @click="detailOpen = false"
+         class="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs"
+         aria-hidden="true"></div>
+
+    <!-- Panel -->
+    <div x-show="detailOpen"
+         x-cloak
+         x-transition:enter="ease-out duration-200"
+         x-transition:enter-start="translate-x-full"
+         x-transition:enter-end="translate-x-0"
+         x-transition:leave="ease-in duration-150"
+         x-transition:leave-start="translate-x-0"
+         x-transition:leave-end="translate-x-full"
+         class="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white shadow-2xl border-l border-slate-200 flex flex-col"
+         role="dialog"
+         aria-modal="true"
+         aria-label="Incident detail">
+
+        <div class="relative flex-1 overflow-hidden">
+            <!-- Loading overlay -->
+            <div id="incident-detail-loading"
+                 class="htmx-indicator absolute inset-0 z-10 flex items-center justify-center bg-white/80">
+                <svg class="w-5 h-5 text-slate-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                </svg>
+            </div>
+
+            <!-- HTMX target -->
+            <div id="incident-detail-panel" class="h-full overflow-hidden"></div>
+        </div>
     </div>
 
 </div>

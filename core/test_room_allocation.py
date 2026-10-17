@@ -47,14 +47,14 @@ class DormitoryRoomAllocationTests(TestCase):
         cls.programme = Programme.objects.create(name="Room Allocation Science")
 
     def create_student(
-        self, admission_no, *, room=None, dormitory=None, residency=None
+        self, admission_no, *, room=None, dormitory=None, residency=None, gender=None
     ):
         dormitory = dormitory or self.dormitory
         return Student.objects.create(
             admission_no=admission_no,
             index_number=f"IDX-{admission_no}",
             full_name=f"Student {admission_no}",
-            gender=Student.Gender.MALE,
+            gender=gender or Student.Gender.MALE,
             programme=self.programme,
             house=dormitory.house,
             dormitory=dormitory,
@@ -230,3 +230,71 @@ class DormitoryRoomAllocationTests(TestCase):
         self.assertIn(("Boarders assigned to rooms", 1), report["summary"])
         self.assertIn(("Awaiting room placement", 0), report["summary"])
         self.assertTrue(any(row[2] == "Room 1" for row in report["rows"]))
+
+    def test_housing_report_groups_beds_by_cohort_with_signed_vacancy(self):
+        girls_block = Dormitory.objects.create(
+            house=self.house,
+            name="Girls Block",
+            gender=Dormitory.GenderBlock.FEMALE,
+            capacity=10,
+        )
+        unrecorded_block = Dormitory.objects.create(
+            house=self.other_house,
+            name="Overflow Block",
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=0,
+        )
+        self.create_student("COHORT-001")
+        self.create_student("COHORT-002", dormitory=girls_block, gender=Student.Gender.FEMALE)
+        self.create_student("COHORT-003", dormitory=unrecorded_block)
+
+        report = get_detailed_report("housing")
+
+        # Beds are grouped by cohort, because a girls' bed cannot take a boy.
+        self.assertEqual(
+            [group["label"] for group in report["cohort_groups"]],
+            ["Girls", "Boys"],
+        )
+        girls, boys = report["cohort_groups"]
+        self.assertEqual(
+            (
+                girls["subtotal"]["capacity"],
+                girls["subtotal"]["placed"],
+                girls["subtotal"]["free"],
+            ),
+            (10, 1, 9),
+        )
+        self.assertEqual(
+            (
+                boys["subtotal"]["capacity"],
+                boys["subtotal"]["placed"],
+                boys["subtotal"]["free"],
+            ),
+            (20, 2, 18),
+        )
+        self.assertEqual(report["totals"]["free"], 27)
+        self.assertEqual(
+            report["verdict"]["headline"],
+            "27 free beds — 9 girls', 18 boys' (10.0% full)",
+        )
+        self.assertIn("Nothing over capacity", report["verdict"]["notes"])
+
+        # Vacancy is signed: a block holding boarders with no configured beds
+        # reads as negative rather than as a calm "0 vacant".
+        unrecorded = next(
+            row for row in boys["rows"] if row["dormitory"] == "Overflow Block"
+        )
+        self.assertEqual(
+            (unrecorded["free"], unrecorded["state"]),
+            (-1, "Beds unrecorded"),
+        )
+
+        # The problems the old table hid now surface as named attention items.
+        self.assertEqual(
+            [item["label"] for item in report["attention"]],
+            ["Beds unrecorded", "Awaiting a room"],
+        )
+        self.assertIn(
+            "Overflow Block: 1 boarder with 0 beds configured",
+            report["attention"][0]["detail"],
+        )

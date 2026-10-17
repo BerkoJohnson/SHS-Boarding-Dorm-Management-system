@@ -42,6 +42,10 @@ if "*" in ALLOWED_HOSTS and not TENANCY_ENABLED:
         "ALLOWED_HOSTS must list explicit production hostnames; '*' is not allowed."
     )
 if TENANCY_ENABLED:
+    # Tenant hostnames are dynamic and cannot be enumerated ahead of time.
+    # VerifiedDomainRoutingMiddleware validates every request's host against
+    # the Domain table, so '*' is safe here and ALLOWED_HOSTS is intentionally
+    # ignored in tenancy mode.
     ALLOWED_HOSTS = ["*"]
 
 # Static origins from the environment. Dynamic tenant domains are handled
@@ -65,8 +69,8 @@ CSRF_COOKIE_SECURE = True
 
 CSP_REPORT_ONLY_POLICY = (
     "default-src 'self'; "
-    "script-src 'self'; "
-    "style-src 'self'; "
+    "script-src 'self' 'nonce-{nonce}'; "
+    "style-src 'self' 'nonce-{nonce}'; "
     "img-src 'self' data: https:; "
     "font-src 'self' data:; "
     "connect-src 'self'; "
@@ -109,7 +113,9 @@ def _environment_flag(name, default="false"):
 
 
 try:
-    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "0"))
+    # Default to one year of HSTS so production is not silently downgradeable.
+    # Subdomain/preload directives stay opt-in (see the guards below).
+    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))
 except ValueError as error:
     raise ImproperlyConfigured(
         "SECURE_HSTS_SECONDS must be a non-negative integer."

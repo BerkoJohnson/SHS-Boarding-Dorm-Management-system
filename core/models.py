@@ -10,7 +10,7 @@ from django.core.validators import (
 )
 from django.utils import timezone
 from django.conf import settings
-from django.db.models.signals import post_save, pre_save
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 from PIL import Image, UnidentifiedImageError
 from django_pgschemas.schema import get_current_schema
@@ -604,6 +604,14 @@ class Student(BaseModel):
         editable=False,
         help_text="Opaque identifier used only for the public student ID QR check.",
     )
+    public_token_expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When set, the public QR link stops working at this time. "
+            "Leave empty for a link that never expires."
+        ),
+    )
     full_name = models.CharField(max_length=200)
     gender = models.CharField(max_length=10, choices=Gender.choices)
     date_of_birth = models.DateField(null=True, blank=True)
@@ -763,6 +771,14 @@ class Student(BaseModel):
             super().save(*args, **kwargs)
         
         
+    @property
+    def public_token_expired(self):
+        """True when the public QR link has an expiry that has already passed."""
+        return bool(
+            self.public_token_expires_at
+            and timezone.now() >= self.public_token_expires_at
+        )
+
     @property
     def level(self):
         """Extracts level string (SHS1, SHS2, SHS3) from assigned class group name."""
@@ -1743,6 +1759,24 @@ def enforce_staff_account_quota(sender, instance, **kwargs):
             "max_staff",
             sender.objects.filter(is_staff=True).count(),
         )
+
+
+@receiver(post_delete, sender=HouseMaster)
+def demote_profile_on_housemaster_delete(sender, instance, **kwargs):
+    """Reset a retained housemaster role when its HouseMaster record is removed.
+
+    ``HouseMaster.save`` keeps the linked ``UserProfile.role`` in sync, but a
+    deleted HouseMaster previously left the elevated role behind.  Since
+    ``SENIOR_HOUSEMASTER`` is in ``permissions.ADMIN_ROLES`` (school-wide
+    scope), a departed or reassigned senior housemaster could keep broad
+    access indefinitely.  Clearing the role here closes that gap.
+    """
+    if not instance.user_id:
+        return
+    UserProfile.objects.filter(
+        user_id=instance.user_id,
+        role__in=(StaffRole.HOUSEMASTER, StaffRole.SENIOR_HOUSEMASTER),
+    ).update(role=StaffRole.UNASSIGNED)
 
 
 def get_user_profile(user):

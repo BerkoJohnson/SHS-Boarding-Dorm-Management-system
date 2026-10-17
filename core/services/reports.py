@@ -1,7 +1,7 @@
 """
 Service layer for reporting and statistics aggregation.
 """
-from django.db.models import Count, F, Q, Sum
+from django.db.models import Count, F, Max, Q, Sum
 from django.utils import timezone
 from core.models import (
     Student,
@@ -10,11 +10,15 @@ from core.models import (
     DisciplinaryRecord,
     RollCallSession,
     RollCallEntry,
+    RollCallAbsenceFollowUp,
     AcademicTerm,
     House,
+    HouseMaster,
     Dormitory,
     DormitoryRoom,
     SMSDelivery,
+    MovementConcernReport,
+    ConfigurationAuditLog,
 )
 
 _DORMITORY_GENDER_LABELS = {"M": "Boys Dormitory", "F": "Girls Dormitory"}
@@ -45,6 +49,69 @@ _SEVERITY_LABELS = {
 _ROLL_CALL_ENTRY_STATUS_LABELS = {
     choice.value: choice.label for choice in RollCallEntry.Status
 }
+
+# Placement vocabulary for the boarding occupancy report. Beds are read as a
+# fixed set of states so a cell can be counted and sorted, not just described.
+_PLACEMENT_STATES = {
+    "good": "Room to spare",
+    "watch": "Nearly full",
+    "empty": "Empty",
+    "full": "Full",
+    "over": "Over capacity",
+    "unrecorded": "Beds unrecorded",
+    "unconfigured": "No beds configured",
+}
+
+# Beds are not interchangeable across gender, so the report groups by cohort
+# rather than by house. Ordering here drives the order of the table.
+_COHORT_META = {
+    "F": {"label": "Girls", "order": 0},
+    "M": {"label": "Boys", "order": 1},
+}
+_UNSPECIFIED_COHORT = {"label": "Unspecified", "order": 2}
+
+
+def _plural(count, singular, plural=None):
+    """Render a count with a correctly pluralised noun."""
+    if count == 1:
+        return f"{count} {singular}"
+    return f"{count} {plural or singular + 's'}"
+
+
+def _placement_state(capacity, occupied):
+    """
+    Classify a bed space into the fixed placement vocabulary.
+
+    Returns a (label, tone) pair so the wording and the styling both stay
+    derived from the numbers instead of hand-written status sentences.
+    """
+    if capacity <= 0:
+        if occupied:
+            return _PLACEMENT_STATES["unrecorded"], "bad"
+        return _PLACEMENT_STATES["unconfigured"], "neutral"
+    if occupied > capacity:
+        return _PLACEMENT_STATES["over"], "bad"
+    if occupied == capacity:
+        return _PLACEMENT_STATES["full"], "neutral"
+    if occupied == 0:
+        return _PLACEMENT_STATES["empty"], "watch"
+    if occupied * 100 / capacity >= 85:
+        return _PLACEMENT_STATES["watch"], "watch"
+    return _PLACEMENT_STATES["good"], "good"
+
+
+def _cohort_bucket(cohorts, gender):
+    """Return the cohort bucket for a dormitory, creating it on first sight."""
+    key = gender or "U"
+    if key not in cohorts:
+        meta = _COHORT_META.get(key, _UNSPECIFIED_COHORT)
+        cohorts[key] = {
+            "key": key,
+            "label": meta["label"],
+            "order": meta["order"],
+            "rows": [],
+        }
+    return cohorts[key]
 
 
 def get_dashboard_metrics(house_id=None):
@@ -174,6 +241,43 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
         )
     if report_type == "room_register":
         return _room_register_report(house_id=house_id)
+    if report_type == "staff_activity":
+        return _staff_activity_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "welfare_infirmary":
+        return _welfare_infirmary_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "data_completeness":
+        return _data_completeness_report(house_id=house_id)
+    if report_type == "movement_concerns":
+        return _movement_concern_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "conduct_normalized":
+        return _conduct_normalized_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
+    if report_type == "intervention_effectiveness":
+        return _intervention_effectiveness_report(
+            house_id=house_id,
+            date_from=date_from,
+            date_to=date_to,
+            term_id=term_id,
+        )
 
     if report_type == "housing":
         houses = House.objects.all().order_by("display_order", "name")
@@ -262,6 +366,10 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
         total_capacity = 0
         over_capacity_dormitories = 0
         total_room_unassigned = 0
+        cohorts = {}
+        over_capacity = []
+        unrecorded_beds = []
+        houses_without_beds = []
         for house in houses:
             boarder_count = house["boarder_count"]
             assigned_count = house["assigned_boarder_count"]
@@ -284,32 +392,67 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                 "—",
                 house_capacity,
                 assigned_count,
-                max(0, house_capacity - assigned_count),
+                house_capacity - assigned_count,
                 f"{house_occupancy}%",
                 f"{boarder_count} boarders; {unassigned_count} without dormitory",
             ))
             if not house_dormitories:
-                if not boarder_count:
+                if boarder_count:
+                    houses_without_beds.append({
+                        "house": house["name"],
+                        "boarders": boarder_count,
+                    })
+                    rows.append((
+                        house["name"], "No dormitories configured", "—", 0, boarder_count, -boarder_count, "0%",
+                        _PLACEMENT_STATES["unrecorded"],
+                    ))
+                else:
                     rows.append((
                         house["name"], "No dormitories configured", "—", 0, 0, 0, "0%",
-                        "No capacity configured",
+                        _PLACEMENT_STATES["unconfigured"],
                     ))
             for dormitory in house_dormitories:
                 occupied = dormitory["occupied"]
                 capacity = dormitory["capacity"]
                 occupancy = round(occupied * 100 / capacity, 1) if capacity else 0
                 excess = max(0, occupied - capacity)
-                if excess:
+                state, tone = _placement_state(capacity, occupied)
+                if capacity > 0 and excess:
                     over_capacity_dormitories += 1
+                    over_capacity.append({
+                        "house": dormitory["house__name"],
+                        "dormitory": dormitory["name"],
+                        "excess": excess,
+                    })
+                elif capacity <= 0 and occupied:
+                    unrecorded_beds.append(
+                        f"{dormitory['house__name']} · {dormitory['name']}: "
+                        f"{_plural(occupied, 'boarder')} with 0 beds configured"
+                    )
+                cohort = _cohort_bucket(cohorts, dormitory["gender"])
+                cohort_row = {
+                    "house": dormitory["house__name"],
+                    "dormitory": dormitory["name"],
+                    "gender_label": _DORMITORY_GENDER_LABELS.get(dormitory["gender"], "—"),
+                    "capacity": capacity,
+                    "placed": occupied,
+                    "free": capacity - occupied,
+                    "occupancy": occupancy,
+                    "occupancy_display": f"{occupancy}%",
+                    "state": state,
+                    "tone": tone,
+                    "rooms": [],
+                }
+                cohort["rows"].append(cohort_row)
                 rows.append((
                     dormitory["house__name"],
                     dormitory["name"],
                     _DORMITORY_GENDER_LABELS.get(dormitory["gender"], "—"),
                     capacity,
                     occupied,
-                    max(0, capacity - occupied),
+                    capacity - occupied,
                     f"{occupancy}%",
-                    f"Over capacity by {excess}" if excess else f"{max(0, capacity - occupied)} spaces available",
+                    state,
                 ))
                 for room in rooms_by_dormitory.get(dormitory["id"], []):
                     room_occupancy = (
@@ -317,20 +460,28 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                         if room.capacity
                         else 0
                     )
+                    room_state, _room_tone = _placement_state(room.capacity, room.occupied)
+                    cohort_row["rooms"].append({
+                        "name": room.name,
+                        "capacity": room.capacity,
+                        "placed": room.occupied,
+                        "free": room.capacity - room.occupied,
+                        "occupancy_display": f"{room_occupancy}%",
+                        "state": room_state,
+                    })
                     rows.append((
                         room.dormitory.house.name,
                         room.dormitory.name,
                         room.name,
                         room.capacity,
                         room.occupied,
-                        max(0, room.capacity - room.occupied),
+                        room.capacity - room.occupied,
                         f"{room_occupancy}%",
-                        (
-                            "At capacity"
-                            if room.occupied == room.capacity
-                            else f"{room.capacity - room.occupied} spaces available"
-                        ),
+                        room_state,
                     ))
+                cohort_row["room_placed"] = sum(
+                    room["placed"] for room in cohort_row["rooms"]
+                )
             if unassigned_count:
                 rows.append((
                     house["name"],
@@ -343,31 +494,147 @@ def get_detailed_report(report_type, house_id=None, date_from=None, date_to=None
                     "Placement required",
                 ))
         occupancy = round(total_assigned * 100 / total_capacity, 1) if total_capacity else 0
-        row_groups = []
-        for row in rows:
-            if row[1] == "House total":
-                row_groups.append({"house": row[0], "rows": []})
-            row_groups[-1]["rows"].append(row)
+        total_free = total_capacity - total_assigned
+
+        cohort_groups = []
+        for bucket in sorted(cohorts.values(), key=lambda item: (item["order"], item["label"])):
+            group_capacity = sum(row["capacity"] for row in bucket["rows"])
+            group_placed = sum(row["placed"] for row in bucket["rows"])
+            group_occupancy = (
+                round(group_placed * 100 / group_capacity, 1) if group_capacity else 0
+            )
+            cohort_groups.append({
+                "key": bucket["key"],
+                "label": bucket["label"],
+                "rows": bucket["rows"],
+                "subtotal": {
+                    "capacity": group_capacity,
+                    "placed": group_placed,
+                    "free": group_capacity - group_placed,
+                    "occupancy": group_occupancy,
+                    "occupancy_display": f"{group_occupancy}%",
+                },
+                "rooms_recorded": sum(
+                    room["placed"] for row in bucket["rows"] for room in row["rooms"]
+                ),
+            })
+
+        # The verdict states the answer this report exists to give, before anyone
+        # has to subtract a column or total a house by hand.
+        free_parts = [
+            f"{group['subtotal']['free']} {group['label'].lower()}'"
+            for group in cohort_groups
+            if group["rows"]
+        ]
+        headline = f"{total_free} free beds"
+        if free_parts:
+            headline += " — " + ", ".join(free_parts)
+        headline += f" ({occupancy}% full)"
+        notes = []
+        if over_capacity_dormitories:
+            notes.append(
+                f"{_plural(over_capacity_dormitories, 'dormitory', 'dormitories')} over capacity"
+            )
+        else:
+            notes.append("Nothing over capacity")
+        if total_unassigned:
+            notes.append(f"{_plural(total_unassigned, 'boarder')} waiting for a dormitory")
+        else:
+            notes.append("Nobody waiting for a dormitory")
+        if total_room_unassigned:
+            notes.append(
+                f"{_plural(total_room_unassigned, 'boarder')} in a dormitory without a room"
+            )
+
+        awaiting_boarders = Student.objects.filter(
+            residency=Student.ResidencyStatus.BOARDING,
+            dormitory__isnull=True,
+        )
+        if house_id is not None:
+            awaiting_boarders = awaiting_boarders.filter(house_id=house_id)
+        awaiting_students = [
+            {
+                "name": student.full_name,
+                "house": student.house.name if student.house else "—",
+                "admission_no": student.admission_no,
+            }
+            for student in awaiting_boarders.select_related("house").order_by(
+                "house__name", "full_name"
+            )
+        ]
+
+        attention = []
+        if awaiting_students:
+            attention.append({
+                "label": "Awaiting a dormitory",
+                "tone": "bad",
+                "detail": f"{_plural(len(awaiting_students), 'boarder')} placed in a house with no dormitory",
+                "students": awaiting_students,
+            })
+        if over_capacity:
+            attention.append({
+                "label": "Over capacity",
+                "tone": "bad",
+                "detail": "; ".join(
+                    f"{item['house']} · {item['dormitory']} over capacity by {item['excess']}"
+                    for item in over_capacity
+                ),
+                "students": [],
+            })
+        if houses_without_beds:
+            unrecorded_beds.extend(
+                f"{item['house']}: {_plural(item['boarders'], 'boarder')} with no dormitory blocks configured"
+                for item in houses_without_beds
+            )
+        if unrecorded_beds:
+            attention.append({
+                "label": "Beds unrecorded",
+                "tone": "bad",
+                "detail": "; ".join(unrecorded_beds),
+                "students": [],
+            })
+        if total_room_unassigned:
+            attention.append({
+                "label": "Awaiting a room",
+                "tone": "watch",
+                "detail": f"{_plural(total_room_unassigned, 'boarder')} in a dormitory but not assigned to a room",
+                "students": [],
+            })
+
         return {
             "title": "Boarding Occupancy & Placement",
             "headers": (
                 "House",
                 "Dormitory",
                 "Block / Room",
-                "Capacity",
+                "Beds",
                 "Placed",
-                "Vacant",
-                "Occupancy",
-                "Capacity / Placement",
+                "Free",
+                "Fill",
+                "State",
             ),
             "rows": rows,
-            "row_groups": row_groups,
+            "cohort_groups": cohort_groups,
+            "totals": {
+                "capacity": total_capacity,
+                "placed": total_assigned,
+                "free": total_free,
+                "occupancy": occupancy,
+                "occupancy_display": f"{occupancy}%",
+            },
+            "verdict": {"headline": headline, "notes": notes},
+            "attention": attention,
+            "record_label": (
+                f"{_plural(sum(len(group['rows']) for group in cohort_groups), 'dormitory', 'dormitories')}"
+                f" · {_plural(total_boarders, 'boarder')}"
+            ),
             "summary": (
                 ("Boarders", total_boarders),
                 ("Configured beds", total_capacity),
                 ("Placed boarders", total_assigned),
                 ("Awaiting dorm placement", total_unassigned),
                 ("Occupied capacity", f"{occupancy}%"),
+                ("Free beds", total_free),
                 ("Over-capacity dormitories", over_capacity_dormitories),
                 ("Configured rooms", len(rooms)),
                 ("Total room capacity", total_room_capacity),
@@ -1871,4 +2138,629 @@ def get_sms_usage_summary(
             "A null monthly limit means the plan has no SMS cap configured.",
         ),
         "record_count": total,
+    }
+
+
+def _staff_activity_report(house_id=None, date_from=None, date_to=None, term_id=None):
+    """Summarize attributed staff actions and records without a named officer."""
+    house_masters = HouseMaster.objects.select_related("house").order_by("full_name")
+    if house_id is not None:
+        house_masters = house_masters.filter(house_id=house_id)
+
+    roll_calls = RollCallSession.objects.all()
+    approvals = Exeat.objects.filter(status=Exeat.Status.APPROVED)
+    incidents = DisciplinaryRecord.objects.all()
+    resolutions = RollCallAbsenceFollowUp.objects.filter(
+        resolved_at__isnull=False,
+        resolved_by__isnull=False,
+    )
+    if house_id is not None:
+        roll_calls = roll_calls.filter(house_id=house_id)
+        approvals = approvals.filter(student__house_id=house_id)
+        incidents = incidents.filter(student__house_id=house_id)
+        resolutions = resolutions.filter(entry__session__house_id=house_id)
+    if date_from:
+        roll_calls = roll_calls.filter(date__gte=date_from)
+        approvals = approvals.filter(updated_at__date__gte=date_from)
+        incidents = incidents.filter(created_at__date__gte=date_from)
+        resolutions = resolutions.filter(resolved_at__date__gte=date_from)
+    if date_to:
+        roll_calls = roll_calls.filter(date__lte=date_to)
+        approvals = approvals.filter(updated_at__date__lte=date_to)
+        incidents = incidents.filter(created_at__date__lte=date_to)
+        resolutions = resolutions.filter(resolved_at__date__lte=date_to)
+    if term_id:
+        roll_calls = roll_calls.filter(academic_term_id=term_id)
+        approvals = approvals.filter(academic_term_id=term_id)
+        incidents = incidents.filter(academic_term_id=term_id)
+        resolutions = resolutions.filter(entry__session__academic_term_id=term_id)
+
+    roll_call_counts = dict(
+        roll_calls.values("conducted_by_id")
+        .annotate(count=Count("id"))
+        .values_list("conducted_by_id", "count")
+    )
+    approval_counts = dict(
+        approvals.values("approved_by_id")
+        .annotate(count=Count("id"))
+        .values_list("approved_by_id", "count")
+    )
+    incident_counts = dict(
+        incidents.values("logged_by_id")
+        .annotate(count=Count("id"))
+        .values_list("logged_by_id", "count")
+    )
+    resolution_counts = dict(
+        resolutions.values("resolved_by_id")
+        .annotate(count=Count("id"))
+        .values_list("resolved_by_id", "count")
+    )
+
+    rows = []
+    for housemaster in house_masters:
+        roll_call_count = roll_call_counts.get(housemaster.pk, 0)
+        approval_count = approval_counts.get(housemaster.pk, 0)
+        incident_count = incident_counts.get(housemaster.pk, 0)
+        resolution_count = (
+            resolution_counts.get(housemaster.user_id, 0)
+            if housemaster.user_id
+            else 0
+        )
+        rows.append(
+            (
+                housemaster.full_name,
+                housemaster.house.name if housemaster.house else "School-wide",
+                roll_call_count,
+                approval_count,
+                incident_count,
+                resolution_count,
+                roll_call_count
+                + approval_count
+                + incident_count
+                + resolution_count,
+            )
+        )
+    rows.sort(key=lambda row: (-row[6], row[0].casefold()))
+
+    unlogged_roll_calls = roll_calls.filter(conducted_by__isnull=True)
+    unlogged_incidents = incidents.filter(logged_by__isnull=True)
+    total_actions = sum(row[6] for row in rows)
+    return {
+        "title": "Staff Activity & Workload",
+        "headers": (
+            "Housemaster",
+            "House",
+            "Roll calls",
+            "Passes approved",
+            "Incidents logged",
+            "Absences resolved",
+            "Total actions",
+        ),
+        "rows": rows,
+        "summary": (
+            ("Staff listed", len(rows)),
+            ("Total actions", total_actions),
+            ("Most active", rows[0][0] if rows else "—"),
+            ("Roll calls conducted", sum(row[2] for row in rows)),
+            ("Incidents logged", sum(row[4] for row in rows)),
+        ),
+        "sections": (
+            {
+                "title": "Unattributed records (no officer named)",
+                "headers": ("Record type", "Count"),
+                "rows": (
+                    ("Roll calls without a conductor", unlogged_roll_calls.count()),
+                    ("Incidents without a logger", unlogged_incidents.count()),
+                ),
+            },
+        ),
+        "highlights": (
+            "Approvals are counted by updated_at, the closest available proxy for when the decision was recorded.",
+            "Absence resolutions are matched to a housemaster through their linked login account.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _welfare_infirmary_report(
+    house_id=None, date_from=None, date_to=None, term_id=None
+):
+    """Summarize students with infirmary roll-call marks or medical exeats."""
+    infirmary = RollCallEntry.objects.filter(status=RollCallEntry.Status.INFIRMARY)
+    medical = Exeat.objects.filter(exeat_type=Exeat.ExeatType.MEDICAL)
+    if house_id is not None:
+        infirmary = infirmary.filter(
+            session__house_id=house_id,
+            student__house_id=house_id,
+        )
+        medical = medical.filter(student__house_id=house_id)
+    if date_from:
+        infirmary = infirmary.filter(session__date__gte=date_from)
+        medical = medical.filter(expected_departure__date__gte=date_from)
+    if date_to:
+        infirmary = infirmary.filter(session__date__lte=date_to)
+        medical = medical.filter(expected_departure__date__lte=date_to)
+    if term_id:
+        infirmary = infirmary.filter(session__academic_term_id=term_id)
+        medical = medical.filter(academic_term_id=term_id)
+
+    infirmary_rows = infirmary.values("student_id").annotate(
+        count=Count("id"),
+        last=Max("session__date"),
+    )
+    medical_rows = medical.values("student_id").annotate(count=Count("id"))
+    infirmary_by_student = {
+        row["student_id"]: (row["count"], row["last"]) for row in infirmary_rows
+    }
+    medical_by_student = {
+        row["student_id"]: row["count"] for row in medical_rows
+    }
+    student_ids = set(infirmary_by_student) | set(medical_by_student)
+    students = Student.objects.filter(pk__in=student_ids).values(
+        "id",
+        "full_name",
+        "house__name",
+        "dormitory__name",
+    )
+    student_info = {student["id"]: student for student in students}
+
+    rows = []
+    for student_id in student_ids:
+        student = student_info[student_id]
+        infirmary_count, last_infirmary = infirmary_by_student.get(
+            student_id, (0, None)
+        )
+        medical_count = medical_by_student.get(student_id, 0)
+        rows.append(
+            (
+                student["full_name"],
+                student["house__name"] or "Unassigned",
+                student["dormitory__name"] or "Unassigned",
+                infirmary_count,
+                medical_count,
+                infirmary_count + medical_count,
+                last_infirmary or "—",
+            )
+        )
+    rows.sort(key=lambda row: (-row[5], row[0].casefold()))
+    watchlist = [row for row in rows if row[3] >= 2 or row[4] >= 2]
+    headers = (
+        "Student",
+        "House",
+        "Dormitory",
+        "Infirmary marks",
+        "Medical exeats",
+        "Total referrals",
+        "Last infirmary",
+    )
+    return {
+        "title": "Welfare & Infirmary Referrals",
+        "headers": headers,
+        "rows": rows,
+        "summary": (
+            ("Students referred", len(rows)),
+            ("Infirmary marks", sum(row[3] for row in rows)),
+            ("Medical exeats", sum(row[4] for row in rows)),
+            ("Students on watchlist (2+)", len(watchlist)),
+        ),
+        "sections": (
+            {"title": "Repeat welfare watchlist", "headers": headers, "rows": watchlist},
+        ),
+        "highlights": (
+            "Combines roll-call 'Infirmary' marks with 'Medical' exeats for the same student.",
+            "A watchlist student has at least two infirmary marks or at least two medical exeats in the selected period.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _data_completeness_report(house_id=None):
+    """List student register records with missing guardian, identity, or placement data."""
+    students = Student.objects.select_related("house", "dormitory").order_by(
+        "full_name"
+    )
+    if house_id is not None:
+        students = students.filter(house_id=house_id)
+
+    counters = {"guardian": 0, "dob": 0, "photo": 0, "dorm": 0, "room": 0}
+    rows = []
+    complete = 0
+    total = 0
+    for student in students:
+        total += 1
+        gaps = []
+        if not student.guardian_id:
+            gaps.append("No guardian")
+            counters["guardian"] += 1
+        if not student.date_of_birth:
+            gaps.append("No date of birth")
+            counters["dob"] += 1
+        if not student.photo:
+            gaps.append("No photo")
+            counters["photo"] += 1
+        if student.residency == Student.ResidencyStatus.BOARDING:
+            if not student.dormitory_id:
+                gaps.append("No dormitory")
+                counters["dorm"] += 1
+            if not student.room_id:
+                gaps.append("No room")
+                counters["room"] += 1
+        if gaps:
+            rows.append(
+                (
+                    student.full_name,
+                    student.admission_no,
+                    student.house.name if student.house else "Unassigned",
+                    student.get_residency_display(),
+                    len(gaps),
+                    ", ".join(gaps),
+                )
+            )
+        else:
+            complete += 1
+
+    rows.sort(key=lambda row: (-row[4], row[0].casefold()))
+    completion_rate = round(complete * 100 / total, 1) if total else 0
+    return {
+        "title": "Data Completeness / Register Hygiene",
+        "headers": (
+            "Student",
+            "Admission No",
+            "House",
+            "Residency",
+            "Missing fields",
+            "Missing",
+        ),
+        "rows": rows,
+        "summary": (
+            ("Students", total),
+            ("Fully complete", complete),
+            ("With gaps", total - complete),
+            ("Completion", f"{completion_rate}%"),
+            ("No guardian", counters["guardian"]),
+            ("No photo", counters["photo"]),
+            ("No dormitory", counters["dorm"]),
+        ),
+        "sections": (
+            {
+                "title": "Gap checklist",
+                "headers": ("Field", "Students missing"),
+                "rows": (
+                    ("No guardian contact", counters["guardian"]),
+                    ("No date of birth", counters["dob"]),
+                    ("No photo", counters["photo"]),
+                    ("Boarders without dormitory", counters["dorm"]),
+                    ("Boarders without room", counters["room"]),
+                ),
+            },
+        ),
+        "highlights": (
+            "Day students are not expected to have a dormitory or room, so those fields are not counted against them.",
+            "Missing guardian contacts block SMS notifications; missing photos block ID card printing.",
+        ),
+        "point_in_time": True,
+    }
+
+
+def _movement_concern_report(
+    house_id=None, date_from=None, date_to=None, term_id=None
+):
+    """Report public QR-scan concerns raised about student movements."""
+    concerns = MovementConcernReport.objects.select_related(
+        "student",
+        "student__house",
+        "exeat",
+    )
+    if house_id is not None:
+        concerns = concerns.filter(student__house_id=house_id)
+    if date_from:
+        concerns = concerns.filter(created_at__date__gte=date_from)
+    if date_to:
+        concerns = concerns.filter(created_at__date__lte=date_to)
+    if term_id:
+        concerns = concerns.filter(exeat__academic_term_id=term_id)
+
+    headers = ("Raised", "Student", "House", "Pass", "Status", "Details")
+    rows = []
+    open_rows = []
+    for concern in concerns.order_by("-created_at", "-pk"):
+        details = (concern.details or "").strip()
+        if len(details) > 90:
+            details = details[:87] + "..."
+        row = (
+            timezone.localtime(concern.created_at),
+            concern.student.full_name,
+            concern.student.house.name if concern.student.house else "Unassigned",
+            concern.exeat.exeat_number if concern.exeat else "—",
+            concern.get_status_display(),
+            details or "—",
+        )
+        rows.append(row)
+        if concern.status == MovementConcernReport.Status.OPEN:
+            open_rows.append(row)
+
+    return {
+        "title": "Movement Concern Reports",
+        "headers": headers,
+        "rows": rows,
+        "summary": (
+            ("Concerns raised", len(rows)),
+            ("Open", len(open_rows)),
+            ("Reviewed", len(rows) - len(open_rows)),
+        ),
+        "sections": (
+            {"title": "Open concerns", "headers": headers, "rows": open_rows},
+        ),
+        "highlights": (
+            "Concerns are raised by scanning a student ID QR code; details are optional and free text.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _conduct_normalized_report(
+    house_id=None, date_from=None, date_to=None, term_id=None
+):
+    """Compare active disciplinary records per 100 currently assigned boarders."""
+    houses = House.objects.all().order_by("display_order", "name")
+    if house_id is not None:
+        houses = houses.filter(pk=house_id)
+    boarder_counts = dict(
+        houses.annotate(
+            count=Count(
+                "students",
+                filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+                distinct=True,
+            )
+        ).values_list("pk", "count")
+    )
+    active_records = DisciplinaryRecord.objects.filter(corrected_at__isnull=True)
+    if house_id is not None:
+        active_records = active_records.filter(student__house_id=house_id)
+    if date_from:
+        active_records = active_records.filter(created_at__date__gte=date_from)
+    if date_to:
+        active_records = active_records.filter(created_at__date__lte=date_to)
+    if term_id:
+        active_records = active_records.filter(academic_term_id=term_id)
+    incident_counts = {
+        row["student__house_id"]: row
+        for row in active_records.values("student__house_id").annotate(
+            count=Count("id"),
+            major=Count(
+                "id",
+                filter=Q(severity=DisciplinaryRecord.Severity.MAJOR),
+            ),
+            critical=Count(
+                "id",
+                filter=Q(severity=DisciplinaryRecord.Severity.CRITICAL),
+            ),
+        )
+    }
+    rows = []
+    for house in houses:
+        incident = incident_counts.get(house.pk, {})
+        boarder_count = boarder_counts[house.pk]
+        incident_count = incident.get("count", 0)
+        rate = (
+            round(incident_count * 100 / boarder_count, 1)
+            if boarder_count
+            else 0
+        )
+        rows.append(
+            (
+                house.name,
+                boarder_count,
+                incident_count,
+                rate,
+                incident.get("major", 0),
+                incident.get("critical", 0),
+            )
+        )
+    rows.sort(key=lambda row: (-row[3], row[0].casefold()))
+    total_incidents = sum(row[2] for row in rows)
+    total_boarders = sum(row[1] for row in rows)
+    overall_rate = (
+        round(total_incidents * 100 / total_boarders, 1)
+        if total_boarders
+        else 0
+    )
+    return {
+        "title": "Conduct Normalized by House Size",
+        "headers": (
+            "House",
+            "Boarders",
+            "Active incidents",
+            "Per 100 boarders",
+            "Major",
+            "Critical",
+        ),
+        "rows": rows,
+        "summary": (
+            ("Active incidents", total_incidents),
+            ("Boarders", total_boarders),
+            ("Per 100 boarders", overall_rate),
+            ("Highest rate", f"{rows[0][0]} ({rows[0][3]})" if rows else "—"),
+            ("Lowest rate", f"{rows[-1][0]} ({rows[-1][3]})" if rows else "—"),
+        ),
+        "highlights": (
+            "The 'per 100 boarders' rate compares houses using the current boarding population.",
+            "Only active (uncorrected) records created within the selected period and term are counted.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def _intervention_effectiveness_report(
+    house_id=None, date_from=None, date_to=None, term_id=None
+):
+    """Summarize corrections, time to correction, and recurrence by student."""
+    records = DisciplinaryRecord.objects.all()
+    if house_id is not None:
+        records = records.filter(student__house_id=house_id)
+    if date_from:
+        records = records.filter(created_at__date__gte=date_from)
+    if date_to:
+        records = records.filter(created_at__date__lte=date_to)
+    if term_id:
+        records = records.filter(academic_term_id=term_id)
+
+    student_records = {}
+    for record in records.values(
+        "student_id",
+        "student__full_name",
+        "student__house__name",
+        "created_at",
+        "corrected_at",
+    ).order_by("student_id", "created_at"):
+        entry = student_records.setdefault(
+            record["student_id"],
+            {
+                "name": record["student__full_name"],
+                "house": record["student__house__name"] or "Unassigned",
+                "total": 0,
+                "corrected": 0,
+                "active": 0,
+                "durations": [],
+                "corrected_times": [],
+                "active_times": [],
+            },
+        )
+        entry["total"] += 1
+        corrected_at = record["corrected_at"]
+        if corrected_at:
+            entry["corrected"] += 1
+            duration = (corrected_at - record["created_at"]).total_seconds()
+            if duration >= 0:
+                entry["durations"].append(duration / 3600)
+            entry["corrected_times"].append(corrected_at)
+        else:
+            entry["active"] += 1
+            entry["active_times"].append(record["created_at"])
+
+    rows = []
+    recurrence_rows = []
+    recurrence_count = 0
+    for entry in student_records.values():
+        durations = entry["durations"]
+        average_days = (
+            round(sum(durations) / len(durations) / 24, 1) if durations else None
+        )
+        recurrent = bool(
+            entry["corrected_times"]
+            and entry["active_times"]
+            and max(entry["active_times"]) > min(entry["corrected_times"])
+        )
+        recurrence_count += int(recurrent)
+        row = (
+            entry["name"],
+            entry["house"],
+            entry["total"],
+            entry["corrected"],
+            entry["active"],
+            f"{average_days}d" if average_days is not None else "—",
+            "Yes" if recurrent else "No",
+        )
+        rows.append(row)
+        if recurrent:
+            recurrence_rows.append(row)
+    rows.sort(key=lambda row: (-row[2], row[0].casefold()))
+    recurrence_rows.sort(key=lambda row: (-row[2], row[0].casefold()))
+    corrected_total = sum(row[3] for row in rows)
+    active_total = sum(row[4] for row in rows)
+    total_records = corrected_total + active_total
+    correction_rate = (
+        round(corrected_total * 100 / total_records, 1) if total_records else 0
+    )
+    headers = (
+        "Student",
+        "House",
+        "Records",
+        "Corrected",
+        "Active",
+        "Avg time to correct",
+        "Recurrence after correction",
+    )
+    return {
+        "title": "Intervention / Correction Effectiveness",
+        "headers": headers,
+        "rows": rows,
+        "summary": (
+            ("Students", len(rows)),
+            ("Records", total_records),
+            ("Corrected", corrected_total),
+            ("Active", active_total),
+            ("Correction rate", f"{correction_rate}%"),
+            ("Recurring students", recurrence_count),
+        ),
+        "sections": (
+            {
+                "title": "Students who re-offended after a correction",
+                "headers": headers,
+                "rows": recurrence_rows,
+            },
+        ),
+        "highlights": (
+            "The system records actions taken but not intervention outcomes, so effectiveness is inferred from correction and recurrence, not measured results.",
+            "Recurrence means an active record was created after an earlier record for the same student was corrected.",
+        ),
+        "point_in_time": False,
+    }
+
+
+def get_configuration_audit(date_from=None, date_to=None):
+    """Return a date-filtered audit of privileged school configuration changes."""
+    events = ConfigurationAuditLog.objects.select_related("actor")
+    if date_from:
+        events = events.filter(created_at__date__gte=date_from)
+    if date_to:
+        events = events.filter(created_at__date__lte=date_to)
+    events = events.order_by("-created_at", "-pk")
+
+    labels = dict(ConfigurationAuditLog.Event.choices)
+    rows = []
+    actor_names = set()
+    for event in events:
+        actor = (
+            (event.actor.get_full_name() or "").strip() or event.actor.username
+            if event.actor
+            else "System"
+        )
+        actor_names.add(actor)
+        rows.append(
+            (
+                timezone.localtime(event.created_at),
+                actor,
+                labels.get(event.event, event.event),
+                event.description,
+            )
+        )
+
+    type_rows = [
+        (
+            labels.get(row["event"], row["event"]),
+            row["count"],
+        )
+        for row in events.values("event")
+        .annotate(count=Count("id"))
+        .order_by("-count", "event")
+    ]
+    return {
+        "title": "Configuration Audit Trail",
+        "headers": ("When", "Actor", "Event", "Description"),
+        "rows": rows,
+        "summary": (
+            ("Events", len(rows)),
+            ("Distinct actors", len(actor_names)),
+            ("First", rows[-1][0] if rows else "—"),
+            ("Latest", rows[0][0] if rows else "—"),
+        ),
+        "sections": (
+            {"title": "Events by type", "headers": ("Event", "Count"), "rows": type_rows},
+        ),
+        "highlights": (
+            "This log is append-only and school-wide; it is not scoped to a single house.",
+        ),
+        "point_in_time": False,
+        "record_count": len(rows),
     }

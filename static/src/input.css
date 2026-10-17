@@ -11,6 +11,19 @@
     color-scheme: dark;
   }
 
+  input:disabled,
+  select:disabled {
+    background-color: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+  }
+
+  html.dark input:disabled,
+  html.dark select:disabled {
+    background-color: #334155;
+    color: #64748b;
+  }
+
   html.dark body,
   html.dark .bg-slate-100\/80,
   html.dark .bg-slate-100\/90 {

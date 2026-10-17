@@ -21,6 +21,25 @@ from .models import (
 from .widgets import PrivateStudentPhotoInput
 
 
+# Report types that are point-in-time snapshots. They ignore the date range and
+# term filters entirely, so those controls are rendered disabled on their filter
+# bars instead of silently accepting values that have no effect.
+REPORTS_WITHOUT_PERIOD_FILTERS = frozenset({
+    "housing",
+    "placement_exceptions",
+    "room_register",
+    "data_completeness",
+})
+
+# Controls that only carry meaning for a period-scoped report.
+PERIOD_FILTER_FIELDS = ("date_from", "date_to", "term")
+
+
+def report_uses_period_filters(report_type):
+    """Return True when the given report type consumes the date/term filters."""
+    return report_type not in REPORTS_WITHOUT_PERIOD_FILTERS
+
+
 class ReportFilterForm(forms.Form):
     REPORT_CHOICES = (
         ("housing", "Boarding occupancy & placement"),
@@ -34,17 +53,26 @@ class ReportFilterForm(forms.Form):
         ("approval_turnaround", "Exeat approval turnaround"),
         ("exeat_analytics", "Exeat type & destination analytics"),
         ("room_register", "Room bed-allocation register"),
+        ("staff_activity", "Staff activity & workload"),
+        ("welfare_infirmary", "Welfare & infirmary referrals"),
+        ("data_completeness", "Data completeness / register hygiene"),
+        ("movement_concerns", "Movement concern reports"),
+        ("conduct_normalized", "Conduct normalized by house size"),
+        ("intervention_effectiveness", "Intervention effectiveness"),
     )
 
     report = forms.ChoiceField(
         choices=REPORT_CHOICES,
         required=False,
+        label="Detailed report",
         widget=forms.Select(attrs={
-            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
+            "onchange": "this.form.submit()",
         }),
     )
     date_from = forms.DateField(
         required=False,
+        label="From",
         widget=forms.DateInput(attrs={
             "type": "date",
             "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
@@ -52,6 +80,7 @@ class ReportFilterForm(forms.Form):
     )
     date_to = forms.DateField(
         required=False,
+        label="To",
         widget=forms.DateInput(attrs={
             "type": "date",
             "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
@@ -60,11 +89,21 @@ class ReportFilterForm(forms.Form):
     term = forms.ModelChoiceField(
         queryset=AcademicTerm.objects.select_related("academic_year").order_by("-start_date"),
         required=False,
+        label="Academic term",
         empty_label="All terms",
         widget=forms.Select(attrs={
             "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
         }),
     )
+
+    def __init__(self, *args, disabled_fields=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        for name in disabled_fields:
+            field = self.fields.get(name)
+            if field is None:
+                continue
+            field.disabled = True
+            field.widget.attrs["disabled"] = "disabled"
 
     def clean(self):
         cleaned_data = super().clean()

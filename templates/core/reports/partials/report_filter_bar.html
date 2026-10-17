@@ -1,0 +1,18 @@
+{% comment %}
+Shared report filter form. Pages compose this with their own print/export actions.
+Context:
+  report_filters       – bound ReportFilterForm
+  report_filter_fields – iterable of field names to render
+  filter_url_name      – URL name this form submits to
+  filter_anchor        – optional fragment appended to the action (e.g. "#report-results")
+  filter_submit_label  – optional button label (defaults to "Apply")
+{% endcomment %}
+<form method="get" action="{% url filter_url_name %}{{ filter_anchor }}" class="flex flex-wrap items-end gap-3">
+  {% include "core/reports/partials/report_filter_fields.html" %}
+  <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700">
+    {{ filter_submit_label|default:"Apply" }}
+  </button>
+  {% if report_filters.non_field_errors %}
+    <p class="w-full text-xs text-rose-600">{{ report_filters.non_field_errors|join:" " }}</p>
+  {% endif %}
+</form>

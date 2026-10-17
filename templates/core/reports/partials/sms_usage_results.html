@@ -1,0 +1,24 @@
+{% comment %}
+Paginated SMS delivery sections, rendered on its own so pagination can swap it
+in via htmx. Target: #sms-results
+{% endcomment %}
+{% for section in report.sections_page %}
+  <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <h2 class="border-b border-slate-200 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-800">{{ section.title }}</h2>
+    <div class="overflow-x-auto">
+      <table class="min-w-full text-left text-xs">
+        <thead class="text-[10px] uppercase tracking-wide text-slate-500">
+          <tr>{% for heading in section.headers %}<th class="whitespace-nowrap border-b border-slate-200 px-3 py-2.5 font-semibold">{{ heading }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for row in section.page %}
+            <tr>{% for value in row %}<td class="px-3 py-2.5 text-slate-700">{{ value|default:"—" }}</td>{% endfor %}</tr>
+          {% empty %}
+            <tr><td colspan="{{ section.headers|length }}" class="px-3 py-6 text-center text-slate-500">No matching deliveries.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% include "core/partials/pagination_controls.html" with pagination_page=section.page pagination_query=section.pagination_query pagination_parameter=section.pagination_parameter pagination_target="#sms-results" %}
+  </section>
+{% endfor %}

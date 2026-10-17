@@ -1,0 +1,175 @@
+    {% if not report_filters_valid %}
+      <div class="border-b border-rose-200 bg-rose-50 px-5 py-3 text-xs text-rose-700" role="alert">
+        <p class="font-semibold">Correct the report filters above:</p>
+        <ul class="mt-1 list-inside list-disc">
+          {% for field in report_filters %}
+            {% for error in field.errors %}<li>{{ field.label }}: {{ error }}</li>{% endfor %}
+          {% endfor %}
+          {% for error in report_filters.non_field_errors %}<li>{{ error }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    {% if report.highlights %}
+      <ul class="space-y-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-600">
+        {% for note in report.highlights %}<li>• {{ note }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+    <div class="overflow-x-auto">
+      {% if report.title == "Boarding Occupancy & Placement" %}
+        {% if report.verdict %}
+          <div class="border-b border-slate-200 bg-indigo-50/60 px-5 py-3">
+            <p class="text-sm font-bold text-slate-900">{{ report.verdict.headline }}</p>
+            <p class="mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-600">
+              {% for note in report.verdict.notes %}<span>{{ note }}</span>{% endfor %}
+            </p>
+          </div>
+        {% endif %}
+        <table class="w-full text-left text-xs" style="table-layout: fixed;">
+          <colgroup>
+            <col style="width: 17%">
+            <col style="width: 21%">
+            <col style="width: 10%">
+            <col style="width: 10%">
+            <col style="width: 10%">
+            <col style="width: 20%">
+            <col style="width: 12%">
+          </colgroup>
+          <thead class="bg-white text-[10px] uppercase tracking-wide text-slate-500">
+            <tr>
+              <th class="border-b border-slate-200 px-2 py-2.5 font-semibold">House</th>
+              <th class="border-b border-slate-200 px-2 py-2.5 font-semibold">Dormitory</th>
+              <th class="border-b border-slate-200 px-2 py-2.5 text-right font-semibold">Beds</th>
+              <th class="border-b border-slate-200 px-2 py-2.5 text-right font-semibold">Placed</th>
+              <th class="border-b border-slate-200 px-2 py-2.5 text-right font-semibold">Free</th>
+              <th class="border-b border-slate-200 px-2 py-2.5 text-right font-semibold">Fill</th>
+              <th class="border-b border-slate-200 px-2 py-2.5 font-semibold">State</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for cohort in report.cohort_groups %}
+              <tr class="border-t border-slate-200 bg-slate-50">
+                <td class="px-2 py-2 font-bold text-slate-900">{{ cohort.label }}</td>
+                <td class="px-2 py-2 text-[10px] uppercase tracking-wide text-slate-500">{{ cohort.rows|length }} dormitor{{ cohort.rows|length|pluralize:"y,ies" }}</td>
+                <td class="px-2 py-2 text-right font-semibold tabular-nums text-slate-900">{{ cohort.subtotal.capacity }}</td>
+                <td class="px-2 py-2 text-right font-semibold tabular-nums text-slate-900">{{ cohort.subtotal.placed }}</td>
+                <td class="px-2 py-2 text-right font-semibold tabular-nums text-slate-900">{% if cohort.subtotal.free > 0 %}+{% endif %}{{ cohort.subtotal.free }}</td>
+                <td class="px-2 py-2 text-right font-semibold tabular-nums text-slate-900">{{ cohort.subtotal.occupancy_display }}</td>
+                <td class="px-2 py-2 text-[10px] uppercase tracking-wide text-slate-500">subtotal</td>
+              </tr>
+              {% for row in cohort.rows %}
+                <tr class="hover:bg-slate-50">
+                  <td class="truncate px-2 py-2 text-slate-600">{{ row.house }}</td>
+                  <td class="truncate px-2 py-2 font-medium text-slate-800">{{ row.dormitory }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums text-slate-700">{{ row.capacity }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums text-slate-700">{{ row.placed }}</td>
+                  <td class="px-2 py-2 text-right tabular-nums {% if row.free < 0 %}font-semibold text-rose-600{% else %}text-slate-700{% endif %}">{% if row.free > 0 %}+{% endif %}{{ row.free }}</td>
+                  <td class="px-2 py-2">
+                    <div class="ml-auto max-w-[130px]">
+                      <span class="block text-right tabular-nums text-slate-700">{{ row.occupancy_display }}</span>
+                      <span class="mt-1 block h-1 overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-label="{{ row.house }} {{ row.dormitory }} occupancy" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ row.occupancy }}">
+                        <span class="block h-full rounded-full {% if row.occupancy > 100 %}bg-rose-500{% elif row.occupancy >= 85 %}bg-amber-500{% else %}bg-indigo-500{% endif %}" style="width: {{ row.occupancy_display }}; max-width: 100%;"></span>
+                      </span>
+                    </div>
+                  </td>
+                  <td class="px-2 py-2">
+                    <span class="inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold {% if row.tone == 'good' %}bg-emerald-50 text-emerald-700{% elif row.tone == 'watch' %}bg-amber-50 text-amber-700{% elif row.tone == 'bad' %}bg-rose-50 text-rose-700{% else %}bg-slate-100 text-slate-600{% endif %}">{{ row.state }}</span>
+                  </td>
+                </tr>
+                {% if row.rooms %}
+                  <tr>
+                    <td colspan="7" class="bg-slate-50/60 px-2 py-0">
+                      <details class="py-1">
+                        <summary class="cursor-pointer text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          Room detail · {{ row.room_placed }} of {{ row.placed }} boarders have a room recorded
+                        </summary>
+                        <ul class="mb-2 mt-1 space-y-1">
+                          {% for room in row.rooms %}
+                            <li class="flex items-center gap-3 text-xs text-slate-600">
+                              <span class="w-40 truncate">{{ room.name }}</span>
+                              <span class="w-20 text-right tabular-nums">{{ room.placed }} / {{ room.capacity }}</span>
+                              <span class="w-14 text-right tabular-nums text-slate-500">{{ room.occupancy_display }}</span>
+                              <span class="text-slate-500">{{ room.state }}</span>
+                            </li>
+                          {% endfor %}
+                        </ul>
+                      </details>
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endfor %}
+            {% empty %}
+              <tr><td colspan="7" class="px-4 py-10 text-center text-slate-500">No dormitories configured.</td></tr>
+            {% endfor %}
+            {% if report.cohort_groups %}
+              <tr class="border-t-2 border-slate-300 bg-slate-100">
+                <td class="px-2 py-2 font-bold text-slate-900">All houses</td>
+                <td class="px-2 py-2 text-[10px] uppercase tracking-wide text-slate-500">total</td>
+                <td class="px-2 py-2 text-right font-bold tabular-nums text-slate-900">{{ report.totals.capacity }}</td>
+                <td class="px-2 py-2 text-right font-bold tabular-nums text-slate-900">{{ report.totals.placed }}</td>
+                <td class="px-2 py-2 text-right font-bold tabular-nums text-slate-900">{% if report.totals.free > 0 %}+{% endif %}{{ report.totals.free }}</td>
+                <td class="px-2 py-2 text-right font-bold tabular-nums text-slate-900">{{ report.totals.occupancy_display }}</td>
+                <td class="px-2 py-2"></td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+        {% if report.attention %}
+          <div class="border-t border-slate-200 bg-amber-50/40 px-5 py-3">
+            <h3 class="text-[10px] font-bold uppercase tracking-wide text-slate-500">Needing attention</h3>
+            <ul class="mt-2 space-y-2">
+              {% for item in report.attention %}
+                <li class="flex items-start gap-2 text-xs">
+                  <span class="mt-0.5 inline-flex shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold {% if item.tone == 'bad' %}bg-rose-100 text-rose-700{% else %}bg-amber-100 text-amber-700{% endif %}">{{ item.label }}</span>
+                  <div class="min-w-0">
+                    <p class="text-slate-700">{{ item.detail }}</p>
+                    {% if item.students %}
+                      <ul class="mt-1 space-y-0.5">
+                        {% for student in item.students %}
+                          <li class="text-slate-600">{{ student.name }} <span class="text-slate-400">· {{ student.house }} · {{ student.admission_no }}</span></li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      {% else %}
+        <table class="min-w-full text-left text-xs">
+          <thead class="bg-white text-[10px] uppercase tracking-wide text-slate-500">
+            <tr>{% for heading in report.headers %}<th class="whitespace-nowrap border-b border-slate-200 px-3 py-2.5 font-semibold">{{ heading }}</th>{% endfor %}</tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% for row in report.rows_page %}
+              <tr class="hover:bg-slate-50">
+                {% for value in row %}<td class="max-w-xs whitespace-nowrap px-3 py-2.5 text-slate-700">{{ value|default:"—" }}</td>{% endfor %}
+              </tr>
+            {% empty %}
+              <tr><td colspan="{{ report.headers|length }}" class="px-4 py-10 text-center text-slate-500">No records match this report and scope.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% include "core/partials/pagination_controls.html" with pagination_page=report.rows_page pagination_query=report.rows_pagination_query pagination_parameter="page" pagination_target="#report-results-body" %}
+      {% endif %}
+    </div>
+    {% for section in report.sections_page %}
+      <div class="border-t border-slate-200">
+        <h3 class="bg-slate-50 px-5 py-3 text-xs font-bold text-slate-800">{{ section.title }}</h3>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-left text-xs">
+            <thead class="bg-white text-[10px] uppercase tracking-wide text-slate-500">
+              <tr>{% for heading in section.headers %}<th class="whitespace-nowrap border-b border-slate-200 px-3 py-2.5 font-semibold">{{ heading }}</th>{% endfor %}</tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {% for row in section.page %}
+                <tr>{% for value in row %}<td class="whitespace-nowrap px-3 py-2.5 text-slate-700">{{ value|default:"—" }}</td>{% endfor %}</tr>
+              {% empty %}
+                <tr><td colspan="{{ section.headers|length }}" class="px-4 py-6 text-center text-slate-500">No matching records.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% include "core/partials/pagination_controls.html" with pagination_page=section.page pagination_query=section.pagination_query pagination_parameter=section.pagination_parameter pagination_target="#report-results-body" %}
+      </div>
+    {% endfor %}

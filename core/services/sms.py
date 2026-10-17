@@ -183,8 +183,9 @@ def enqueue_exeat_event_sms(
             with quota_guard("max_sms_monthly", schema_name=tenant_schema):
                 if not sms_quota_allows(schema_name=tenant_schema):
                     logger.warning(
-                        "SMS delivery for %s was not queued because the tenant monthly SMS limit was reached",
-                        phone_number,
+                        "SMS delivery for exeat %s was not queued because the "
+                        "tenant monthly SMS limit was reached",
+                        exeat.pk,
                     )
                     continue
                 delivery, created = SMSDelivery.objects.get_or_create(

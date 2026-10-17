@@ -1,0 +1,177 @@
+{% load static %}
+<!-- Full incident detail (loaded into the register slide-over via HTMX) -->
+<div class="flex flex-col h-full">
+
+    <!-- Header -->
+    <div class="px-5 py-4 border-b border-slate-200/80 bg-slate-50/70">
+        <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+                <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Incident record</div>
+                <h3 class="text-sm font-bold text-slate-900 tracking-tight mt-0.5">{{ record.offense }}</h3>
+                <div class="flex flex-wrap items-center gap-1.5 mt-2">
+                    {% if record.severity == 'Critical' %}
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                            <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span> Critical Infraction
+                        </span>
+                    {% elif record.severity == 'Major' %}
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                            <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Major Offense
+                        </span>
+                    {% else %}
+                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                            <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span> Minor Offense
+                        </span>
+                    {% endif %}
+                    {% if record.is_corrected %}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                        Corrected
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            <button type="button"
+                    @click="detailOpen = false"
+                    class="shrink-0 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
+                    title="Close">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Body -->
+    <div class="flex-1 overflow-y-auto px-5 py-4 space-y-5 text-xs">
+
+        <!-- Student -->
+        <div class="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Student</div>
+            <div class="flex items-center gap-1.5">
+                {% if can_view_student_records %}
+                <a href="{% url 'core:student_record' record.student.pk %}" class="font-semibold text-slate-900 hover:text-brand-700">{{ record.student.full_name }}</a>
+                {% else %}
+                <span class="font-semibold text-slate-900">{{ record.student.full_name }}</span>
+                {% endif %}
+                <span class="text-2xs font-bold {% if record.student.gender == 'male' %}text-blue-500{% else %}text-pink-500{% endif %}">
+                    {% if record.student.gender == 'male' %}M{% else %}F{% endif %}
+                </span>
+            </div>
+            <div class="text-2xs text-slate-500 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span class="font-mono">{{ record.student.admission_no }}</span>
+                <span class="text-slate-300">•</span>
+                <span>{{ record.student.class_group.name|default:"Unassigned" }}</span>
+            </div>
+            <div class="text-2xs text-slate-500 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span class="inline-flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-slate-400"></span>
+                    {{ record.student.house.name|default:"No House" }}
+                </span>
+                <span class="text-slate-300">•</span>
+                <span>{{ record.student.dormitory.name|default:"Day Student" }}</span>
+            </div>
+        </div>
+
+        <!-- Description -->
+        <div>
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Description</div>
+            <div class="whitespace-pre-line text-slate-700 leading-relaxed">{{ record.description|default:"No description recorded." }}</div>
+        </div>
+
+        <!-- Sanction -->
+        <div>
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Action taken / Sanction</div>
+            <div class="text-slate-800 font-medium whitespace-pre-line">{{ record.action_taken }}</div>
+        </div>
+
+        <!-- Audit meta -->
+        <div class="rounded-xl border border-slate-200 divide-y divide-slate-100">
+            <div class="grid grid-cols-2 gap-3 p-3">
+                <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Logged by</div>
+                    <div class="text-slate-800 font-medium mt-0.5">{{ record.logged_by.full_name|default:"Housemaster" }}</div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Academic term</div>
+                    <div class="text-slate-800 font-medium mt-0.5">{{ record.academic_term.get_term_display|default:"Active Term" }}</div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Recorded at</div>
+                    <div class="text-slate-800 font-medium mt-0.5">{{ record.created_at|date:"d M Y, H:i" }}</div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Record ID</div>
+                    <div class="text-slate-500 font-mono text-2xs mt-0.5 break-all">{{ record.id }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Related roll call -->
+        {% if record.roll_call_entry %}
+        <div class="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Source · Roll call</div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <div class="text-slate-800 font-medium">{{ record.roll_call_entry.session.get_session_type_display }}</div>
+                    <div class="text-2xs text-slate-500 mt-0.5">{{ record.roll_call_entry.session.date|date:"d M Y" }}</div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Entry status</div>
+                    <div class="text-slate-800 font-medium mt-0.5">{{ record.roll_call_entry.get_status_display }}</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Correction trail -->
+        {% if record.is_corrected or record.correction_note %}
+        <div class="rounded-xl border border-sky-200 bg-sky-50/60 p-3.5 space-y-2">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-sky-700">Correction</div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Corrected at</div>
+                    <div class="text-slate-800 font-medium mt-0.5">{{ record.corrected_at|date:"d M Y, H:i"|default:"—" }}</div>
+                </div>
+                <div>
+                    <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Corrected by</div>
+                    <div class="text-slate-800 font-medium mt-0.5">
+                        {% if record.corrected_by %}{{ record.corrected_by.get_full_name|default:record.corrected_by.username }}{% else %}—{% endif %}
+                    </div>
+                </div>
+            </div>
+            {% if record.correction_note %}
+            <div>
+                <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Note</div>
+                <div class="whitespace-pre-line text-slate-700">{{ record.correction_note }}</div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Footer actions -->
+    <div class="px-5 py-3.5 border-t border-slate-200/80 bg-slate-50/70 flex flex-wrap items-center gap-2">
+        <a href="{% url 'core:incident_create' %}?student_id={{ record.student.id }}"
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white font-medium rounded-lg text-xs transition shadow-sm">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            Add New Infraction
+        </a>
+        <a href="{% url 'core:exeat_create' %}?student_id={{ record.student.id }}"
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium rounded-lg text-xs transition shadow-2xs">
+            <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            Issue Exeat Pass
+        </a>
+        {% if can_view_student_records %}
+        <a href="{% url 'core:student_record' record.student.pk %}"
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium rounded-lg text-xs transition shadow-2xs">
+            <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+            </svg>
+            Student Record
+        </a>
+        {% endif %}
+    </div>
+</div>

@@ -167,6 +167,34 @@ class ProductionSettingsTests(SimpleTestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_tenant_mode_ignores_allowed_hosts(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import schoolsystem.settings.production as settings; "
+                "assert settings.ALLOWED_HOSTS == ['*'], settings.ALLOWED_HOSTS",
+            ],
+            cwd=PROJECT_ROOT,
+            env={
+                **os.environ,
+                "DJANGO_SECRET_KEY": TEST_SECRET_KEY,
+                "ALLOWED_HOSTS": "acme.example.org,portal.example.org",
+                "TENANCY_ENABLED": "true",
+                "DATABASE_PROFILE": "neon",
+                "PGHOST": "neon.example.neon.tech",
+                "PGDATABASE": "neon_db",
+                "PGUSER": "neon_user",
+                "PGPASSWORD": "test-password",
+                "PGSSLMODE": "require",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_production_settings_reject_the_local_database_profile(self):
         result = self.run_settings_import(
             secret_key=TEST_SECRET_KEY,
@@ -187,14 +215,14 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Production requires PGSSLMODE", result.stderr)
 
-    def test_production_settings_default_to_host_only_non_preload_hsts(self):
+    def test_production_settings_default_to_year_long_host_only_hsts(self):
         result = self.run_settings_import(
             secret_key=TEST_SECRET_KEY,
             allowed_hosts="school.example.org",
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("0 False False", result.stdout)
+        self.assertIn("31536000 False False", result.stdout)
 
     def test_hsts_preload_requires_year_long_subdomain_policy(self):
         result = self.run_settings_import(

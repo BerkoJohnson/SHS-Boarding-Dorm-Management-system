@@ -1,10 +1,7 @@
 {% if pagination_page.paginator.num_pages > 1 %}
 <nav class="table-pagination flex items-center justify-between gap-3 px-4 py-2.5 border-t border-slate-200 bg-slate-50/75 text-xs"
      aria-label="Table pagination">
-    <span class="text-slate-500">
-        Showing {{ pagination_page.start_index }}–{{ pagination_page.end_index }}
-        of {{ pagination_page.paginator.count }}
-    </span>
+    <span class="text-slate-500">Showing {{ pagination_page.start_index }}–{{ pagination_page.end_index }} of {{ pagination_page.paginator.count }}</span>
     <div class="flex items-center gap-2">
         {% if pagination_page.has_previous %}
         <a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}{{ pagination_parameter }}={{ pagination_page.previous_page_number }}"

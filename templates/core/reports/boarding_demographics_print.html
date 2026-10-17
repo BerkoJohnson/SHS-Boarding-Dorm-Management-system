@@ -44,7 +44,8 @@
     <h1>{{ report.title }}</h1>
     <p class="meta">
       <strong>Scope:</strong> {% if user_house_scope %}{{ user_house_scope.name }}{% else %}School-wide{% endif %} ·
-      <strong>Generated:</strong> {{ report_generated_at|date:"M d, Y H:i T" }}
+      <strong>Generated:</strong> {{ report_generated_at|date:"M d, Y H:i T" }}<br>
+      <strong>Snapshot:</strong> live population as at {{ report_generated_at|date:"M d, Y H:i T" }} — not bound to an academic year or term.
     </p>
     {% for group in report.distribution %}
       <h2>{{ group.title }}</h2>

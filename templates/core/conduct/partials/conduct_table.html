@@ -3,114 +3,109 @@
 <span id="conduct-total-count" hx-swap-oob="true" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
     {{ total_matching }} Total
 </span>
+{% include "core/conduct/partials/conduct_stats.html" %}
 {% endif %}
 <div class="overflow-x-auto min-h-[340px] pb-16">
-    <table class="w-full text-left border-collapse">
+    <table class="w-full min-w-[860px] table-fixed text-left border-collapse">
         <thead>
             <tr class="bg-slate-50/75 border-b border-slate-200 text-slate-500 font-semibold text-2xs uppercase tracking-wider select-none">
-                <th class="px-3 py-2.5">Student & Details</th>
-                <th class="px-3 py-2.5">House & Dorm</th>
-                <th class="px-3 py-2.5">Offense & Description</th>
-                <th class="px-3 py-2.5">Severity</th>
-                <th class="px-3 py-2.5">Action Taken / Sanction</th>
-                <th class="px-3 py-2.5">Logged By</th>
-                <th class="px-3 py-2.5">Date</th>
-                <th class="w-10 px-3 py-2.5 text-right"></th>
+                <th class="w-[24%] px-3 py-2.5">Student & House</th>
+                <th class="w-[18%] px-3 py-2.5">Offense</th>
+                <th class="w-[10%] px-3 py-2.5">Severity</th>
+                <th class="w-[22%] px-3 py-2.5">Sanction</th>
+                <th class="w-[18%] px-3 py-2.5">Logged</th>
+                <th class="w-[8%] px-3 py-2.5 text-right"></th>
             </tr>
         </thead>
         <tbody class="divide-y divide-slate-100 text-xs font-normal text-slate-700">
             {% for record in records %}
             <tr class="hover:bg-slate-50/80 transition-colors group">
-                
-                <!-- Student & Details -->
-                <td class="px-3 py-2.5 whitespace-nowrap">
-                    <div class="font-medium text-slate-900 flex items-center gap-1.5">
+
+                <!-- Student & House -->
+                <td class="px-3 py-2.5">
+                    <div class="font-medium text-slate-900 flex items-center gap-1.5 min-w-0">
                         {% if can_view_student_records %}
-                        <a href="{% url 'core:student_record' record.student.pk %}" class="hover:text-brand-700">{{ record.student.full_name }}</a>
+                        <a href="{% url 'core:student_record' record.student.pk %}" class="truncate hover:text-brand-700">{{ record.student.full_name }}</a>
                         {% else %}
-                        <span>{{ record.student.full_name }}</span>
+                        <span class="truncate">{{ record.student.full_name }}</span>
                         {% endif %}
                         {% if record.student.gender == 'male' %}
-                            <span class="text-2xs text-blue-500 font-bold">M</span>
+                            <span class="shrink-0 text-2xs text-blue-500 font-bold">M</span>
                         {% else %}
-                            <span class="text-2xs text-pink-500 font-bold">F</span>
+                            <span class="shrink-0 text-2xs text-pink-500 font-bold">F</span>
                         {% endif %}
                     </div>
                     <div class="text-2xs text-slate-400 flex items-center gap-1.5 mt-0.5">
-                        <span class="font-mono">{{ record.student.admission_no }}</span>
-                        <span>•</span>
-                        <span>{{ record.student.class_group.name|default:"Unassigned" }}</span>
+                        <span class="font-mono truncate">{{ record.student.admission_no }}</span>
+                        <span class="shrink-0">•</span>
+                        <span class="truncate">{{ record.student.class_group.name|default:"Unassigned" }}</span>
+                    </div>
+                    <div class="text-2xs text-slate-400 flex items-center gap-1.5 mt-0.5">
+                        <span class="w-2 h-2 rounded-full bg-slate-400 shrink-0"></span>
+                        <span class="truncate">{{ record.student.house.name|default:"No House" }}</span>
+                        <span class="shrink-0">•</span>
+                        <span class="truncate" title="{{ record.student.dormitory.name }}">
+                            {{ record.student.dormitory.name|default:"Day Student" }}
+                        </span>
                     </div>
                 </td>
 
-                <!-- House & Dorm -->
-                <td class="px-3 py-2.5 whitespace-nowrap">
-                    <div class="text-slate-800 font-medium flex items-center gap-1.5">
-                        <span class="w-2 h-2 rounded-full bg-slate-400"></span>
-                        <span>{{ record.student.house.name|default:"No House" }}</span>
-                    </div>
-                    <div class="text-2xs text-slate-400 truncate max-w-[130px]" title="{{ record.student.dormitory.name }}">
-                        {{ record.student.dormitory.name|default:"Day Student" }}
-                    </div>
-                </td>
-
-                <!-- Offense & Description -->
+                <!-- Offense -->
                 <td class="px-3 py-2.5">
-                    <div class="font-semibold text-slate-900">{{ record.offense }}</div>
+                    <button type="button"
+                            hx-get="{% url 'core:incident_detail' record.pk %}"
+                            hx-target="#incident-detail-panel"
+                            hx-swap="innerHTML"
+                            hx-indicator="#incident-detail-loading"
+                            @click="$dispatch('open-incident-detail')"
+                            class="block w-full truncate font-semibold text-slate-900 hover:text-brand-700 transition text-left"
+                            title="View full incident: {{ record.offense }}">
+                        {{ record.offense }}
+                    </button>
                     {% if record.is_corrected %}
                     <span class="inline-flex mt-1 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700 border border-sky-200"
-                          title="{{ record.correction_note }}">
-                        Corrected · {{ record.corrected_at|date:"d M Y H:i" }}
+                          title="Corrected {{ record.corrected_at|date:'d M Y H:i' }}">
+                        Corrected
                     </span>
                     {% endif %}
                     {% if record.description %}
-                    <div class="text-2xs text-slate-400 max-w-xs truncate mt-0.5" title="{{ record.description }}">
+                    <div class="text-2xs text-slate-400 truncate mt-0.5" title="{{ record.description }}">
                         {{ record.description }}
                     </div>
                     {% endif %}
-                    {% if record.correction_note %}
-                    <div class="text-[10px] text-sky-700 max-w-xs mt-0.5">
-                        {{ record.correction_note }}
-                        {% if record.corrected_by %} — {{ record.corrected_by.get_full_name|default:record.corrected_by.username }}{% endif %}
-                    </div>
-                    {% endif %}
                 </td>
 
-                <!-- Severity Badge -->
+                <!-- Severity -->
                 <td class="px-3 py-2.5 whitespace-nowrap">
                     {% if record.severity == 'Critical' %}
-                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                        <span class="inline-flex items-center gap-1.5 text-2xs font-semibold text-rose-700" title="Critical Infraction">
                             <span class="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
-                            Critical Infraction
+                            Critical
                         </span>
                     {% elif record.severity == 'Major' %}
-                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                        <span class="inline-flex items-center gap-1.5 text-2xs font-semibold text-amber-700" title="Major Offense">
                             <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                            Major Offense
+                            Major
                         </span>
                     {% else %}
-                        <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-2xs font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                        <span class="inline-flex items-center gap-1.5 text-2xs font-semibold text-sky-700" title="Minor Offense">
                             <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
-                            Minor Offense
+                            Minor
                         </span>
                     {% endif %}
                 </td>
 
-                <!-- Action Taken -->
+                <!-- Sanction -->
                 <td class="px-3 py-2.5">
-                    <div class="text-slate-800 font-medium">{{ record.action_taken }}</div>
+                    <div class="text-slate-800 font-medium truncate" title="{{ record.action_taken }}">
+                        {{ record.action_taken }}
+                    </div>
                 </td>
 
-                <!-- Logged By -->
+                <!-- Logged -->
                 <td class="px-3 py-2.5 whitespace-nowrap">
                     <div class="text-slate-700 font-medium">{{ record.logged_by.full_name|default:"Housemaster" }}</div>
-                    <div class="text-2xs text-slate-400">{{ record.academic_term.get_term_display|default:"Active Term" }}</div>
-                </td>
-
-                <!-- Date -->
-                <td class="px-3 py-2.5 whitespace-nowrap">
-                    <div class="text-slate-800 font-medium">{{ record.created_at|date:"d M Y" }}</div>
-                    <div class="text-2xs text-slate-400">{{ record.created_at|date:"H:i" }}</div>
+                    <div class="text-2xs text-slate-400">{{ record.created_at|date:"d M Y" }} · {{ record.created_at|date:"H:i" }}</div>
                 </td>
 
                 <!-- Context Menu -->
@@ -168,6 +163,21 @@
                                 Conduct Record
                             </div>
 
+                            <!-- View Full Incident -->
+                            <button type="button"
+                                    hx-get="{% url 'core:incident_detail' record.pk %}"
+                                    hx-target="#incident-detail-panel"
+                                    hx-swap="innerHTML"
+                                    hx-indicator="#incident-detail-loading"
+                                    @click="menuOpen = false; $dispatch('open-incident-detail')"
+                                    class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-brand-600 transition text-left">
+                                <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                </svg>
+                                <span>View Full Incident</span>
+                            </button>
+
                             <!-- New Exeat for student -->
                             <a href="{% url 'core:exeat_create' %}?student_id={{ record.student.id }}" 
                                class="flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 hover:text-brand-600 transition">
@@ -193,7 +203,7 @@
             </tr>
             {% empty %}
             <tr>
-                <td colspan="8" class="px-6 py-12 text-center text-slate-400">
+                <td colspan="6" class="px-6 py-12 text-center text-slate-400">
                     <div class="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
                         <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
@@ -201,7 +211,7 @@
                     </div>
                     <div class="font-medium text-slate-700 text-sm">No disciplinary records found</div>
                     <p class="text-2xs text-slate-400 mt-1 max-w-sm mx-auto">
-                        {% if query or selected_severity or selected_house %}
+                        {% if query or selected_severity or selected_house or period_scope_active %}
                             No incidents match the active search or filters. Try resetting criteria.
                         {% else %}
                             There are currently no conduct infractions or disciplinary records logged.
@@ -220,6 +230,8 @@
 <div class="px-4 py-2.5 bg-slate-50/75 border-t border-slate-200 flex items-center justify-between text-2xs text-slate-500">
     <div class="flex items-center gap-2">
         <span>Showing <strong>{{ records|length }}</strong> of <strong>{{ total_matching }}</strong> incident logs</span>
+        <span class="text-slate-300">·</span>
+        <span>Scope: <strong class="font-semibold text-slate-600">{{ period_label|default:"All time" }}</strong></span>
     </div>
     {% if active_filters_count %}
     <div class="flex items-center gap-1.5">

@@ -101,7 +101,7 @@ Create a `.env` file in the project root (`c:\RebuildEden\project 1\.env`).
 | `DJANGO_SECRET_KEY` | Cryptographic signing key (min. 50 characters, 5+ unique characters) | *None (Required)* | 64+ random characters |
 | `DEBUG` | Enable Django debug mode. Defaults to `True` only under `schoolsystem.settings.development`; `schoolsystem.settings.production` forces `False` | `True` (development only) | `False` (Production) / `True` (Dev) |
 | `DJANGO_SETTINGS_MODULE` | Settings module to load. `manage.py` auto-selects `schoolsystem.settings.production` when `RENDER=true` or `PORT` is set, otherwise `schoolsystem.settings.development` | *Auto-detected* | Set explicitly only to override |
-| `ALLOWED_HOSTS` | Comma-separated accepted hostnames. Development defaults to `127.0.0.1,localhost` (or `*` when `TENANCY_ENABLED=true`); production requires an explicit list and allows `*` only when tenancy is enabled | `127.0.0.1,localhost` (development) | Production domain list |
+| `ALLOWED_HOSTS` | Comma-separated accepted hostnames. Development defaults to `127.0.0.1,localhost`. **In multi-tenant production (`TENANCY_ENABLED=true`) this is ignored and forced to `*`** — tenant hostnames are validated against the `Domain` table by the routing middleware. In single-tenant production it is required and must be an explicit list | `127.0.0.1,localhost` (development) | Single-tenant: production domain list. Multi-tenant: leave empty |
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated HTTPS origins trusted for form submissions | *Empty* | `https://your-domain.onrender.com` |
 | `DATABASE_PROFILE` | Database connection backend profile: `local` or `neon` | `local` | `local` (Dev) / `neon` (Prod) |
 | `TENANCY_ENABLED` | Toggle multi-school schema isolation (`true`/`false`) | `false` | `true` (Multi-tenant) |
@@ -137,9 +137,19 @@ Create a `.env` file in the project root (`c:\RebuildEden\project 1\.env`).
 | `AWS_ACCESS_KEY_ID` | Neon S3 Access Key ID | *Empty* | Provisioned access key |
 | `AWS_SECRET_ACCESS_KEY` | Neon S3 Secret Key | *Empty* | Provisioned secret key |
 | `AWS_REGION` | Neon S3 Region | *Empty* | E.g. `us-east-2` |
+| **Email** | | | |
+| `EMAIL_BACKEND` | Django mail transport. Defaults to the console backend, which prints messages to the logs and never sends real mail | `django.core.mail.backends.console.EmailBackend` | A real SMTP/API backend for production |
+| `DEFAULT_FROM_EMAIL` | `From:` address for outgoing mail | `no-reply@localhost` | `no-reply@your-domain` |
+| **Rate Limiting & Cache** | | | |
+| `CACHE_BACKEND` | Cache backend used for rate-limit counters. `LocMemCache` is per-process, so multiple workers each keep their own counters | `django.core.cache.backends.locmem.LocMemCache` | Shared backend (e.g. `django.core.cache.backends.redis.RedisCache`) |
+| `CACHE_LOCATION` | Cache location/URL consumed by `CACHE_BACKEND` | `schoolsystem-cache` | Redis URL when a shared cache is used |
+| `TRUSTED_PROXY_COUNT` | Trusted reverse-proxy hops used to pick the client IP from `X-Forwarded-For` for rate limiting. Render adds one hop, so `1` is correct | `1` | `1` |
+| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW` | Max login attempts per client IP per window (seconds) | `10` / `300` | As required |
+| `PUBLIC_REPORT_RATE_LIMIT` / `PUBLIC_REPORT_RATE_WINDOW` | Max public "report a concern" submissions per IP per window (seconds) | `5` / `3600` | As required |
+| `STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS` | Lifetime of public student-ID QR links in days (`0` = never expire) | `0` | As required |
 | **Security Hardening** | | | |
 | `CSP_REPORT_URI` | Endpoint appended as `report-uri` to the CSP report-only header. No collector is built in; point it at your own endpoint | *Empty* | Safe relative path or HTTPS collector URL |
-| `SECURE_HSTS_SECONDS` | HTTP Strict Transport Security duration (seconds) | `0` | `31536000` (1 year in production) |
+| `SECURE_HSTS_SECONDS` | HTTP Strict Transport Security duration (seconds). Production defaults to one year; use `0` (or a short value) for a staging host you may still need to reach over plain HTTP | `31536000` (production settings) | `0` (staging) / `31536000` (production) |
 | `SECURE_HSTS_INCLUDE_SUBDOMAINS` | Enforce HSTS on all subdomains | `false` | `true` (when all domains use HTTPS) |
 | `SECURE_HSTS_PRELOAD` | Submit domain to browser HSTS preload list | `false` | `true` (only for verified HTTPS apex) |
 | **Staging Safety** | | | |
@@ -190,6 +200,8 @@ REDIS_URL=redis://127.0.0.1:6379/0
 TENANCY_ENABLED=false
 ```
 
+> A complete, commented template covering every supported variable is provided in `.env.example` — copy it to `.env` and fill in the values.
+
 #### Step 4: Create the Local PostgreSQL Database
 Open PostgreSQL CLI (`psql`) or pgAdmin and run:
 ```sql
@@ -227,6 +239,21 @@ Keep four separate PowerShell terminals open:
 
 Access the application in your browser at `http://127.0.0.1:8000/`.
 
+### 3.4 Running the Test Suite
+
+Tests run against PostgreSQL (SQLite cannot exercise schema isolation).
+
+* **Core / single-tenant suites** (default test settings, tenancy forced off):
+  ```powershell
+  .\.venv\Scripts\python.exe .\manage.py test --settings=schoolsystem.settings.test
+  ```
+* **Multi-tenant / platform suites** (tenancy enabled; these are skipped under the settings above):
+  ```powershell
+  .\.venv\Scripts\python.exe .\manage.py test tenancy --settings=schoolsystem.settings.tenancy_test
+  ```
+
+`schoolsystem.settings.test` uses the `test_schoolsystem_core` database and `schoolsystem.settings.tenancy_test` uses `test_schoolsystem_tenancy`, so the two runs do not collide. The schema-isolation integration test and the SQL-backed platform/billing tests only execute under the tenancy-enabled settings.
+
 ---
 
 ## 4. Cloud Production Deployment (Render + Neon)
@@ -243,6 +270,9 @@ Access the application in your browser at `http://127.0.0.1:8000/`.
      * Username (`PGUSER`)
      * Password (`PGPASSWORD`)
      * Port (`5432`)
+
+> **Use the direct (non-pooler) `PGHOST`.** Multi-tenancy keeps each school in its own PostgreSQL schema and depends on a session-level `search_path`. Neon's pooled host (the one containing `-pooler`) runs PgBouncer in transaction mode and does **not** preserve that session state between statements, so a request could resolve against another school's schema. Never point `PGHOST` at a `-pooler` host — not for the web service, and not for migrations.
+
 3. **Configure S3 Object Storage (Neon Storage)**:
    * Navigate to **Storage** in your Neon project dashboard.
    * Create a private bucket (e.g., `uploads`).
@@ -252,6 +282,8 @@ Access the application in your browser at `http://127.0.0.1:8000/`.
 ### 4.2 Render Services Architecture
 
 A complete deployment consists of three Render services and one Redis instance:
+
+> The repository ships a `render.yaml` Blueprint that encodes the web service, its build and start commands, the health-check path and the environment-variable names (secrets are marked `sync: false`). Apply it via **Dashboard → New → Blueprint**, or configure the services manually as described below.
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -332,7 +364,7 @@ PGPORT=5432
 PGSSLMODE=require
 REDIS_URL=redis://red-xxxxxxxx:6379
 DJANGO_SECRET_KEY=at-least-50-random-characters-kept-strictly-secret
-ALLOWED_HOSTS=your-app.onrender.com,portal.yourschool.com
+# ALLOWED_HOSTS is ignored while TENANCY_ENABLED=True; tenant hosts come from the Domain table
 CSRF_TRUSTED_ORIGINS=https://your-app.onrender.com,https://portal.yourschool.com
 MEDIA_STORAGE_BACKEND=neon_s3
 NEON_STORAGE_BUCKET=uploads
@@ -344,12 +376,20 @@ SMS_ENABLED=True
 SMS_ONLINE_GH_API_KEY=your_smsonlinegh_key
 SMS_SENDER_ID=ATSEC
 TENANCY_ENABLED=True
+EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+CACHE_BACKEND=django.core.cache.backends.redis.RedisCache
+CACHE_LOCATION=redis://red-xxxxxxxx:6379/1
+TRUSTED_PROXY_COUNT=1
 # Optional security hardening (see section 2.1)
 SECURE_HSTS_SECONDS=31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS=true
 SECURE_HSTS_PRELOAD=true
 CSP_REPORT_URI=https://your-csp-collector.example/report
 ```
+
+> **Staging note:** a staging host may still need plain-HTTP access, so set `SECURE_HSTS_SECONDS=0` (leaving `SECURE_HSTS_INCLUDE_SUBDOMAINS` and `SECURE_HSTS_PRELOAD` at their `false` defaults) until HTTPS is confirmed, then raise it for production. `EMAIL_BACKEND` defaults to the console backend, which never sends real mail; set a real transport only when outgoing mail is required. `CACHE_BACKEND` defaults to a per-process `LocMemCache`; point it at a shared backend (as above) so rate limits apply across all workers.
+
+> **Tenant hostnames are not configured here.** Under `TENANCY_ENABLED=True`, `ALLOWED_HOSTS` is ignored (forced to `*`) and each school's hostname is attached to the `Domain` table with `add_school_domain` (see section 6.2, Step 4). See section 2.1 for the `ALLOWED_HOSTS` reference row.
 
 ---
 
@@ -450,14 +490,25 @@ Creates the PostgreSQL schema, runs tenant migrations, seeds the default `School
 ```
 
 #### Step 4: Attach Secondary Domains or Aliases (Optional)
+Attach additional hostnames to an already-provisioned school. `add_school_domain` registers each hostname on the `Domain` table as verified; under tenancy that table is the **only** host gate (Django's `ALLOWED_HOSTS` is forced to `*`), so a hostname resolves only if it has its own verified row here. There are **no wildcards** — every hostname needs its own entry.
+
 ```powershell
+# Attach a second domain to an existing school
 .\.venv\Scripts\python.exe .\manage.py add_school_domain `
   --schema "achimota_shs" `
   --domain "portal.achimota.edu.gh" `
   --confirm-domain-verified `
   --settings=schoolsystem.settings.production
+
+# Attach several schools' domains across multiple apex domains
+.\.venv\Scripts\python.exe .\manage.py add_school_domain --schema atebubu_shs  --domain atebubushs.ecreativesys.com  --confirm-domain-verified
+.\.venv\Scripts\python.exe .\manage.py add_school_domain --schema amanten_shs  --domain amantenshs.ecreativesys.com  --confirm-domain-verified
+.\.venv\Scripts\python.exe .\manage.py add_school_domain --schema achimota_shs --domain dorm.achimotashs.com          --confirm-domain-verified
+# ecreativesys.com -> whichever tenant owns the apex (or leave it out)
 ```
 *(Add `--primary` if switching this domain to be the canonical primary address.)*
+
+> **Host routing reminder:** while `TENANCY_ENABLED=true`, `ALLOWED_HOSTS` is ignored (always `*`) — see section 4.3. Routing is decided solely by the `Domain` table, so an apex like `ecreativesys.com` and each subdomain like `atebubushs.ecreativesys.com` must each have their own verified row. A hostname with no row returns `404 "No active school is configured for this hostname."`
 
 #### Step 5: Seed Synthetic Pilot Rehearsal Data (Optional)
 To test workflows without real student records, populate 100 fictional learners, houses, dormitories, and test staff accounts:
@@ -1136,8 +1187,11 @@ Header names are matched case-insensitively and accept common aliases (for examp
   ```
   To test actual tenant-schema behavior, run the tenancy PostgreSQL integration tests with tenancy enabled and a PostgreSQL database:
   ```powershell
+  $env:TENANCY_ENABLED = "true"
+  .\.venv\Scripts\python.exe .\manage.py test tenancy.test_tenant_provisioning_integration
   .\.venv\Scripts\python.exe .\manage.py test tenancy.test_postgres_integration
   ```
+  The `Tenant PostgreSQL integration` GitHub Actions workflow runs a focused fresh-tenant provisioning test against PostgreSQL. It creates a tenant through the normal provisioning command, verifies that `core_academicyear`, `core_house`, and `auth_user` exist in the tenant schema, and performs an ORM query there. Require this check in repository branch protection before merging or deploying tenancy-related changes.
 * **For interactive shell queries in multi-tenant mode**: Activate a tenant schema before querying:
   ```powershell
   python manage.py runschema shell --schema achimota_shs

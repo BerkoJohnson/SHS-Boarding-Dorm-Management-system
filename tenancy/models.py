@@ -509,7 +509,7 @@ class PlatformAuditLog(models.Model):
     )
 
     class Meta:
-        ordering = ["-timestamp"]
+        ordering = ["-timestamp", "-id"]
         verbose_name = "platform audit log"
         verbose_name_plural = "platform audit logs"
         default_permissions = ("add", "view")

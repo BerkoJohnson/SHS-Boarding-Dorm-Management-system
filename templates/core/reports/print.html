@@ -28,6 +28,18 @@
     th { background: #e2e8f0; font-size: 10px; text-transform: uppercase; }
     tr { break-inside: avoid; }
     .empty { padding: 24px; text-align: center; color: #64748b; }
+    .verdict { margin: 0 0 14px; padding: 10px 12px; border: 1px solid #c7d2fe; background: #eef2ff; font-size: 11px; }
+    .verdict strong { display: block; margin-bottom: 3px; font-size: 14px; }
+    .verdict span { margin-right: 14px; color: #475569; }
+    .num { text-align: right; }
+    tr.cohort-row td { background: #e2e8f0; font-weight: 700; }
+    tr.total-row td { background: #cbd5e1; font-weight: 700; }
+    .free-negative { color: #9f1239; font-weight: 700; }
+    .state { font-size: 10px; text-transform: uppercase; }
+    .room-detail { color: #475569; font-size: 10px; }
+    .attention { margin: 16px 0 0; padding: 10px 12px; border: 1px solid #fcd34d; background: #fffbeb; font-size: 11px; }
+    .attention h2 { margin: 0 0 6px; font-size: 12px; }
+    .attention ul { margin: 0; padding-left: 18px; }
     @page { size: landscape; margin: 12mm; }
     @media print {
       body { background: #fff; }
@@ -72,7 +84,7 @@
       {% endif %}
       <strong>Generated:</strong> {{ report_generated_at|date:"M d, Y H:i T" }}
     </p>
-    <p class="summary">{{ report.record_count }} record{{ report.record_count|pluralize }}</p>
+    <p class="summary">{% if report.record_label %}{{ report.record_label }}{% else %}{{ report.record_count }} record{{ report.record_count|pluralize }}{% endif %}</p>
     {% if report.summary %}
       <div class="summary-grid">
         {% for label, value in report.summary %}
@@ -83,6 +95,85 @@
     {% if report.highlights %}
       <ul class="highlights">{% for note in report.highlights %}<li>{{ note }}</li>{% endfor %}</ul>
     {% endif %}
+    {% if report.verdict %}
+      <div class="verdict">
+        <strong>{{ report.verdict.headline }}</strong>
+        {% for note in report.verdict.notes %}<span>{{ note }}</span>{% endfor %}
+      </div>
+    {% endif %}
+    {% if report.cohort_groups %}
+      <table>
+        <thead>
+          <tr>
+            <th>House</th>
+            <th>Dormitory</th>
+            <th class="num">Beds</th>
+            <th class="num">Placed</th>
+            <th class="num">Free</th>
+            <th class="num">Fill</th>
+            <th>State</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for cohort in report.cohort_groups %}
+            <tr class="cohort-row">
+              <td>{{ cohort.label }}</td>
+              <td>{{ cohort.rows|length }} dormitor{{ cohort.rows|length|pluralize:"y,ies" }}</td>
+              <td class="num">{{ cohort.subtotal.capacity }}</td>
+              <td class="num">{{ cohort.subtotal.placed }}</td>
+              <td class="num">{% if cohort.subtotal.free > 0 %}+{% endif %}{{ cohort.subtotal.free }}</td>
+              <td class="num">{{ cohort.subtotal.occupancy_display }}</td>
+              <td>subtotal</td>
+            </tr>
+            {% for row in cohort.rows %}
+              <tr>
+                <td>{{ row.house }}</td>
+                <td>{{ row.dormitory }}</td>
+                <td class="num">{{ row.capacity }}</td>
+                <td class="num">{{ row.placed }}</td>
+                <td class="num{% if row.free < 0 %} free-negative{% endif %}">{% if row.free > 0 %}+{% endif %}{{ row.free }}</td>
+                <td class="num">{{ row.occupancy_display }}</td>
+                <td class="state">{{ row.state }}</td>
+              </tr>
+              {% if row.rooms %}
+                <tr>
+                  <td colspan="7" class="room-detail">
+                    Room detail · {{ row.room_placed }} of {{ row.placed }} boarders have a room recorded:
+                    {% for room in row.rooms %}{{ room.name }} {{ room.placed }}/{{ room.capacity }} ({{ room.occupancy_display }}, {{ room.state }}){% if not forloop.last %} · {% endif %}{% endfor %}
+                  </td>
+                </tr>
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+          <tr class="total-row">
+            <td>All houses</td>
+            <td>total</td>
+            <td class="num">{{ report.totals.capacity }}</td>
+            <td class="num">{{ report.totals.placed }}</td>
+            <td class="num">{% if report.totals.free > 0 %}+{% endif %}{{ report.totals.free }}</td>
+            <td class="num">{{ report.totals.occupancy_display }}</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+      {% if report.attention %}
+        <div class="attention">
+          <h2>Needing attention</h2>
+          <ul>
+            {% for item in report.attention %}
+              <li>
+                <strong>{{ item.label }}:</strong> {{ item.detail }}
+                {% if item.students %}
+                  <ul>
+                    {% for student in item.students %}<li>{{ student.name }} · {{ student.house }} · {{ student.admission_no }}</li>{% endfor %}
+                  </ul>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    {% else %}
     <table>
       <thead>
         <tr>{% for heading in report.headers %}<th>{{ heading }}</th>{% endfor %}</tr>
@@ -95,6 +186,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
     {% for section in report.sections %}
       <h2>{{ section.title }}</h2>
       <table>

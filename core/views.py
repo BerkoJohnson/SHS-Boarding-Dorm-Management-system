@@ -57,6 +57,7 @@ from .forms import (
     ExeatReconciliationForm,
     DisciplinaryRecordForm,
     ReportFilterForm,
+    report_uses_period_filters,
     StudentRegistrationForm,
     StudentRosterUploadForm,
     MovementConcernReportForm,
@@ -91,6 +92,7 @@ from .services.sms import enqueue_exeat_event_sms
 from .services.student_import import import_student_roster
 from .services.student_id import make_qr_data_uri
 from .tasks import generate_student_id_export
+from .throttling import client_ip, is_rate_limited
 
 
 STUDENT_ID_LAYOUTS = {
@@ -104,6 +106,19 @@ class StaffLoginView(auth_views.LoginView):
     template_name = "registration/login.html"
     redirect_authenticated_user = True
 
+    def post(self, request, *args, **kwargs):
+        if is_rate_limited(
+            "login",
+            client_ip(request),
+            settings.LOGIN_RATE_LIMIT,
+            settings.LOGIN_RATE_WINDOW,
+        ):
+            return HttpResponse(
+                "Too many login attempts. Please wait and try again.",
+                status=429,
+            )
+        return super().post(request, *args, **kwargs)
+
 
 def paginate_queryset(queryset, request, page_parameter='page', per_page=10):
     """Paginate a queryset while retaining the request's other query parameters."""
@@ -113,6 +128,63 @@ def paginate_queryset(queryset, request, page_parameter='page', per_page=10):
     query_parameters = request.GET.copy()
     query_parameters.pop(page_parameter, None)
     return page_obj, query_parameters.urlencode()
+
+
+REPORT_PAGE_SIZE = 10
+
+
+def _drop_pagination_params(params):
+    """Remove every table page parameter from a QueryDict (in place) and return it."""
+    for key in list(params):
+        if key == "page" or key.endswith("_page"):
+            params.pop(key, None)
+    return params
+
+
+def strip_pagination_params(request):
+    """Return the request's query string without any table page parameters.
+
+    Used for print/export links so a reader on page 3 still prints (or exports)
+    the whole report rather than the page they happen to be looking at.
+    """
+    return _drop_pagination_params(request.GET.copy()).urlencode()
+
+
+def paginate_report(report, request, per_page=REPORT_PAGE_SIZE):
+    """Add paged views of a report's main table and its sections.
+
+    The report dict keeps its complete ``rows`` and ``sections`` lists so print
+    output and record counts are unaffected. The on-screen templates read
+    ``rows_page`` and ``sections_page`` instead; each section page has its own
+    parameter (``section1_page``, ``section2_page`` ...) so tables paginate
+    independently.
+    """
+    paged = dict(report)
+
+    rows = list(report.get("rows") or ())
+    rows_page, rows_query = paginate_queryset(
+        rows, request, page_parameter="page", per_page=per_page
+    )
+    paged["rows_page"] = rows_page
+    paged["rows_pagination_query"] = rows_query
+
+    section_pages = []
+    for index, section in enumerate(report.get("sections") or (), start=1):
+        parameter = f"section{index}_page"
+        section_page, section_query = paginate_queryset(
+            list(section.get("rows") or ()),
+            request,
+            page_parameter=parameter,
+            per_page=per_page,
+        )
+        section_pages.append({
+            **section,
+            "page": section_page,
+            "pagination_query": section_query,
+            "pagination_parameter": parameter,
+        })
+    paged["sections_page"] = section_pages
+    return paged
 
 
 
@@ -890,8 +962,11 @@ def student_photo_view(request, student_pk):
 
 
 @never_cache
+@tenant_feature_required("student_id_cards")
 def public_student_photo_view(request, token):
     student = get_object_or_404(Student, public_token=token)
+    if student.public_token_expired:
+        raise Http404("This student ID link has expired.")
     if not student.photo:
         raise Http404("No student photo is available.")
     return _student_photo_response(student)
@@ -935,12 +1010,27 @@ def student_id_card_view(request, student_pk):
 def student_rotate_public_token_view(request, student_pk):
     student = get_object_or_404(Student, pk=student_pk)
     student.public_token = uuid.uuid4()
-    student.save(update_fields=["public_token", "updated_at"])
+    student.public_token_expires_at = _public_token_expiry()
+    student.save(
+        update_fields=["public_token", "public_token_expires_at", "updated_at"]
+    )
     messages.success(
         request,
         "The student's QR link was replaced. Previously printed QR codes no longer work.",
     )
     return redirect("core:student_id_card", student_pk=student.pk)
+
+
+def _public_token_expiry():
+    """Return the expiry timestamp for a freshly issued public QR token.
+
+    Returns ``None`` (never expires) when
+    ``STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS`` is zero or negative.
+    """
+    ttl_days = getattr(settings, "STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS", 0)
+    if ttl_days and ttl_days > 0:
+        return timezone.now() + timezone.timedelta(days=ttl_days)
+    return None
 
 
 @never_cache
@@ -951,6 +1041,8 @@ def public_student_exeat_view(request, token):
         Student,
         public_token=token,
     )
+    if student.public_token_expired:
+        raise Http404("This student ID link has expired.")
     now = timezone.now()
     active_exeat = (
         student.exeats.filter(
@@ -997,6 +1089,16 @@ def public_student_exeat_view(request, token):
         )
     )
     if request.method == "POST":
+        if is_rate_limited(
+            "public-report",
+            client_ip(request),
+            settings.PUBLIC_REPORT_RATE_LIMIT,
+            settings.PUBLIC_REPORT_RATE_WINDOW,
+        ):
+            return HttpResponse(
+                "Too many reports submitted from this device. Please try again later.",
+                status=429,
+            )
         report_form = MovementConcernReportForm(request.POST)
         if report_form.is_valid():
             MovementConcernReport.objects.create(
@@ -1060,6 +1162,7 @@ def conduct_list_view(request):
     query = request.GET.get('q', '').strip()
     severity = request.GET.get('severity', '').strip()
     house_id = request.GET.get('house', '').strip()
+    period = request.GET.get('period', '').strip()
     house_scope = get_house_scope(request.user)
 
     records_qs = DisciplinaryRecord.objects.select_related(
@@ -1095,12 +1198,44 @@ def conduct_list_view(request):
     if house_id:
         records_qs = records_qs.filter(student__house_id=house_id)
 
-    # Top stats aggregations
+    # 4. Period scope (term / academic year). Defaults to all time so the
+    #    register always surfaces the complete audit trail until scoped.
+    current_term = (
+        AcademicTerm.objects.filter(is_current=True)
+        .select_related('academic_year')
+        .first()
+    )
+    period_kind = 'all'
+    period_term = None
+    period_year = None
+    if period.startswith('term:'):
+        period_term = AcademicTerm.objects.filter(pk=period[5:].strip()).first()
+        if period_term is not None:
+            period_kind = 'term'
+    elif period.startswith('year:'):
+        period_year = AcademicYear.objects.filter(pk=period[5:].strip()).first()
+        if period_year is not None:
+            period_kind = 'year'
+    elif period == 'current' and current_term is not None:
+        period_term = current_term
+        period_kind = 'current'
+
+    period_scope_active = period_term is not None or period_year is not None
+    if period_term is not None:
+        records_qs = records_qs.filter(academic_term=period_term)
+    elif period_year is not None:
+        records_qs = records_qs.filter(academic_term__academic_year=period_year)
+
+    # Top stats aggregations (follow the same period scope)
     all_records = filter_queryset_by_house(
         request.user,
         DisciplinaryRecord.objects.filter(corrected_at__isnull=True),
         'student__house_id'
     )
+    if period_term is not None:
+        all_records = all_records.filter(academic_term=period_term)
+    elif period_year is not None:
+        all_records = all_records.filter(academic_term__academic_year=period_year)
     total_incidents = all_records.count()
     critical_count = all_records.filter(severity=DisciplinaryRecord.Severity.CRITICAL).count()
     major_count = all_records.filter(severity=DisciplinaryRecord.Severity.MAJOR).count()
@@ -1110,6 +1245,17 @@ def conduct_list_view(request):
     if house_scope is not None:
         houses = houses.filter(pk=house_scope.pk)
     active_filters_count = sum(1 for v in [severity, house_id] if v)
+    if period_scope_active:
+        active_filters_count += 1
+
+    if period_kind == 'current' and current_term is not None:
+        period_label = f"Current term · {current_term.get_term_display} · {current_term.academic_year.name}"
+    elif period_kind == 'term' and period_term is not None:
+        period_label = f"{period_term.get_term_display} · {period_term.academic_year.name}"
+    elif period_kind == 'year' and period_year is not None:
+        period_label = period_year.name
+    else:
+        period_label = "All time"
 
     records_page, pagination_query = paginate_queryset(records_qs, request)
 
@@ -1128,6 +1274,15 @@ def conduct_list_view(request):
         'selected_house': house_id,
         'active_filters_count': active_filters_count,
         'query': query,
+        'academic_years': AcademicYear.objects.order_by('-start_date'),
+        'academic_terms': AcademicTerm.objects.select_related('academic_year').order_by('-start_date'),
+        'current_term': current_term,
+        'period_kind': period_kind,
+        'period_term_id': period_term.pk if period_term else None,
+        'period_year_id': period_year.pk if period_year else None,
+        'period_scope_active': period_scope_active,
+        'period_label': period_label,
+        'selected_period': period,
     }
 
     if request.htmx:
@@ -1207,6 +1362,38 @@ def incident_create_view(request):
     }
     return render(request, 'core/conduct/create.html', context)
 
+
+@login_required
+@role_required(*CONDUCT_ROLES)
+def incident_detail_view(request, pk):
+    """
+    HTMX drawer endpoint returning the full detail of a single disciplinary
+    record (description, sanction, source roll call and correction audit).
+    """
+    record = get_object_or_404(
+        filter_queryset_by_house(
+            request.user,
+            DisciplinaryRecord.objects.select_related(
+                'student',
+                'student__house',
+                'student__dormitory',
+                'student__class_group',
+                'academic_term',
+                'logged_by',
+                'corrected_by',
+                'roll_call_entry',
+                'roll_call_entry__session',
+                'roll_call_follow_up',
+            ),
+            'student__house_id',
+        ),
+        pk=pk,
+    )
+    return render(
+        request,
+        'core/conduct/partials/incident_detail_drawer.html',
+        {'record': record},
+    )
 
 
 @login_required
@@ -2860,7 +3047,10 @@ def gate_verify_pass_view(request):
 @tenant_feature_required("advanced_reports")
 def reports_dashboard_view(request):
     """Show scoped summary metrics and a selectable detailed operational report."""
-    return render(request, 'core/reports/dashboard.html', _reports_context(request))
+    context = _reports_context(request)
+    if request.htmx:
+        return render(request, 'core/reports/partials/report_results.html', context)
+    return render(request, 'core/reports/dashboard.html', context)
 
 
 @login_required
@@ -2868,13 +3058,13 @@ def reports_dashboard_view(request):
 @tenant_feature_required("advanced_reports")
 def reports_print_view(request):
     """Render only the authorized detailed report for browser printing or PDF."""
-    context = _reports_context(request)
+    context = _reports_context(request, paginate=False)
     if not context["report_filters_valid"]:
         return HttpResponseBadRequest("Invalid report filters. Return to Reports & Stats and correct the selected values.")
     return render(request, 'core/reports/print.html', context)
 
 
-def _reports_context(request):
+def _reports_context(request, paginate=True):
     from core.services.reports import get_dashboard_metrics, get_detailed_report
 
     house_scope = get_house_scope(request.user)
@@ -2882,7 +3072,15 @@ def _reports_context(request):
     filter_data.pop("print", None)
     if not filter_data.get("report"):
         filter_data["report"] = "housing"
-    report_filters = ReportFilterForm(filter_data)
+    selected_report_type = filter_data.get("report") or "housing"
+    report_filters = ReportFilterForm(
+        filter_data,
+        disabled_fields=(
+            ()
+            if report_uses_period_filters(selected_report_type)
+            else ("date_from", "date_to", "term")
+        ),
+    )
     report_filters_valid = report_filters.is_valid()
     cleaned_data = report_filters.cleaned_data
     report_type = cleaned_data.get("report") or "housing"
@@ -2905,6 +3103,8 @@ def _reports_context(request):
             "point_in_time": False,
         }
     report["record_count"] = len(report["rows"])
+    if paginate:
+        report = paginate_report(report, request)
     return {
         'metrics': get_dashboard_metrics(
             house_id=house_scope.pk if house_scope is not None else None
@@ -2917,12 +3117,14 @@ def _reports_context(request):
         'user_house_scope': house_scope,
         'report': report,
         'report_filters': report_filters,
+        'report_filter_fields': ("report", "date_from", "date_to", "term"),
         'report_filters_valid': report_filters_valid,
         'report_type': report_type,
         'selected_date_from': date_from,
         'selected_date_to': date_to,
         'selected_term': term,
         'report_generated_at': timezone.localtime(),
+        'print_query': strip_pagination_params(request),
         'active_tab': 'reports',
         'school_configuration': SchoolConfiguration.get_solo(),
     }
@@ -2946,6 +3148,7 @@ def boarding_kpi_view(request):
     house_scope = get_house_scope(request.user)
     filter_data = request.GET.copy()
     filter_data.pop("print", None)
+    _drop_pagination_params(filter_data)
     if not filter_data and (
         current_term := AcademicTerm.objects.filter(is_current=True).first()
     ):
@@ -2970,9 +3173,12 @@ def boarding_kpi_view(request):
             "highlights": (),
         }
     )
+    if request.GET.get("print") != "1":
+        report = paginate_report(report, request)
     context = {
         "report": report,
         "report_filters": report_filters,
+        "report_filter_fields": ("term", "date_from", "date_to"),
         "report_filters_valid": report_filters_valid,
         "user_house_scope": house_scope,
         "selected_term": term,
@@ -2983,6 +3189,7 @@ def boarding_kpi_view(request):
             cleaned_data.get("date_to") if report_filters_valid else None
         ),
         "report_filter_query": filter_data.urlencode(),
+        "print_query": strip_pagination_params(request),
         "report_generated_at": timezone.localtime(),
         "active_tab": "reports",
         "school_configuration": SchoolConfiguration.get_solo(),
@@ -2992,6 +3199,10 @@ def boarding_kpi_view(request):
         if request.GET.get("print") == "1"
         else "core/reports/boarding_kpi.html"
     )
+    if request.htmx and request.GET.get("print") != "1":
+        return render(
+            request, "core/reports/partials/boarding_kpi_results.html", context
+        )
     return render(request, template, context)
 
 
@@ -3005,6 +3216,7 @@ def boarding_kpi_export_view(request):
     house_scope = get_house_scope(request.user)
     filter_data = request.GET.copy()
     filter_data.pop("print", None)
+    _drop_pagination_params(filter_data)
     if not filter_data and (
         current_term := AcademicTerm.objects.filter(is_current=True).first()
     ):
@@ -3058,6 +3270,7 @@ def boarding_demographics_view(request):
     report = get_boarding_demographics(
         house_id=house_scope.pk if house_scope is not None else None,
     )
+    report = paginate_report(report, request)
     context = {
         "report": report,
         "user_house_scope": house_scope,
@@ -3070,6 +3283,10 @@ def boarding_demographics_view(request):
         if request.GET.get("print") == "1"
         else "core/reports/boarding_demographics.html"
     )
+    if request.htmx and request.GET.get("print") != "1":
+        return render(
+            request, "core/reports/partials/boarding_demographics_results.html", context
+        )
     return render(request, template, context)
 
 
@@ -3110,11 +3327,15 @@ def sms_usage_view(request):
             "highlights": (),
         }
 
+    if request.GET.get("print") != "1":
+        report = paginate_report(report, request)
     context = {
         "report": report,
         "report_filters": report_filters,
+        "report_filter_fields": ("date_from", "date_to", "term"),
         "report_filters_valid": report_filters_valid,
         "report_filter_query": filter_data.urlencode(),
+        "print_query": strip_pagination_params(request),
         "user_house_scope": house_scope,
         "selected_term": (
             cleaned_data.get("term") if report_filters_valid else None
@@ -3136,6 +3357,68 @@ def sms_usage_view(request):
         if request.GET.get("print") == "1"
         else "core/reports/sms_usage.html"
     )
+    if request.htmx and request.GET.get("print") != "1":
+        return render(request, "core/reports/partials/sms_usage_results.html", context)
+    return render(request, template, context)
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+@tenant_feature_required("advanced_reports")
+def config_audit_view(request):
+    """Show privileged configuration audit events to school administrators."""
+    from core.services.reports import get_configuration_audit
+
+    filter_data = request.GET.copy()
+    for key in ("print", "report", "term"):
+        filter_data.pop(key, None)
+    report_filters = ReportFilterForm(filter_data, disabled_fields=("term",))
+    report_filters_valid = report_filters.is_valid()
+    cleaned_data = report_filters.cleaned_data if report_filters_valid else {}
+    if report_filters_valid:
+        report = get_configuration_audit(
+            date_from=cleaned_data.get("date_from"),
+            date_to=cleaned_data.get("date_to"),
+        )
+    else:
+        report = {
+            "title": "Configuration Audit Trail",
+            "headers": ("When", "Actor", "Event", "Description"),
+            "rows": (),
+            "summary": (),
+            "sections": (),
+            "highlights": (),
+            "point_in_time": False,
+        }
+    report["record_count"] = len(report["rows"])
+    if request.GET.get("print") != "1":
+        report = paginate_report(report, request)
+    context = {
+        "report": report,
+        "report_filters": report_filters,
+        "report_filter_fields": ("date_from", "date_to", "term"),
+        "report_filters_valid": report_filters_valid,
+        "report_filter_query": filter_data.urlencode(),
+        "print_query": strip_pagination_params(request),
+        "user_house_scope": None,
+        "selected_date_from": cleaned_data.get("date_from"),
+        "selected_date_to": cleaned_data.get("date_to"),
+        "selected_term": None,
+        "report_generated_at": timezone.localtime(),
+        "active_tab": "reports",
+        "school_configuration": SchoolConfiguration.get_solo(),
+    }
+    if not report_filters_valid and request.GET.get("print") == "1":
+        return HttpResponseBadRequest("Invalid audit report filters.")
+    template = (
+        "core/reports/print.html"
+        if request.GET.get("print") == "1"
+        else "core/reports/config_audit.html"
+    )
+    if request.htmx and request.GET.get("print") != "1":
+        return render(
+            request, "core/reports/partials/config_audit_results.html", context
+        )
     return render(request, template, context)
 
 

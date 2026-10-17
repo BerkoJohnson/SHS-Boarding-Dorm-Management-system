@@ -909,6 +909,136 @@ class ConductViewTests(TestCase):
         )
         self.assertContains(second_page, 'severity=Major&page=1')
 
+    def test_conduct_register_period_filter_scopes_records_and_stats(self):
+        """The Period filter scopes the register and top stats by term and academic year."""
+        DisciplinaryRecord.objects.create(
+            student=self.student,
+            offense='Current Term Incident',
+            severity=DisciplinaryRecord.Severity.MINOR,
+            action_taken='Compound duty',
+            logged_by=self.housemaster,
+            academic_term=self.term,
+        )
+
+        past_year = AcademicYear.objects.create(
+            start_date=timezone.now().date() - timezone.timedelta(days=400),
+            end_date=timezone.now().date() - timezone.timedelta(days=40),
+        )
+        past_term = AcademicTerm.objects.create(
+            academic_year=past_year,
+            term=AcademicTerm.TermChoice.TERM_2,
+            level=AcademicTerm.LevelChoice.ALL,
+            start_date=timezone.now().date() - timezone.timedelta(days=400),
+            end_date=timezone.now().date() - timezone.timedelta(days=40),
+        )
+        DisciplinaryRecord.objects.create(
+            student=self.student,
+            offense='Past Term Incident',
+            severity=DisciplinaryRecord.Severity.MAJOR,
+            action_taken='Grounding',
+            logged_by=self.housemaster,
+            academic_term=past_term,
+        )
+
+        # Default scope is all time and surfaces both records.
+        default_page = self.client.get('/conduct/')
+        self.assertContains(default_page, 'Current Term Incident')
+        self.assertContains(default_page, 'Past Term Incident')
+        self.assertContains(default_page, 'All time')
+        self.assertEqual(default_page.context['total_incidents'], 2)
+        self.assertEqual(default_page.context['period_kind'], 'all')
+
+        # Scoped to the current term.
+        current_page = self.client.get('/conduct/?period=current')
+        self.assertContains(current_page, 'Current Term Incident')
+        self.assertNotContains(current_page, 'Past Term Incident')
+        self.assertEqual(current_page.context['period_kind'], 'current')
+        self.assertEqual(current_page.context['total_incidents'], 1)
+
+        # Scoped to the whole past academic year.
+        year_page = self.client.get(f'/conduct/?period=year:{past_year.pk}')
+        self.assertContains(year_page, 'Past Term Incident')
+        self.assertNotContains(year_page, 'Current Term Incident')
+        self.assertEqual(year_page.context['period_kind'], 'year')
+        self.assertEqual(year_page.context['total_incidents'], 1)
+
+        # Scoped to a single specific term.
+        term_page = self.client.get(f'/conduct/?period=term:{past_term.pk}')
+        self.assertContains(term_page, 'Past Term Incident')
+        self.assertNotContains(term_page, 'Current Term Incident')
+        self.assertEqual(term_page.context['period_kind'], 'term')
+
+        # HTMX filter updates also refresh the KPI stat strip out-of-band.
+        htmx_page = self.client.get('/conduct/?period=current', HTTP_HX_REQUEST='true')
+        self.assertContains(htmx_page, 'id="conduct-stats" hx-swap-oob="true"')
+        self.assertContains(htmx_page, 'id="conduct-total-count" hx-swap-oob="true"')
+
+    def test_register_offers_full_incident_link(self):
+        """Register rows link to the incident detail drawer endpoint."""
+        record = DisciplinaryRecord.objects.create(
+            student=self.student,
+            offense='Missing Roll Call',
+            severity=DisciplinaryRecord.Severity.MINOR,
+            action_taken='Compound duty',
+            logged_by=self.housemaster,
+        )
+        response = self.client.get('/conduct/')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response,
+            f'hx-get="{reverse("core:incident_detail", args=[record.pk])}"',
+        )
+        self.assertContains(response, 'View Full Incident')
+
+    def test_incident_detail_view_returns_full_record(self):
+        """GET /conduct/<pk>/detail/ renders the full incident detail drawer."""
+        record = DisciplinaryRecord.objects.create(
+            student=self.student,
+            offense='Overstayed Exeat',
+            description='Returned from town 3 hours after the approved return time.',
+            severity=DisciplinaryRecord.Severity.MAJOR,
+            action_taken='Campus grounding for 2 weeks',
+            logged_by=self.housemaster,
+            correction_note='Sanction reduced after appeal.',
+        )
+        response = self.client.get(
+            reverse('core:incident_detail', args=[record.pk]),
+            HTTP_HX_REQUEST='true',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(
+            response, 'core/conduct/partials/incident_detail_drawer.html'
+        )
+        self.assertContains(
+            response, 'Returned from town 3 hours after the approved return time.'
+        )
+        self.assertContains(response, 'Sanction reduced after appeal.')
+        self.assertContains(response, 'Campus grounding for 2 weeks')
+
+    def test_incident_detail_view_scoped_to_user_house(self):
+        """Records outside the user's house are not reachable via the detail endpoint."""
+        other_house = House.objects.create(name='Green House')
+        other_student = Student.objects.create(
+            admission_no='SHS-2026-999',
+            index_number='90000001',
+            full_name='Ama Other',
+            gender=Student.Gender.FEMALE,
+            programme=self.programme,
+            house=other_house,
+            residency=Student.ResidencyStatus.DAY,
+        )
+        other_record = DisciplinaryRecord.objects.create(
+            student=other_student,
+            offense='Truancy',
+            severity=DisciplinaryRecord.Severity.MINOR,
+            action_taken='Warning',
+            logged_by=self.housemaster,
+        )
+        response = self.client.get(
+            reverse('core:incident_detail', args=[other_record.pk]),
+        )
+        self.assertEqual(response.status_code, 404)
+
     def test_incident_create_view_get(self):
         """GET /conduct/new/ renders the incident recording form."""
         response = self.client.get(f'/conduct/new/?student_id={self.student.id}')
@@ -2252,7 +2382,11 @@ class RollCallAndGateTests(TestCase):
         conduct_response = self.client.get('/conduct/')
         self.assertEqual(conduct_response.status_code, 200)
         self.assertContains(conduct_response, 'Corrected')
-        self.assertContains(conduct_response, 'retained for audit')
+        # The full correction audit trail now lives in the incident detail drawer
+        # rather than being crammed into the register row.
+        detail_response = self.client.get(f'/conduct/{record.pk}/detail/')
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertContains(detail_response, 'retained for audit')
 
         report = get_detailed_report("discipline", house_id=self.house.pk)
         self.assertIn(("Active incidents", 0), report["summary"])
@@ -3000,10 +3134,12 @@ class HouseScopedAccessTests(TestCase):
         self.assertContains(response, 'method="get"')
         self.assertContains(response, 'name="report"')
         self.assertContains(response, 'id="report-results"')
-        self.assertContains(response, 'rowspan="2"')
+        # Boarding rows are grouped by cohort (beds are not interchangeable
+        # across gender) and labelled with the placement vocabulary.
+        self.assertContains(response, 'Room to spare')
         self.assertEqual(
-            [group["house"] for group in response.context["report"]["row_groups"]],
-            ["Amber House"],
+            [group["label"] for group in response.context["report"]["cohort_groups"]],
+            ["Boys"],
         )
         self.assertNotContains(response, 'Total Boarders')
 
@@ -3080,6 +3216,18 @@ class HouseScopedAccessTests(TestCase):
         self.assertIn(('Boarders', 1), housing_report['summary'])
         self.assertIn(('Configured beds', 10), housing_report['summary'])
         self.assertIn(('Occupied capacity', '10.0%'), housing_report['summary'])
+        # The printed report answers the same question as the dashboard: how
+        # many beds are free, and for whom.
+        self.assertIn(('Free beds', 9), housing_report['summary'])
+        self.assertEqual(
+            housing_report['verdict']['headline'],
+            "9 free beds — 9 boys' (10.0% full)",
+        )
+        print_response = self.client.get('/reports/print/?report=housing')
+        self.assertEqual(print_response.status_code, 200)
+        self.assertTemplateUsed(print_response, 'core/reports/print.html')
+        self.assertContains(print_response, '9 free beds — 9 boys&#x27;')
+        self.assertContains(print_response, 'Amber Block')
 
         self.dorm_a.capacity = 0
         self.dorm_a.save(update_fields=['capacity'])
@@ -3087,13 +3235,28 @@ class HouseScopedAccessTests(TestCase):
             'SCOPE-A-OVER', 'Additional Amber Student', self.house_a, self.dorm_a
         )
         over_capacity_response = self.client.get('/reports/?report=housing')
+        # A block holding boarders with no recorded capacity is reported as
+        # unrecorded beds, not as a known capacity that has been exceeded.
         self.assertIn(
-            ('Over-capacity dormitories', 1),
+            ('Over-capacity dormitories', 0),
             over_capacity_response.context['report']['summary'],
         )
+        unrecorded_report = over_capacity_response.context['report']
         self.assertIn(
-            'Over capacity by 2',
-            [row[-1] for row in over_capacity_response.context['report']['rows']],
+            'Beds unrecorded',
+            [row[-1] for row in unrecorded_report['rows']],
+        )
+        self.assertIn(
+            -2,
+            [
+                row[5]
+                for row in unrecorded_report['rows']
+                if row[1] == 'Amber Block'
+            ],
+        )
+        self.assertIn(
+            'Beds unrecorded',
+            [item['label'] for item in unrecorded_report['attention']],
         )
 
         report_day = timezone.now().date().isoformat()

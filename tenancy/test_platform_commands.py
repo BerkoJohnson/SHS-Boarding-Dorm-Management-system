@@ -20,6 +20,7 @@ from io import StringIO
 from pathlib import Path
 import tarfile
 import tempfile
+from unittest import skipUnless
 from unittest.mock import Mock, patch
 
 from django.conf import settings
@@ -42,6 +43,7 @@ from tenancy.models import (
 )
 
 
+@skipUnless(settings.TENANCY_ENABLED, "Requires TENANCY_ENABLED=true")
 class BasePlatformCommandTestCase(TestCase):
     """Base test setup with pre-configured active school tenant."""
 

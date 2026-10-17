@@ -1,0 +1,105 @@
+# Render Blueprint for the SHS Boarding & Dorm Management System (STAGING).
+#
+# Entries marked `sync: false` are secrets/inputs you must set in the Render
+# dashboard; never commit real credentials here. The database is Neon (external),
+# so it is intentionally NOT declared as a Render database.
+#
+# Apply via Dashboard -> New -> Blueprint, selecting this repository.
+# Adjust `branch`/`region`/`plan` to taste (defaults chosen to avoid paid
+# resources; `preDeployCommand` requires a paid instance type - see below).
+
+services:
+  - type: web
+    name: shs-boarding-staging
+    runtime: python
+    plan: free
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      python manage.py collectstatic --noinput --settings=schoolsystem.settings.production
+    startCommand: >-
+      gunicorn schoolsystem.wsgi:application
+      --bind 0.0.0.0:$PORT --workers 3 --threads 2 --timeout 60
+    healthCheckPath: /healthz
+    # Migrations. On a paid instance type, uncomment `preDeployCommand` so the
+    # release runs them automatically before taking traffic. On Free, run these
+    # two commands once from the Render Shell after the first deploy:
+    #
+    #   python manage.py migrate --schema public --settings=schoolsystem.settings.production
+    #   python manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
+    #
+    # preDeployCommand: >-
+    #   python manage.py migrate --schema public --settings=schoolsystem.settings.production &&
+    #   python manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: schoolsystem.settings.production
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: DATABASE_PROFILE
+        value: neon
+      - key: TENANCY_ENABLED
+        value: "True"
+      # Neon DIRECT (non-pooler) connection details.
+      - key: PGHOST
+        sync: false
+      - key: PGDATABASE
+        sync: false
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGPORT
+        value: "5432"
+      - key: PGSSLMODE
+        value: require
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      # ALLOWED_HOSTS is ignored while TENANCY_ENABLED=True; leave empty.
+      - key: ALLOWED_HOSTS
+        sync: false
+      # e.g. https://shs-boarding-staging.onrender.com
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      # Durable media (student photos, crests, ID exports).
+      - key: MEDIA_STORAGE_BACKEND
+        value: neon_s3
+      - key: NEON_STORAGE_BUCKET
+        sync: false
+      - key: AWS_ENDPOINT_URL_S3
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      # Console email in staging (never sends real mail).
+      - key: EMAIL_BACKEND
+        value: django.core.mail.backends.console.EmailBackend
+      # Keep SMS off in staging - prevents real messages.
+      - key: SMS_ENABLED
+        value: "False"
+      # Staging: avoid pinning HTTPS for a year. Raise to 31536000 for production.
+      - key: SECURE_HSTS_SECONDS
+        value: "0"
+      - key: TRUSTED_PROXY_COUNT
+        value: "1"
+      # Shared cache for cluster-wide rate limits (optional, recommended).
+      - key: CACHE_BACKEND
+        sync: false
+      - key: CACHE_LOCATION
+        sync: false
+      # Celery broker (needed only if the worker/beat services are enabled).
+      - key: REDIS_URL
+        sync: false
+
+# --- Optional: Celery worker + Beat (required only for SMS dispatch) --------
+# Add a Render Key Value (Redis) instance and a Background Worker for each of:
+#
+#   worker -> startCommand: celery -A schoolsystem worker --loglevel=INFO
+#   beat   -> startCommand: celery -A schoolsystem beat --loglevel=INFO
+#
+# Give both the same env vars as the web service (at minimum DATABASE_PROFILE,
+# PG*, TENANCY_ENABLED, REDIS_URL, MEDIA_STORAGE_BACKEND + S3 keys, SMS_*).
+# Without them, SMS deliveries remain queued and the beat-scheduled cleanup
+# tasks do not run.
