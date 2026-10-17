@@ -2,12 +2,18 @@ import csv
 import io
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import (
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 from django.urls import reverse
 from openpyxl import Workbook
 from PIL import Image
@@ -25,6 +31,61 @@ from core.models import (
     UserProfile,
 )
 from core.services.student_import import import_student_roster
+
+
+class ImportRosterCommandTenantTests(SimpleTestCase):
+    @override_settings(TENANCY_ENABLED=True)
+    def test_requires_schema_in_tenant_mode(self):
+        with self.assertRaisesMessage(
+            CommandError,
+            "TENANCY_ENABLED is True; pass --schema to select the school.",
+        ):
+            call_command("import_roster", "roster.csv")
+
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("core.management.commands.import_roster.import_student_roster")
+    @patch("tenancy.models.Tenant.objects")
+    def test_import_runs_inside_the_selected_tenant(
+        self,
+        tenant_objects,
+        import_roster,
+    ):
+        tenant_context = MagicMock()
+        tenant_objects.filter.return_value.first.return_value = tenant_context
+        import_roster.return_value = (2, [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = Path(directory, "roster.csv")
+            roster_path.write_text("roster contents", encoding="utf-8")
+
+            output = io.StringIO()
+            call_command(
+                "import_roster",
+                str(roster_path),
+                schema="school_one",
+                stdout=output,
+            )
+
+        tenant_objects.filter.assert_called_once_with(schema_name="school_one")
+        tenant_context.__enter__.assert_called_once_with()
+        tenant_context.__exit__.assert_called_once()
+        import_roster.assert_called_once()
+        self.assertIn("2 student record(s) imported", output.getvalue())
+
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("tenancy.models.Tenant.objects")
+    def test_unknown_tenant_schema_is_rejected(self, tenant_objects):
+        tenant_objects.filter.return_value.first.return_value = None
+
+        with self.assertRaisesMessage(
+            CommandError,
+            "Tenant schema 'missing_school' was not found.",
+        ):
+            call_command(
+                "import_roster",
+                "roster.csv",
+                schema="missing_school",
+            )
 
 
 class StudentRegistryTests(TestCase):

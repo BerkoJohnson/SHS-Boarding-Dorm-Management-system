@@ -14,9 +14,11 @@ Tests verify:
 from datetime import date, timedelta
 from decimal import Decimal
 import hashlib
+import io
 import json
 from io import StringIO
 from pathlib import Path
+import tarfile
 import tempfile
 from unittest.mock import Mock, patch
 
@@ -25,6 +27,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
 from django.test import TestCase
+from django.test import override_settings
 from django.utils import timezone
 
 from tenancy.management.commands.tenant_restore import Command as TenantRestoreCommand
@@ -102,6 +105,7 @@ class TenantListCommandTests(BasePlatformCommandTestCase):
         self.assertEqual(data["tenants"][0]["plan_tier"], "pilot")
 
 
+@override_settings(TENANCY_ENABLED=True)
 class TenantBackupCommandTests(BasePlatformCommandTestCase):
     """Tests for the tenant_backup command."""
 
@@ -507,7 +511,24 @@ class TenantRestoreCommandTests(BasePlatformCommandTestCase):
     @patch("shutil.which", return_value="/usr/bin/pg_restore")
     def test_successful_restore_never_cleans(self, _which):
         schema = "restore_success"
-        dump = self._write_backup(schema)
+        timestamp = "20261017_091800"
+        dump = self._write_backup(
+            schema,
+            name=f"{schema}_{timestamp}.dump",
+        )
+        media_archive = (
+            self.backup_root
+            / schema
+            / f"{schema}_media_{timestamp}.tar.gz"
+        )
+        media_archive.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(media_archive, "w:gz") as archive:
+            contents = b"restored crest"
+            member = tarfile.TarInfo("school/logos/crest.png")
+            member.size = len(contents)
+            archive.addfile(member, io.BytesIO(contents))
+
+        media_root = self.backup_root / "media"
         captured = {}
 
         def fake_run(cmd, *args, **kwargs):
@@ -520,19 +541,41 @@ class TenantRestoreCommandTests(BasePlatformCommandTestCase):
                 proc.stdout = f"1; 2615 2200 SCHEMA - {schema} postgres\n"
             return proc
 
-        with patch(
-            "tenancy.management.commands.tenant_restore.subprocess.run",
-            side_effect=fake_run,
+        with override_settings(
+            MEDIA_ROOT=media_root,
+            PRIVATE_STUDENT_PHOTO_ROOT=self.backup_root / "private-photos",
+            BASE_DIR=self.backup_root / "project",
+            MEDIA_STORAGE_BACKEND="filesystem",
         ):
-            with patch.object(
-                TenantRestoreCommand,
-                "_schema_state",
-                side_effect=[(False, True), (True, False)],
+            with patch(
+                "tenancy.management.commands.tenant_restore.subprocess.run",
+                side_effect=fake_run,
             ):
-                out, _ = self._call(*self._restore_args(schema, dump), "--json")
+                with patch.object(
+                    TenantRestoreCommand,
+                    "_schema_state",
+                    side_effect=[(False, True), (True, False)],
+                ):
+                    out, _ = self._call(
+                        *self._restore_args(schema, dump),
+                        f"--media-archive={media_archive}",
+                        "--json",
+                    )
 
         data = json.loads(out)
         self.assertEqual(data["status"], "success")
+        self.assertEqual(data["media_files_count"], 1)
+        self.assertEqual(
+            (
+                media_root
+                / "tenants"
+                / schema
+                / "school"
+                / "logos"
+                / "crest.png"
+            ).read_bytes(),
+            b"restored crest",
+        )
 
         restore_cmd = captured["cmd"]
         self.assertNotIn("--clean", restore_cmd)

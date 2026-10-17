@@ -3,11 +3,18 @@ import tempfile
 import uuid
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
+from django.core.exceptions import PermissionDenied
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import (
+    RequestFactory,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
@@ -30,6 +37,53 @@ from core.models import (
 
 
 User = get_user_model()
+
+
+class PermissionDeniedPageTests(TestCase):
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("tenancy.entitlements.feature_enabled", return_value=False)
+    def test_disabled_tenant_feature_explains_how_to_get_access(
+        self, _feature_enabled
+    ):
+        admin_user = User.objects.create_superuser(
+            username="feature-disabled-admin",
+            password="password123",
+        )
+        self.client.force_login(admin_user)
+
+        response = self.client.get(reverse("core:exeat_list"))
+
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(
+            response,
+            "This school’s current plan does not include exeat gate",
+            status_code=403,
+        )
+        self.assertContains(
+            response,
+            "contact a school administrator",
+            status_code=403,
+        )
+
+    def test_other_permission_denials_have_a_clear_generic_explanation(self):
+        from core.views import permission_denied_view
+
+        response = permission_denied_view(
+            RequestFactory().get("/operations/gate/"),
+            PermissionDenied("Internal implementation detail"),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(
+            response,
+            "Your account is not allowed to open this page",
+            status_code=403,
+        )
+        self.assertNotContains(
+            response,
+            "Internal implementation detail",
+            status_code=403,
+        )
 
 
 class InstitutionalRoleAuthorizationTests(TestCase):

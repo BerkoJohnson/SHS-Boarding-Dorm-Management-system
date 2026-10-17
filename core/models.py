@@ -3,7 +3,11 @@ import uuid
 from datetime import date, timedelta
 from django.db import models, transaction
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.core.validators import FileExtensionValidator, RegexValidator
+from django.core.validators import (
+    FileExtensionValidator,
+    MaxLengthValidator,
+    RegexValidator,
+)
 from django.utils import timezone
 from django.conf import settings
 from django.db.models.signals import post_save, pre_save
@@ -28,7 +32,8 @@ def tenant_upload_path(directory, filename):
 
 
 def student_photo_upload_to(instance, filename):
-    return tenant_upload_path("students/photos/%Y/%m", filename)
+    directory = timezone.now().strftime("students/photos/%Y/%m")
+    return tenant_upload_path(directory, filename)
 
 
 def school_logo_upload_to(instance, filename):
@@ -912,6 +917,14 @@ class Exeat(BaseModel):
         return self.status == self.Status.APPROVED
 
     @property
+    def wait_hours(self):
+        """Hours elapsed since this exeat request was created."""
+        if not self.created_at:
+            return 0
+        delta = timezone.now() - self.created_at
+        return max(0, delta.total_seconds() / 3600)
+
+    @property
     def current_state(self):
         """Dynamic helper combining request status and gate movement state safely."""
         if self.status != self.Status.APPROVED:
@@ -1000,6 +1013,44 @@ class ExeatMovement(BaseModel):
 
     def __str__(self):
         return f"Gate Log: {self.exeat.exeat_number} - {self.state_display}"
+
+
+class MovementConcernReport(BaseModel):
+    """A public QR-scan report for school staff to review."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        REVIEWED = "reviewed", "Reviewed"
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.PROTECT,
+        related_name="movement_concern_reports",
+    )
+    exeat = models.ForeignKey(
+        Exeat,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="movement_concern_reports",
+    )
+    details = models.TextField(
+        validators=[MaxLengthValidator(1000)],
+        help_text="Optional details supplied by the person scanning the QR code.",
+    )
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.OPEN,
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Public Movement Concern Report"
+        verbose_name_plural = "Public Movement Concern Reports"
+
+    def __str__(self):
+        return f"Movement concern for {self.student} ({self.get_status_display()})"
 
 
 class ExeatReconciliation(BaseModel):

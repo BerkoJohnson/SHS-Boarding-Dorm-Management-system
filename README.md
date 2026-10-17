@@ -99,8 +99,9 @@ Create a `.env` file in the project root (`c:\RebuildEden\project 1\.env`).
 | Variable | Description | Default | Recommended Value |
 | :--- | :--- | :--- | :--- |
 | `DJANGO_SECRET_KEY` | Cryptographic signing key (min. 50 characters, 5+ unique characters) | *None (Required)* | 64+ random characters |
-| `DEBUG` | Enable Django debug mode (must be `False` in production) | `True` | `False` (Production) / `True` (Dev) |
-| `ALLOWED_HOSTS` | Comma-separated list of accepted hostnames (auto-overridden to `*` if tenancy is enabled) | `localhost,127.0.0.1` | Production domain list |
+| `DEBUG` | Enable Django debug mode. Defaults to `True` only under `schoolsystem.settings.development`; `schoolsystem.settings.production` forces `False` | `True` (development only) | `False` (Production) / `True` (Dev) |
+| `DJANGO_SETTINGS_MODULE` | Settings module to load. `manage.py` auto-selects `schoolsystem.settings.production` when `RENDER=true` or `PORT` is set, otherwise `schoolsystem.settings.development` | *Auto-detected* | Set explicitly only to override |
+| `ALLOWED_HOSTS` | Comma-separated accepted hostnames. Development defaults to `127.0.0.1,localhost` (or `*` when `TENANCY_ENABLED=true`); production requires an explicit list and allows `*` only when tenancy is enabled | `127.0.0.1,localhost` (development) | Production domain list |
 | `CSRF_TRUSTED_ORIGINS` | Comma-separated HTTPS origins trusted for form submissions | *Empty* | `https://your-domain.onrender.com` |
 | `DATABASE_PROFILE` | Database connection backend profile: `local` or `neon` | `local` | `local` (Dev) / `neon` (Prod) |
 | `TENANCY_ENABLED` | Toggle multi-school schema isolation (`true`/`false`) | `false` | `true` (Multi-tenant) |
@@ -137,7 +138,7 @@ Create a `.env` file in the project root (`c:\RebuildEden\project 1\.env`).
 | `AWS_SECRET_ACCESS_KEY` | Neon S3 Secret Key | *Empty* | Provisioned secret key |
 | `AWS_REGION` | Neon S3 Region | *Empty* | E.g. `us-east-2` |
 | **Security Hardening** | | | |
-| `CSP_REPORT_URI` | Endpoint to collect browser CSP violation reports | *Empty* | `/csp-report/` or HTTPS collector |
+| `CSP_REPORT_URI` | Endpoint appended as `report-uri` to the CSP report-only header. No collector is built in; point it at your own endpoint | *Empty* | Safe relative path or HTTPS collector URL |
 | `SECURE_HSTS_SECONDS` | HTTP Strict Transport Security duration (seconds) | `0` | `31536000` (1 year in production) |
 | `SECURE_HSTS_INCLUDE_SUBDOMAINS` | Enforce HSTS on all subdomains | `false` | `true` (when all domains use HTTPS) |
 | `SECURE_HSTS_PRELOAD` | Submit domain to browser HSTS preload list | `false` | `true` (only for verified HTTPS apex) |
@@ -343,6 +344,11 @@ SMS_ENABLED=True
 SMS_ONLINE_GH_API_KEY=your_smsonlinegh_key
 SMS_SENDER_ID=ATSEC
 TENANCY_ENABLED=True
+# Optional security hardening (see section 2.1)
+SECURE_HSTS_SECONDS=31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS=true
+SECURE_HSTS_PRELOAD=true
+CSP_REPORT_URI=https://your-csp-collector.example/report
 ```
 
 ---
@@ -355,11 +361,14 @@ When multi-tenancy is disabled, migrations operate against the `public` schema u
 
 ```powershell
 # Check migration status
-.\.venv\Scripts\python.exe .\manage.py showmigrations
+.\.venv\Scripts\python.exe .\manage.py showmigrations --settings=schoolsystem.settings.development
 
 # Apply all pending migrations
-.\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.development
 ```
+
+> [!NOTE]
+> `schoolsystem.settings.production` requires `DATABASE_PROFILE=neon` plus the full Neon connection set, so local single-tenant work should use `schoolsystem.settings.development` (or omit `--settings` entirely, which auto-selects development on a workstation).
 
 ### 5.2 Multi-Tenant Mode Migrations (`TENANCY_ENABLED=true`)
 
@@ -391,7 +400,7 @@ Applies migrations for `auth`, `core`, and `sessions` across all active tenant s
 ### 6.1 Architecture & Isolation Guarantees
 
 * **PostgreSQL Schema Isolation**: Each school's data is physically separated inside its own PostgreSQL schema. Queries within a school cannot see or join data from another school.
-* **Regex-Validated Schema Identifiers**: Schemas are constrained at both the model and PostgreSQL database level to `^[a-z][a-z0-9_]*$`, preventing SQL injection or broken search paths.
+* **Validated Schema Identifiers**: Schema names are limited to 63 characters, must be PostgreSQL-safe identifiers (`^[_a-zA-Z][_a-zA-Z0-9]{,62}$`), and cannot collide with a reserved schema name. `provision_school` lower-cases the value you supply, so operational schemas follow `^[a-z][a-z0-9_]*$` in practice.
 * **Unique Primary Domain**: A database-level `UniqueConstraint` ensures that at most one primary domain exists per school.
 * **Fail-Closed Host Routing**: Requests to unverified, inactive, or unknown domains receive an immediate `404 Not Found`.
 
@@ -430,7 +439,7 @@ DATABASE_PROFILE=neon  # or local
 ```
 
 #### Step 3: Provision the School Tenant
-Creates the PostgreSQL schema, runs tenant migrations, seeds the default `SchoolConfiguration` singleton (school name & GSM-safe SMS sender ID), and leaves the school **inactive**:
+Creates the PostgreSQL schema, runs tenant migrations, seeds the default `SchoolConfiguration` singleton (`name` and `short_name` — the short name is used as the GSM-safe SMS sender identity), and leaves the school **inactive**:
 ```powershell
 .\.venv\Scripts\python.exe .\manage.py provision_school `
   --name "Achimota Senior High" `
@@ -510,17 +519,18 @@ To migrate an existing single-school installation from the `public` schema into 
    * Uses Kahn's topological sort algorithm to copy tables in foreign-key dependency order.
    * **Superuser-Free**: Does not execute `DISABLE TRIGGER ALL`, ensuring full compatibility with cloud databases like Neon, AWS RDS, and Supabase.
    * Namespaces referenced uploads from `students/photos/...` to `tenants/atebubu_shs/students/photos/...`.
+   * Copies uploads through the configured media backend. When `MEDIA_STORAGE_BACKEND=neon_s3`, upload the legacy `media/` and `.private/` trees to the shared S3 bucket **before** running the command, because the copy reads the source objects from the configured backend (the same rule that already applies to school crests).
    * Leaves the source `public` data completely untouched for a safe fallback.
 5. Validate data inside `atebubu_shs`, then activate the school and restart services.
 
 ### 6.4 Platform CLI Management Suite (Tenant Administration & Billing)
 
-The Eden Platform provides 7 centralized management commands for day-to-day operations across schools, resource capacity auditing, termly billing calculation, feature flag control, and emergency support token generation.
+The Eden Platform provides 8 centralized management commands for day-to-day operations across schools, resource capacity auditing, termly billing calculation, feature flag control, backup/restore, and emergency support token generation.
 
-All commands support human-friendly terminal tables (with ANSI color codes and Windows-safe ASCII indicators) and a `--json` flag for automated pipelines. Every administrative change is permanently recorded in the immutable `PlatformAuditLog` table.
+All eight commands support human-friendly terminal tables (with ANSI color codes and Windows-safe ASCII indicators) and a `--json` flag for automated pipelines. Every administrative change is permanently recorded in the immutable `PlatformAuditLog` table.
 
 ```powershell
-# Quick Reference of All 7 Platform Management Commands
+# Quick Reference of All 8 Platform Management Commands
 .\.venv\Scripts\python.exe .\manage.py tenant_list --all
 .\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=<schema_name> --verify
 .\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=<schema_name>
@@ -528,6 +538,7 @@ All commands support human-friendly terminal tables (with ANSI color codes and W
 .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema_name> --list
 .\.venv\Scripts\python.exe .\manage.py support_access --schema=<schema_name> --status
 .\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema_name> --show
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<schema_name> --dry-run
 ```
 
 ---
@@ -583,7 +594,8 @@ Exports an isolated school database schema using PostgreSQL's native `pg_dump`, 
 | `--all` | Flag | — | Automatically loops through and backs up every active school schema on the platform sequentially. |
 | `--output-dir` | Path | `.private/backups/tenants/` | Custom folder on disk where backup `.dump` and `.sha256` files will be stored. |
 | `--format` | String | `custom` | Dump format: `custom` (compressed binary archive for `pg_restore`, recommended) or `sql` (plain SQL text). |
-| `--include-media` | Flag | — | Packages the school's private photos, crests, and file uploads into a compressed `.tar.gz` archive companion file. |
+| `--include-media` | Flag | — | Packages **every** tenant media root into a compressed `.tar.gz` companion file: public uploads (`MEDIA_ROOT/tenants/<schema>`), private student photos (`PRIVATE_STUDENT_PHOTO_ROOT/tenants/<schema>`), and generated student-ID exports (`.private/student_id_exports/<schema>`). Works against the local filesystem or the configured S3 backend. Fails if no files are found unless `--allow-empty-media` is also passed. |
+| `--allow-empty-media` | Flag | — | Explicitly allow `--include-media` to produce an empty archive when the tenant is expected to have no files. |
 | `--verify` | Flag | — | Immediately executes `pg_restore -l` against the generated dump file to prove the file is uncorrupted and readable. |
 | `--json` | Flag | — | Outputs the backup metadata (file paths, sizes, SHA-256 hashes, timestamps) as JSON. |
 | `--operator` | String | `"cli"` | Records who triggered the backup in the audit log. |
@@ -701,7 +713,7 @@ Inspects, enables, disables, and adjusts resource boundaries on individual schoo
 | Option | Type | Default | Plain Explanation |
 | :--- | :--- | :--- | :--- |
 | `--schema` | String | *Required* | Target school schema name. |
-| `--list` | Flag | `True` (default) | Displays a table of all boolean features and numeric capacity limits with current states. |
+| `--list` | Flag | *Default action* | Displays a table of all boolean features and numeric capacity limits with current states. |
 | `--enable` | String | — | Turns ON a feature by name (`roll_call`, `exeat_gate`, `student_id_cards`, `sms_dispatch`, `roster_import`, `advanced_reports`, `priority_support`). |
 | `--disable` | String | — | Turns OFF a feature by name. |
 | `--set-limit` | String (`key=value`) | — | Adjusts a numeric quota boundary. Keys: `max_students`, `max_staff`, `max_dormitories`, `max_sms_monthly`. |
@@ -752,7 +764,7 @@ Generates, verifies, and revokes temporary access tokens when platform engineers
 | `--ttl-hours` | Integer | `4` | How many hours the token will remain valid before automatically expiring (valid range: 1 to 168 hours / 7 days). |
 | `--verify` | String | — | Verifies whether a candidate plaintext token is currently valid and active for this school schema. |
 | `--revoke` | Flag | — | Immediately revokes and invalidates the active support token, blocking any further use. |
-| `--status` | Flag | `True` (default) | Shows whether an active token exists, its expiration time, remaining minutes, and recent support audit history. |
+| `--status` | Flag | *Default action* | Shows whether an active token exists, its expiration time, remaining minutes, and recent support audit history. |
 | `--reason` | String | `""` | Compliance description explaining why access was granted or revoked (permanently logged). |
 | `--json` | Flag | — | Outputs token status and audit trail as JSON. |
 | `--operator` | String | `"cli"` | Administrator username recorded in the audit log. |
@@ -788,7 +800,7 @@ Configures commercial contract parameters for each school, including plan tier, 
 | Option | Type | Default | Plain Explanation |
 | :--- | :--- | :--- | :--- |
 | `--schema` | String | *Required* | Target school schema name. |
-| `--show` | Flag | `True` (default) | Displays current contract terms, plan tier, pricing rates, cloud hosting allocation, and SMS packages. |
+| `--show` | Flag | *Default action* | Displays current contract terms, plan tier, pricing rates, cloud hosting allocation, and SMS packages. |
 | `--set-plan` | String | — | Sets the commercial tier: `free`, `starter`, `standard`, `premium`, `pilot`, `enterprise`. |
 | `--set-base-fee` | Decimal | — | Sets the base platform fee in Ghana Cedis charged at the beginning of each academic term (e.g. `1000.00`). |
 | `--set-rate-per-student` | Decimal | — | Sets the monthly rate charged per enrolled student (e.g. `0.65`). |
@@ -811,6 +823,7 @@ Configures commercial contract parameters for each school, including plan tier, 
 * **Standard (Recommended)**: GH₵1,000 base/term, GH₵0.65/student/mo (up to 1,500 students, 40 staff, 40 dorms).
 * **Premium (Advanced)**: GH₵2,000 base/term, GH₵0.80/student/mo (up to 2,500 students, 75 staff, 60 dorms).
 * **Pilot (Atebubu SHS)**: Flat GH₵2,500/term agreement (includes up to 2,000 students, full exeat & QR IDs).
+* **Enterprise (Custom)**: GH₵3,000 base/term, GH₵0.60/student/mo (unlimited students, staff, and dormitories; full feature set).
 
 **Practical Examples**:
 ```powershell
@@ -832,6 +845,50 @@ Configures commercial contract parameters for each school, including plan tier, 
 
 ---
 
+#### 8. `tenant_restore` — Verified Tenant Schema Restore
+
+Restores a tenant PostgreSQL schema from a `tenant_backup` archive. The restore is strictly non-destructive: it verifies the dump's SHA-256 checksum and its `pg_restore` table of contents before touching the database, refuses reserved schemas, schemas already registered to a tenant, and schemas that already exist in PostgreSQL, rejects dumps whose embedded schema name does not match the target, and never issues `DROP`, `--clean`, or `--if-exists`.
+
+**Command Syntax**:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<name> [OPTIONS]
+```
+
+**Options & Plain Explanations**:
+
+| Option | Type | Default | Plain Explanation |
+| :--- | :--- | :--- | :--- |
+| `--schema` | String | *Required* | Target tenant schema name to restore into. |
+| `--dump` | Path | Newest archive under the backup directory | Path to the `pg_dump` custom-format archive to restore. |
+| `--checksum` | Path | `<dump>.sha256` | Path to the `.sha256` checksum file produced by `tenant_backup`. |
+| `--media-archive` | Path | — | Optional companion `.tar.gz` from `tenant_backup --include-media` with the same timestamp as the database dump; validates every entry, refuses path traversal and existing-file overwrites, and restores into the configured file or S3 storages. |
+| `--backup-dir` | Path | `.private/backups/tenants/` | Approved backup directory searched when `--dump` is omitted. |
+| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
+| `--dry-run` | Flag | — | Runs every integrity and safety check but does not restore anything. |
+| `--json` | Flag | — | Outputs the restore summary as JSON. |
+
+**Practical Examples**:
+```powershell
+# Validate a backup without restoring it (recommended first step)
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs --dump=.private/backups/tenants/atebubu_shs/atebubu_shs.dump --dry-run
+
+# Restore from the newest archive in the approved backup directory
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs
+
+# Restore the database and companion media archive from a complete backup
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs `
+  --dump=.private/backups/tenants/atebubu_shs/atebubu_shs_20261017_091800.dump `
+  --media-archive=.private/backups/tenants/atebubu_shs/atebubu_shs_media_20261017_091800.tar.gz
+```
+
+Media archives are fully validated before database restoration and are restored
+through the configured storage backends. Existing media files are never
+overwritten. If storage fails while restoring media, the command reports the
+failure and removes files already written by that media restore where possible;
+the database schema may already have been restored.
+
+---
+
 ## 7. Background Workers & Scheduled Tasks (Celery & Celery Beat)
 
 ### 7.1 Multi-Tenant Task Execution Model
@@ -848,12 +905,12 @@ Celery workers process asynchronous jobs across all schools while enforcing conn
 
 All scheduled periodic tasks are defined in `CELERY_BEAT_SCHEDULE` and automatically fan out across active tenants using `_run_for_each_tenant`:
 
-| Task Name | Interval | Multi-Tenant Behavior | Description |
-| :--- | :--- | :--- | :--- |
-| `dispatch_queued_sms_deliveries` | 60 sec | Fans out to each active tenant | Recovers stale processing deliveries and dispatches up to 100 queued SMS notifications via SMSOnlineGH. |
-| `check-overdue-exeats-for-sms` | 15 min | Fans out to each active tenant | Identifies approved exeats where the student is currently out and expected return has passed; queues overdue SMS reminders. |
-| `expire-unfinished-roll-calls` | 60 sec | Fans out to each active tenant | Automatically deletes roll-call sessions that have remained in progress for longer than 1 hour and notifies the session creator. |
-| `cleanup-expired-student-id-exports` | 24 hours | Fans out to each active tenant | Deletes generated student ID ZIP archives that have exceeded their expiration date and unlinks the export records. |
+| Scheduler Key | Task Path | Interval | Multi-Tenant Behavior | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `dispatch-queued-sms-deliveries` | `core.tasks.dispatch_queued_sms_deliveries` | 60 sec | Fans out to each active tenant | Recovers stale processing deliveries and dispatches up to 100 queued SMS notifications via SMSOnlineGH. |
+| `check-overdue-exeats-for-sms` | `core.tasks.enqueue_overdue_exeat_reminders` | 15 min | Fans out to each active tenant | Identifies approved exeats where the student is currently out and expected return has passed; queues overdue SMS reminders. |
+| `expire-unfinished-roll-calls` | `core.tasks.expire_unfinished_roll_calls` | 60 sec | Fans out to each active tenant | Automatically deletes roll-call sessions that have remained in progress for longer than 1 hour and notifies the session creator. |
+| `cleanup-expired-student-id-exports` | `core.tasks.cleanup_expired_student_id_exports` | 24 hours | Fans out to each active tenant | Deletes generated student ID ZIP archives that have exceeded their expiration date and unlinks the export records. |
 
 ---
 
@@ -899,6 +956,8 @@ Static assets (JavaScript, CSS, fonts, admin assets, and HTMX libraries) are com
 
 ### 8.3 Tenant Database Backup & Restoration
 
+For routine platform operations, prefer the managed `tenant_backup` and `tenant_restore` commands (see §6.4), which add SHA-256 integrity verification and refuse to drop or overwrite existing objects. The raw `pg_dump`/`pg_restore` recipes below are for manual or offline recovery.
+
 To back up an individual school tenant without dumping the entire PostgreSQL database:
 
 #### 1. Dump a Tenant Schema
@@ -917,7 +976,7 @@ pg_dump -h <host> -U <user> -d <db_name> -n public -F c -f "backup_public_$(Get-
 ```
 
 #### 3. Back Up Tenant Files
-* **Local Filesystem**: Back up `media/tenants/<schema_name>/` and `.private/student_photos/`.
+* **Local Filesystem**: Back up `media/tenants/<schema_name>/`, `.private/student_photos/tenants/<schema_name>/`, and `.private/student_id_exports/<schema_name>/`.
 * **Neon S3 Object Storage**: Copy the tenant prefix:
   ```powershell
   aws s3 sync s3://<bucket_name>/tenants/achimota_shs/ ./backup_files_achimota/ --endpoint-url <endpoint>
@@ -986,20 +1045,27 @@ To permanently delete a school:
 | **Administrator (`ADMIN`)** | Entire School | Full system configuration, academic terms, SMS configuration, staff role assignment, student registry, housemaster assignments, audit logs. |
 | **Senior Housemaster (`SENIOR_HOUSEMASTER`)** | All Houses & Dorms | School-wide student registry viewing, exeat approval across all houses, roll-call reconciliation, disciplinary records, ID card generation. |
 | **Housemaster (`HOUSEMASTER`)** | Assigned House Only | Scoped to assigned house. Approve exeats for house students, conduct evening roll calls, follow up on absences, view house student records. |
-| **Tutor (`TUTOR`)** | Assigned House Only | Assist housemasters in roll-call verification and dorm inspection within assigned house. |
+| **House Tutor (`HOUSE_TUTOR`)** | Assigned House Only | Create and view exeat requests, record disciplinary incidents, and view house student records within the assigned house. Cannot approve exeats, run roll call, or access gate operations. |
 | **Gate Officer (`GATE_OFFICER`)** | Main Gate | Dedicated gate scanner interface. Record actual departure and arrival times for students on approved exeat. Read-only exeat verification. |
 
 ### 9.2 Student Roster Import Specifications
 
 Administrators can import student rosters via modern Excel (`.xlsx`) or UTF-8 CSV up to 10 MB and 2,000 rows.
 
-* **Required Columns**: `Admission No`, `Index No`, `Full Name`, `Gender` (`M`/`F`), `Programme`.
-* **Optional Columns**: `Residency` (`Boarder`/`Day`), `House`, `Dormitory`, `Room`, `Guardian Name`, `Guardian Phone`.
+Header names are matched case-insensitively and accept common aliases (for example `AdmissionNumber`, `IndexNo`, `Name`, `Form`, `Dorm`, `ParentPhone`).
+
+* **Required Columns**: `Admission No`, `Index No`, `Full Name`, `Gender` (`Male`/`Female`), `Programme`.
+* **Optional Columns**: `Date of Birth` (`YYYY-MM-DD` or `DD/MM/YYYY`), `Class`, `Residency` (`Boarder`/`Day`), `House`, `Dormitory`, `Room`, `Status` (enrollment), `Guardian Name`, `Guardian Phone`, `Guardian Alt Phone`.
 * **Validation Rules**:
   * Duplicate admission or index numbers reject the entire import batch.
   * Boarding students must resolve to a valid house and gender-compatible dormitory block.
   * If room capacity is exceeded, the upload is rejected.
   * Importer never silently updates or overwrites existing students.
+
+**Headless Import (CLI)**: `python manage.py import_roster <path/to/roster.csv|.xlsx>` performs the same validation and import without the web UI. In multi-tenant mode, select the target school with `--schema`:
+```powershell
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx --schema achimota_shs
+```
 
 ### 9.3 Exeat Life Cycle & SMS Notifications
 
@@ -1022,6 +1088,7 @@ Administrators can import student rosters via modern Excel (`.xlsx`) or UTF-8 CS
                                                       [ SMS: Safe Return ]
 ```
 
+* **Request Acknowledgement**: Submitting an exeat request queues an "awaiting approval" SMS to the guardian (`SMSDelivery.EventType.REQUESTED`).
 * **Overdue Alerts**: If an approved student fails to return by their `expected_return` timestamp, Celery Beat detects the overdue state and dispatches daily SMS alerts to guardians until the student is recorded returned.
 
 ### 9.4 Roll-Call Attendance Verification
@@ -1035,7 +1102,8 @@ Administrators can import student rosters via modern Excel (`.xlsx`) or UTF-8 CS
 
 * Print CR80-sized dual-sided student ID cards with high-resolution portraits.
 * Back side features a unique QR code pointing to `/verify/student/<public_token>/`.
-* **Privacy Controls**: Scanning the QR code displays the student's name, photo, and latest exeat approval status without disclosing phone numbers, home addresses, disciplinary records, or historical requests.
+* **Privacy Controls**: Scanning the QR code shows whether an active approved movement is recorded and whether gate departure was logged. It does not display the student's name, photo, admission number, or exeat details.
+* **Movement concerns**: The public scan page lets a person submit a concern for staff review. Reports are saved as open records in Django Admin under **Public Movement Concern Reports** (`/admin/core/movementconcernreport/`).
 * Administrators can invalidate and reissue public tokens instantly if an ID card is lost.
 
 ---
@@ -1087,3 +1155,17 @@ Administrators can import student rosters via modern Excel (`.xlsx`) or UTF-8 CS
   with connection.cursor() as cursor:
       cursor.execute("SET statement_timeout = 0;")
   ```
+
+### 10.7 HTTP 403 on Exeat, Gate, Roll-Call or ID-Card Pages
+* **Symptom**: An authenticated staff member receives `403 Forbidden` on pages such as `/exeats/`, `/operations/gate/`, `/operations/roll-call/`, or the student-ID export, even though their role should allow access.
+* **Cause**: The school's subscription does not entitle the required feature. Those views are wrapped in `@tenant_feature_required(...)` for `exeat_gate`, `roll_call`, `student_id_cards`, `roster_import`, and `advanced_reports`. A school with no `TenantSubscription` row falls back to the **Free** plan defaults, which disable `exeat_gate`, `student_id_cards`, and `sms_dispatch`.
+* **Fix**: Grant the missing feature (or move the school to a plan that includes it):
+  ```powershell
+  # Enable specific features
+  .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema> --enable=exeat_gate
+  .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema> --enable=student_id_cards
+
+  # Or adopt a plan tier and apply its defaults
+  .\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema> --set-plan=standard --apply-plan-defaults
+  ```
+* **Note**: A 403 page explains when the feature is disabled for the school's plan; other permission denials show a general access explanation. The public QR verification page (`/verify/student/<token>/`) requires the `student_id_cards` feature to be enabled.

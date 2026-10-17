@@ -117,16 +117,20 @@
               Record
             </a>
             {% endif %}
+            {% if can_create_exeat %}
             <a href="{% url 'core:exeat_create' %}?student_id={{ student.id }}" 
                class="px-2 py-1 text-[10px] font-semibold rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition"
                title="Issue Exeat for {{ student.full_name }}">
               + Exeat
             </a>
+            {% endif %}
+            {% if can_view_conduct %}
             <a href="{% url 'core:incident_create' %}?student_id={{ student.id }}" 
                class="px-2 py-1 text-[10px] font-semibold rounded bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 transition"
                title="Record Conduct Incident for {{ student.full_name }}">
               + Incident
             </a>
+            {% endif %}
           </div>
         </div>
         {% endfor %}
@@ -165,7 +169,7 @@
           </div>
           <div class="flex items-center gap-2 shrink-0">
             {% if exeat.status == 'Approved' %}
-              <span class="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{{ exeat.status_display }}</span>
+              <span class="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-emerald-50 text-emerald-700 border border-emerald-200">{{ exeat.get_status_display }}</span>
             {% elif exeat.status == 'Pending' %}
               <span class="px-1.5 py-0.5 text-[9px] font-semibold rounded bg-amber-50 text-amber-700 border border-amber-200">Pending</span>
             {% elif exeat.status == 'Rejected' %}

@@ -17,6 +17,7 @@ from core.models import (
     ExeatMovement,
     House,
     HouseMaster,
+    MovementConcernReport,
     Programme,
     SchoolConfiguration,
     StaffRole,
@@ -331,9 +332,11 @@ class StudentIdCardTests(TestCase):
         self.assertNotContains(response, "SCHOOL ADDRESS")
         self.assertNotContains(response, "SCHOOL CONTACT")
         self.assertContains(response, "QR code recognized")
+        self.assertContains(response, "No active authorization found")
+        self.assertContains(response, "Report a concern")
         self.assertNotContains(response, "Kwame Identity")
         self.assertNotContains(response, "ID-001")
-        self.assertNotContains(response, "General Science")
+        self.assertNotContains(response, "Id Science")
         self.assertNotContains(response, "Latest exeat request")
         self.assertNotContains(response, "Approved departure")
         self.assertNotContains(response, "Gate departure")
@@ -356,6 +359,57 @@ class StudentIdCardTests(TestCase):
             reverse("core:public_student_exeat", args=[uuid.uuid4()])
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_public_qr_shows_authorization_and_gate_departure_status(self):
+        now = timezone.now()
+        exeat = self.create_exeat(
+            status=Exeat.Status.APPROVED,
+            approved_by=self.approver,
+            expected_departure=now - timezone.timedelta(hours=1),
+            expected_return=now + timezone.timedelta(hours=1),
+        )
+        url = reverse("core:public_student_exeat", args=[self.student.public_token])
+
+        response = self.client.get(url)
+
+        self.assertContains(response, "Departure not verified")
+        self.assertNotContains(response, "Authorized movement")
+        self.assertNotContains(response, "Kwame Identity")
+        self.assertNotContains(response, "ID-001")
+        self.assertNotContains(response, exeat.exeat_number)
+
+        ExeatMovement.objects.create(
+            exeat=exeat,
+            actual_departure=now,
+            departure_recorded_by="Gate Officer",
+        )
+        response = self.client.get(url)
+
+        self.assertContains(response, "Authorized movement")
+        self.assertContains(response, "departure has been recorded")
+        self.assertNotContains(response, "Kwame Identity")
+        self.assertNotContains(response, "ID-001")
+
+    def test_public_qr_report_is_saved_for_school_staff_review(self):
+        response = self.client.post(
+            reverse(
+                "core:public_student_exeat",
+                args=[self.student.public_token],
+            ),
+            {"details": "The person says there is no approved leave."},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["report_submitted"])
+        self.assertContains(response, "sent to school staff for review")
+        report = MovementConcernReport.objects.get()
+        self.assertEqual(report.student, self.student)
+        self.assertIsNone(report.exeat)
+        self.assertEqual(
+            report.details,
+            "The person says there is no approved leave.",
+        )
+        self.assertEqual(report.status, MovementConcernReport.Status.OPEN)
 
     def test_public_student_photo_endpoint_is_removed(self):
         response = self.client.get(

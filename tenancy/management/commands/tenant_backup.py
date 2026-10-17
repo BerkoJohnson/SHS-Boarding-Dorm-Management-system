@@ -22,10 +22,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from django.conf import settings
+from django.core.files.storage import storages
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 from django.utils import timezone
 
+from core.storage import PrivateStudentIDExportStorage, PrivateStudentPhotoStorage
 from tenancy.models import PlatformAuditLog, Tenant
 
 
@@ -72,6 +74,11 @@ class Command(BaseCommand):
             help="Also archive tenant-specific media and document files into a .tar.gz archive.",
         )
         parser.add_argument(
+            "--allow-empty-media",
+            action="store_true",
+            help="Allow --include-media to succeed when the tenant has no media files.",
+        )
+        parser.add_argument(
             "--verify",
             action="store_true",
             help="Verify the generated dump file's table-of-contents using pg_restore.",
@@ -94,6 +101,8 @@ class Command(BaseCommand):
             raise CommandError(
                 "Set TENANCY_ENABLED=true before using platform management commands."
             )
+        if options.get("allow_empty_media") and not options.get("include_media"):
+            raise CommandError("--allow-empty-media requires --include-media.")
 
         pg_dump_path = shutil.which("pg_dump")
         if not pg_dump_path:
@@ -133,6 +142,7 @@ class Command(BaseCommand):
                 base_output_dir=base_output_dir,
                 dump_format=options["format"],
                 include_media=options["include_media"],
+                allow_empty_media=options["allow_empty_media"],
                 verify=options["verify"],
                 operator=options["operator"],
             )
@@ -158,6 +168,7 @@ class Command(BaseCommand):
         base_output_dir: Path,
         dump_format: str,
         include_media: bool,
+        allow_empty_media: bool,
         verify: bool,
         operator: str,
     ) -> Dict[str, Any]:
@@ -261,20 +272,23 @@ class Command(BaseCommand):
         media_path_str: Optional[str] = None
         media_size: Optional[int] = None
         media_count = 0
+        media_sources: List[str] = []
         if include_media:
             media_filename = f"{schema_name}_media_{timestamp}.tar.gz"
             media_archive_path = tenant_dir / media_filename
 
-            # Identify tenant media folders
-            tenant_media_dir = Path(settings.MEDIA_ROOT) / "tenants" / schema_name
-            with tarfile.open(media_archive_path, "w:gz") as tar:
-                if tenant_media_dir.exists() and tenant_media_dir.is_dir():
-                    for root, _, files in os.walk(tenant_media_dir):
-                        for file in files:
-                            full_file = Path(root) / file
-                            arcname = full_file.relative_to(tenant_media_dir)
-                            tar.add(full_file, arcname=str(arcname))
-                            media_count += 1
+            media_count, media_sources = self._archive_tenant_media(
+                media_archive_path,
+                schema_name,
+            )
+
+            if media_count == 0 and not allow_empty_media:
+                media_archive_path.unlink(missing_ok=True)
+                self._require_media_files(
+                    media_count,
+                    schema_name,
+                    allow_empty=allow_empty_media,
+                )
 
             media_path_str = str(media_archive_path)
             media_size = media_archive_path.stat().st_size
@@ -298,6 +312,7 @@ class Command(BaseCommand):
                 "verified": verification_passed,
                 "media_path": media_path_str,
                 "media_files": media_count,
+                "media_sources": media_sources,
                 "duration_seconds": duration,
             },
         )
@@ -314,8 +329,168 @@ class Command(BaseCommand):
             "media_file": media_path_str,
             "media_size_bytes": media_size,
             "media_files_count": media_count,
+            "media_sources": media_sources,
             "duration_seconds": duration,
         }
+
+    @staticmethod
+    def _uses_s3_media() -> bool:
+        return (
+            getattr(settings, "MEDIA_STORAGE_BACKEND", "filesystem") == "neon_s3"
+        )
+
+    @staticmethod
+    def _require_media_files(
+        count: int,
+        schema_name: str,
+        *,
+        allow_empty: bool,
+    ) -> None:
+        if count == 0 and not allow_empty:
+            raise CommandError(
+                f"--include-media found no files for tenant '{schema_name}'. "
+                "The backup is incomplete; use --allow-empty-media only "
+                "when an empty media archive is expected."
+            )
+
+    def _archive_tenant_media(
+        self,
+        archive_path: Path,
+        schema_name: str,
+    ):
+        """Archive every media root that belongs to a tenant.
+
+        Returns ``(file_count, source_labels)``. In filesystem mode the
+        configured local roots are walked; in S3 mode the matching object
+        prefixes are streamed straight into the archive. Both the public
+        tenant media (``MEDIA_ROOT/tenants/<schema>``) and the private roots
+        (student photos and generated student-ID exports) are included, which
+        the previous implementation silently omitted.
+        """
+        count = 0
+        sources: List[str] = []
+        with tarfile.open(archive_path, "w:gz") as tar:
+            if self._uses_s3_media():
+                count += self._add_storage_tree(
+                    tar,
+                    storages["default"],
+                    f"tenants/{schema_name}",
+                    "",
+                    sources,
+                )
+                count += self._add_storage_tree(
+                    tar,
+                    PrivateStudentPhotoStorage(),
+                    f"tenants/{schema_name}",
+                    "private_student_photos",
+                    sources,
+                )
+                count += self._add_storage_tree(
+                    tar,
+                    PrivateStudentIDExportStorage(),
+                    schema_name,
+                    "student_id_exports",
+                    sources,
+                )
+            else:
+                count += self._add_local_tree(
+                    tar,
+                    Path(settings.MEDIA_ROOT) / "tenants" / schema_name,
+                    "",
+                    sources,
+                )
+                count += self._add_local_tree(
+                    tar,
+                    Path(settings.PRIVATE_STUDENT_PHOTO_ROOT)
+                    / "tenants"
+                    / schema_name,
+                    "private_student_photos",
+                    sources,
+                )
+                count += self._add_local_tree(
+                    tar,
+                    Path(settings.BASE_DIR)
+                    / ".private"
+                    / "student_id_exports"
+                    / schema_name,
+                    "student_id_exports",
+                    sources,
+                )
+        return count, sources
+
+    def _add_local_tree(
+        self,
+        tar: tarfile.TarFile,
+        root: Path,
+        arc_prefix: str,
+        sources: List[str],
+    ) -> int:
+        if not root.is_dir():
+            return 0
+        added = 0
+        for dirpath, _directories, files in os.walk(root):
+            for filename in files:
+                full_path = Path(dirpath) / filename
+                relative = full_path.relative_to(root).as_posix()
+                arcname = f"{arc_prefix}/{relative}" if arc_prefix else relative
+                tar.add(full_path, arcname=arcname, recursive=False)
+                added += 1
+        if added:
+            sources.append(f"{arc_prefix or 'media'}:{root}")
+        return added
+
+    def _add_storage_tree(
+        self,
+        tar: tarfile.TarFile,
+        storage,
+        relative_prefix: str,
+        arc_prefix: str,
+        sources: List[str],
+    ) -> int:
+        uses_s3 = getattr(storage, "uses_s3", None)
+        if callable(uses_s3) and uses_s3():
+            storage = storage._remote_storage()
+        bucket = getattr(storage, "bucket", None)
+        if bucket is None:
+            return 0
+        location = str(getattr(storage, "location", "") or "").strip("/")
+        key_prefix = (
+            f"{location}/{relative_prefix}".strip("/")
+            if location
+            else relative_prefix
+        )
+        added = 0
+        for obj in bucket.objects.filter(Prefix=key_prefix):
+            key = obj.key
+            if key.endswith("/"):
+                continue
+            name = (
+                key[len(key_prefix):].lstrip("/")
+                if key.startswith(key_prefix)
+                else key
+            )
+            if not name:
+                continue
+            arcname = f"{arc_prefix}/{name}" if arc_prefix else name
+            tarinfo = tarfile.TarInfo(arcname)
+            tarinfo.size = obj.size
+            last_modified = getattr(obj, "last_modified", None)
+            if last_modified is not None:
+                tarinfo.mtime = last_modified.timestamp()
+            relative_name = (
+                key[len(location) + 1:]
+                if location and key.startswith(f"{location}/")
+                else key
+            )
+            with storage.open(relative_name, "rb") as handle:
+                tar.addfile(tarinfo, handle)
+            added += 1
+        if added:
+            sources.append(
+                f"{arc_prefix or 'media'}:s3://"
+                f"{getattr(storage, 'bucket_name', '')}/{key_prefix}"
+            )
+        return added
 
     def _print_backup_result(self, result: Dict[str, Any]):
         """Render terminal progress and restore instructions."""

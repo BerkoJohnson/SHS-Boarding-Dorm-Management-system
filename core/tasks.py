@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from contextlib import nullcontext
 from datetime import timedelta
 from functools import wraps
+from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from celery import shared_task
 from django.conf import settings
+from django.core.files import File
 from django.db import transaction
 from django.db.models import F, Q
 from django.urls import reverse
@@ -332,8 +335,12 @@ def cleanup_expired_student_id_exports(tenant_schema: str | None = None) -> int:
 
 def _cleanup_expired_student_id_exports_for_current_tenant() -> int:
     from core.models import StudentIDExport
-    from core.services.student_id_images import private_student_id_export_path
+    from core.services.student_id_images import (
+        student_id_export_name,
+        student_id_export_storage,
+    )
 
+    storage = student_id_export_storage()
     expired_exports = StudentIDExport.objects.filter(
         expires_at__lte=timezone.now(),
         status__in=(
@@ -343,9 +350,9 @@ def _cleanup_expired_student_id_exports_for_current_tenant() -> int:
     )
     deleted_count = 0
     for export in expired_exports.iterator():
-        archive_path = private_student_id_export_path(export.archive_name)
+        name = student_id_export_name(export.archive_name)
         try:
-            archive_path.unlink(missing_ok=True)
+            storage.delete(name)
         except OSError:
             logger.exception(
                 "Could not delete expired student ID export archive %s",
@@ -366,9 +373,10 @@ def generate_student_id_export(
 ) -> bool:
     from core.models import SchoolConfiguration, Student, StudentIDExport
     from core.services.student_id_images import (
-        private_student_id_export_path,
         render_student_card_side,
         safe_student_folder_name,
+        student_id_export_name,
+        student_id_export_storage,
     )
 
     export = StudentIDExport.objects.filter(pk=export_id).first()
@@ -421,11 +429,17 @@ def generate_student_id_export(
         ]
     )
 
-    archive_path = private_student_id_export_path(export.archive_name)
-    temporary_path = archive_path.with_suffix(".tmp")
+    storage = student_id_export_storage()
+    archive_name = student_id_export_name(export.archive_name)
     extension = "png" if export.image_format == StudentIDExport.ImageFormat.PNG else "jpg"
+    temporary_path = None
     try:
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        # Build the archive on local scratch space, then upload the finished ZIP
+        # to the shared private storage. This keeps the worker's temp files off
+        # shared storage and means the web service can read the archive back
+        # even when the two run on separate machines.
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as handle:
+            temporary_path = Path(handle.name)
         with ZipFile(temporary_path, "w", compression=ZIP_DEFLATED) as archive:
             for processed, student in enumerate(students.iterator(chunk_size=100), start=1):
                 folder_name = safe_student_folder_name(student)
@@ -451,7 +465,14 @@ def generate_student_id_export(
                     updated_at=timezone.now(),
                 )
 
-        temporary_path.replace(archive_path)
+        with temporary_path.open("rb") as source:
+            saved_name = storage.save(archive_name, File(source))
+        if saved_name != archive_name:
+            raise RuntimeError(
+                f"Export archive was stored as {saved_name!r} instead of "
+                f"{archive_name!r}."
+            )
+
         export.status = StudentIDExport.Status.COMPLETED
         export.processed_students = total_students
         export.finished_at = timezone.now()
@@ -467,8 +488,13 @@ def generate_student_id_export(
         )
         return True
     except Exception as error:
-        temporary_path.unlink(missing_ok=True)
-        archive_path.unlink(missing_ok=True)
+        try:
+            storage.delete(archive_name)
+        except Exception:  # noqa: BLE001 - never mask the original failure
+            logger.exception(
+                "Could not remove partial student ID export archive %s",
+                archive_name,
+            )
         export.status = StudentIDExport.Status.FAILED
         export.error_message = str(error)
         export.finished_at = timezone.now()
@@ -482,3 +508,6 @@ def generate_student_id_export(
         )
         logger.exception("Student ID export %s failed", export_id)
         raise
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)

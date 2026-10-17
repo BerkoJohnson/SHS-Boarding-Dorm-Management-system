@@ -26,17 +26,22 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import shutil
 import subprocess
+import tarfile
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from django.conf import settings
+from django.core.files import File
 from django.core.management.base import BaseCommand, CommandError
+from django.core.files.storage import storages
 from django.db import connection
 from django.utils import timezone
 
+from core.storage import PrivateStudentIDExportStorage, PrivateStudentPhotoStorage
 from tenancy.models import PlatformAuditLog, Tenant
 
 #: Schemas that must never be the target of a restore.
@@ -88,6 +93,15 @@ class Command(BaseCommand):
             help="Path to the .sha256 checksum file (default: <dump>.sha256).",
         )
         parser.add_argument(
+            "--media-archive",
+            type=str,
+            default=None,
+            help=(
+                "Optional tenant media .tar.gz companion archive produced by "
+                "tenant_backup --include-media."
+            ),
+        )
+        parser.add_argument(
             "--backup-dir",
             type=str,
             default=None,
@@ -131,6 +145,7 @@ class Command(BaseCommand):
             schema_name=options["schema"],
             dump=options.get("dump"),
             checksum=options.get("checksum"),
+            media_archive=options.get("media_archive"),
             backup_dir=options.get("backup_dir"),
             operator=options["operator"],
             dry_run=options["dry_run"],
@@ -266,6 +281,147 @@ class Command(BaseCommand):
             )
         return actual
 
+    def _validate_media_archive(
+        self,
+        media_archive: str,
+        schema_name: str,
+        base_dir: Path,
+    ) -> Tuple[Path, List[Tuple[str, Any, str]]]:
+        """Validate the companion archive and map safe members to storage keys."""
+        raw_path = Path(media_archive)
+        if raw_path.is_symlink():
+            raise CommandError(
+                f"Refusing to restore media from a symlink: '{raw_path}'."
+            )
+        path = raw_path.resolve()
+        tenant_backup_dir = (base_dir / schema_name).resolve()
+        if not path.exists() or not path.is_file():
+            raise CommandError(f"Media archive '{raw_path}' does not exist.")
+        if not self._is_within(path, tenant_backup_dir):
+            raise CommandError(
+                f"Media archive '{path}' is outside the approved tenant backup "
+                f"directory '{tenant_backup_dir}'."
+            )
+        if (
+            not path.name.startswith(f"{schema_name}_media_")
+            or not path.name.endswith(".tar.gz")
+        ):
+            raise CommandError(
+                "Media archive filename must match "
+                f"'{schema_name}_media_<timestamp>.tar.gz'."
+            )
+
+        members = []
+        seen_names = set()
+        try:
+            with tarfile.open(path, "r:gz") as archive:
+                for member in archive.getmembers():
+                    name = member.name
+                    parts = name.split("/")
+                    if (
+                        not name
+                        or "\\" in name
+                        or ":" in parts[0]
+                        or name.startswith("/")
+                        or any(part in {"", ".", ".."} for part in parts)
+                    ):
+                        raise CommandError(
+                            f"Unsafe path '{name}' in media archive."
+                        )
+                    if name in seen_names:
+                        raise CommandError(
+                            f"Duplicate path '{name}' in media archive."
+                        )
+                    seen_names.add(name)
+                    if not member.isfile():
+                        raise CommandError(
+                            f"Unsupported non-file entry '{name}' in media archive."
+                        )
+
+                    if parts[0] in {
+                        "private_student_photos",
+                        "student_id_exports",
+                    } and len(parts) < 2:
+                        raise CommandError(
+                            f"Invalid media path '{name}' in archive."
+                        )
+                    if parts[0] == "private_student_photos":
+                        storage = PrivateStudentPhotoStorage()
+                        storage_name = posixpath.join(
+                            "tenants",
+                            schema_name,
+                            *parts[1:],
+                        )
+                    elif parts[0] == "student_id_exports":
+                        storage = PrivateStudentIDExportStorage()
+                        storage_name = posixpath.join(schema_name, *parts[1:])
+                    else:
+                        storage = storages["default"]
+                        storage_name = posixpath.join(
+                            "tenants",
+                            schema_name,
+                            *parts,
+                        )
+                    if storage.exists(storage_name):
+                        raise CommandError(
+                            f"Media restore would overwrite existing file "
+                            f"'{storage_name}'. Resolve the conflict before restoring."
+                        )
+                    members.append((name, storage, storage_name))
+        except (OSError, tarfile.TarError) as error:
+            raise CommandError(
+                f"Could not read media archive '{path}': {error}"
+            ) from error
+
+        if not members:
+            raise CommandError(f"Media archive '{path}' contains no files.")
+        return path, members
+
+    @staticmethod
+    def _restore_media_archive(
+        media_path: Path,
+        members: List[Tuple[str, Any, str]],
+    ) -> int:
+        """Restore validated media members through their configured storages."""
+        saved_files = []
+        try:
+            with tarfile.open(media_path, "r:gz") as archive:
+                for member_name, storage, storage_name in members:
+                    source = archive.extractfile(member_name)
+                    if source is None:
+                        raise CommandError(
+                            f"Could not read '{member_name}' from media archive."
+                        )
+                    with source:
+                        stored_name = storage.save(
+                            storage_name,
+                            File(source, name=storage_name),
+                        )
+                    if stored_name != storage_name:
+                        storage.delete(stored_name)
+                        raise CommandError(
+                            f"Media restore refused to rename '{storage_name}' "
+                            f"to '{stored_name}'."
+                        )
+                    saved_files.append((storage, stored_name))
+        except Exception as error:
+            cleanup_errors = []
+            for storage, stored_name in saved_files:
+                try:
+                    storage.delete(stored_name)
+                except Exception as cleanup_error:
+                    cleanup_errors.append(str(cleanup_error))
+            details = (
+                f" Could not remove {len(cleanup_errors)} partially restored "
+                "media file(s)."
+                if cleanup_errors
+                else ""
+            )
+            raise CommandError(
+                f"Media restore failed: {error}.{details}"
+            ) from error
+        return len(saved_files)
+
     def _dump_schema_name(self, dump: Path, pg_restore_path: str) -> Optional[str]:
         """Read the archive table of contents and return its schema name."""
         proc = subprocess.run(
@@ -334,6 +490,7 @@ class Command(BaseCommand):
         schema_name: str,
         dump: Optional[str],
         checksum: Optional[str],
+        media_archive: Optional[str],
         backup_dir: Optional[str],
         operator: str,
         dry_run: bool,
@@ -361,6 +518,24 @@ class Command(BaseCommand):
                 "across schemas."
             )
 
+        media_path = None
+        media_members: List[Tuple[str, Any, str]] = []
+        if media_archive:
+            media_path, media_members = self._validate_media_archive(
+                media_archive,
+                schema_name,
+                base_dir,
+            )
+            expected_media_name = (
+                f"{schema_name}_media_"
+                f"{dump_path.stem.removeprefix(f'{schema_name}_')}.tar.gz"
+            )
+            if media_path.name != expected_media_name:
+                raise CommandError(
+                    f"Media archive '{media_path.name}' does not match database "
+                    f"backup '{dump_path.name}'."
+                )
+
         if Tenant.objects.filter(schema_name=schema_name).exists():
             raise CommandError(
                 f"Schema '{schema_name}' is registered to a tenant. Refusing to "
@@ -386,6 +561,8 @@ class Command(BaseCommand):
             "sha256": checksum_value,
             "source_schema": source_schema,
             "dry_run": dry_run,
+            "media_archive": str(media_path) if media_path else None,
+            "media_files_count": len(media_members),
         }
 
         if dry_run:
@@ -435,6 +612,13 @@ class Command(BaseCommand):
                 "missing or empty."
             )
 
+        restored_media_count = 0
+        if media_path:
+            restored_media_count = self._restore_media_archive(
+                media_path,
+                media_members,
+            )
+
         duration = round(time.time() - start_time, 2)
 
         PlatformAuditLog.objects.create(
@@ -449,6 +633,8 @@ class Command(BaseCommand):
                 "dump_path": str(dump_path),
                 "sha256": checksum_value,
                 "source_schema": source_schema,
+                "media_archive": str(media_path) if media_path else None,
+                "media_files": restored_media_count,
                 "duration_seconds": duration,
             },
         )

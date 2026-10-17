@@ -30,6 +30,7 @@ from .models import (
     RollCallSession,
     RollCallEntry,
     RollCallAbsenceFollowUp,
+    MovementConcernReport,
 )
 from .widgets import PrivateStudentPhotoInput
 
@@ -195,6 +196,30 @@ class ExeatAdmin(admin.ModelAdmin):
 @admin.register(ExeatMovement)
 class ExeatMovementAdmin(admin.ModelAdmin):
     list_display = ('exeat', 'actual_departure', 'actual_return', 'departure_recorded_by', 'return_recorded_by')
+
+
+@admin.register(MovementConcernReport)
+class MovementConcernReportAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "student", "exeat", "status")
+    list_filter = ("status", "created_at")
+    search_fields = (
+        "student__full_name",
+        "student__admission_no",
+        "details",
+    )
+    readonly_fields = (
+        "student",
+        "exeat",
+        "details",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ExeatReconciliation)

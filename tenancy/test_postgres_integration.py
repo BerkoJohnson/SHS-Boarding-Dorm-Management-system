@@ -19,6 +19,7 @@ import json
 from io import StringIO
 from pathlib import Path
 import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -29,7 +30,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connection, connections
 from django.db.models.signals import pre_save
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from django_pgschemas.schema import Schema
 
 from core.models import Dormitory, House
@@ -220,7 +221,50 @@ class TenantRestoreRoundTripTests(_DisposableTenantSchemaTestCase):
         super().setUp()
         if not _pg_client_available():
             self.skipTest("pg_dump/pg_restore are required for the round-trip test.")
-        self.backup_dir = Path(settings.BASE_DIR) / ".private" / "backups" / "tenants"
+        self.media_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.media_temp.cleanup)
+        self.backup_dir = Path(self.media_temp.name) / "backups" / "tenants"
+        media_root = Path(self.media_temp.name) / "media"
+        photo_root = Path(self.media_temp.name) / "private-photos"
+        project_root = Path(self.media_temp.name) / "project"
+        self.media_settings = override_settings(
+            MEDIA_ROOT=media_root,
+            PRIVATE_STUDENT_PHOTO_ROOT=photo_root,
+            BASE_DIR=project_root,
+            MEDIA_STORAGE_BACKEND="filesystem",
+        )
+        self.media_settings.enable()
+        self.addCleanup(self.media_settings.disable)
+        self.public_media_file = (
+            media_root
+            / "tenants"
+            / self.schema_name
+            / "school"
+            / "logos"
+            / "crest.png"
+        )
+        self.private_photo_file = (
+            photo_root
+            / "tenants"
+            / self.schema_name
+            / "students"
+            / "photos"
+            / "student.png"
+        )
+        self.export_file = (
+            project_root
+            / ".private"
+            / "student_id_exports"
+            / self.schema_name
+            / "student-ids.zip"
+        )
+        for path, content in (
+            (self.public_media_file, b"crest-bytes"),
+            (self.private_photo_file, b"photo-bytes"),
+            (self.export_file, b"export-bytes"),
+        ):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
         with self.tenant:
             house = House.objects.create(name="Round Trip House")
             Dormitory.objects.create(house=house, name="RT Block", gender="M")
@@ -232,6 +276,7 @@ class TenantRestoreRoundTripTests(_DisposableTenantSchemaTestCase):
             "tenant_backup",
             f"--schema={self.schema_name}",
             f"--output-dir={self.backup_dir}",
+            "--include-media",
             "--json",
             stdout=backup_out,
         )
@@ -239,26 +284,37 @@ class TenantRestoreRoundTripTests(_DisposableTenantSchemaTestCase):
         self.assertEqual(summary["successful"], 1)
         dump_file = Path(summary["backups"][0]["dump_file"])
         self.assertTrue(dump_file.exists())
+        self.assertEqual(summary["backups"][0]["media_files_count"], 3)
+        media_file = Path(summary["backups"][0]["media_file"])
+        self.assertTrue(media_file.exists())
 
         # 2. Simulate disaster: de-register the tenant and drop the schema.
         self.tenant.delete()
         with connection.cursor() as cursor:
             cursor.execute(f'DROP SCHEMA "{self.schema_name}" CASCADE')
+        self.public_media_file.unlink()
+        self.private_photo_file.unlink()
+        self.export_file.unlink()
 
-        # 3. Restore from the verified archive.
+        # 3. Restore the database and media from their verified backup files.
         restore_out = StringIO()
         call_command(
             "tenant_restore",
             f"--schema={self.schema_name}",
             f"--dump={dump_file}",
+            f"--media-archive={media_file}",
             f"--backup-dir={self.backup_dir}",
             "--json",
             stdout=restore_out,
         )
         result = json.loads(restore_out.getvalue())
         self.assertEqual(result["status"], "success")
+        self.assertEqual(result["media_files_count"], 3)
+        self.assertEqual(self.public_media_file.read_bytes(), b"crest-bytes")
+        self.assertEqual(self.private_photo_file.read_bytes(), b"photo-bytes")
+        self.assertEqual(self.export_file.read_bytes(), b"export-bytes")
 
-        # 4. The data is back.
+        # 4. The database data is back.
         with self.tenant:
             self.assertEqual(House.objects.filter(name="Round Trip House").count(), 1)
             self.assertEqual(Dormitory.objects.filter(name="RT Block").count(), 1)

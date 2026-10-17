@@ -1,10 +1,16 @@
+from datetime import datetime, timezone as datetime_timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 from django.core.exceptions import ValidationError
 from django.core.management.base import CommandError
 from django.http import Http404
-from django.test import RequestFactory, SimpleTestCase, override_settings
+from django.test import (
+    RequestFactory,
+    SimpleTestCase,
+    TestCase,
+    override_settings,
+)
 
 from tenancy.management.commands.migrate_legacy_school import (
     Command as LegacyMigrationCommand,
@@ -19,15 +25,21 @@ from tenancy.models import Domain, Tenant, normalize_domain
 class TenantFileIsolationTests(SimpleTestCase):
     @override_settings(TENANCY_ENABLED=True)
     @patch(
+        "core.models.timezone.now",
+        return_value=datetime(2026, 10, 17, tzinfo=datetime_timezone.utc),
+    )
+    @patch(
         "core.models.get_current_schema",
         return_value=SimpleNamespace(schema_name="school_one"),
     )
-    def test_new_photo_and_logo_uploads_are_namespaced_by_tenant(self, schema):
+    def test_new_photo_and_logo_uploads_are_namespaced_by_tenant(
+        self, schema, _now
+    ):
         from core.models import school_logo_upload_to, student_photo_upload_to
 
         self.assertEqual(
             student_photo_upload_to(None, "portrait.png"),
-            "tenants/school_one/students/photos/%Y/%m/portrait.png",
+            "tenants/school_one/students/photos/2026/10/portrait.png",
         )
         self.assertEqual(
             school_logo_upload_to(None, "crest.png"),
@@ -35,12 +47,16 @@ class TenantFileIsolationTests(SimpleTestCase):
         )
 
     @override_settings(TENANCY_ENABLED=False)
-    def test_legacy_upload_paths_remain_unchanged(self):
+    @patch(
+        "core.models.timezone.now",
+        return_value=datetime(2026, 10, 17, tzinfo=datetime_timezone.utc),
+    )
+    def test_legacy_upload_paths_remain_unchanged(self, _now):
         from core.models import school_logo_upload_to, student_photo_upload_to
 
         self.assertEqual(
             student_photo_upload_to(None, "portrait.png"),
-            "students/photos/%Y/%m/portrait.png",
+            "students/photos/2026/10/portrait.png",
         )
         self.assertEqual(
             school_logo_upload_to(None, "crest.png"),
@@ -152,6 +168,69 @@ class LegacyMigrationDependencyTests(SimpleTestCase):
             "circular foreign-key dependencies: core_first, core_second",
         ):
             LegacyMigrationCommand._stable_topological_sort(tables, dependencies)
+
+
+class LegacyMigrationOrderingTests(SimpleTestCase):
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("tenancy.management.commands.migrate_legacy_school.Domain.objects")
+    @patch("tenancy.management.commands.migrate_legacy_school.Tenant.objects")
+    @patch("tenancy.management.commands.migrate_legacy_school.call_command")
+    def test_target_schema_migrates_before_legacy_rows_are_copied(
+        self,
+        call_command,
+        tenant_objects,
+        domain_objects,
+    ):
+        tenant = MagicMock()
+        tenant.name = "School One"
+        tenant.schema_name = "school_one"
+        tenant.is_active = False
+        tenant_objects.filter.return_value.first.return_value = tenant
+        domain_objects.filter.return_value.exists.return_value = False
+        operations = []
+        call_command.side_effect = lambda *args, **kwargs: operations.append(
+            ("migrate", args, kwargs)
+        )
+
+        command = LegacyMigrationCommand()
+        with (
+            patch(
+                "tenancy.management.commands.migrate_legacy_school.connection.vendor",
+                "postgresql",
+            ),
+            patch(
+                "tenancy.management.commands.migrate_legacy_school.transaction.atomic"
+            ),
+            patch.object(command, "_legacy_tables", return_value={"core_student"}),
+            patch.object(
+                command,
+                "_copy_rows",
+                side_effect=lambda *_args: operations.append(("copy_rows",)),
+            ),
+            patch.object(
+                command,
+                "_copy_files",
+                side_effect=lambda *_args: operations.append(("copy_files",)),
+            ),
+        ):
+            command.handle(
+                name="School One",
+                schema="school_one",
+                domain="school.example.org",
+                confirm_domain_verified=True,
+            )
+
+        self.assertEqual(
+            [operation[0] for operation in operations],
+            ["migrate", "copy_rows", "copy_files"],
+        )
+        self.assertEqual(
+            operations[0][1:],
+            (
+                ("migrate",),
+                {"schemas": ["school_one"], "verbosity": 0},
+            ),
+        )
 
 
 class TenantActivationMigrationCheckTests(SimpleTestCase):
@@ -328,8 +407,15 @@ class TenantModelValidationTests(SimpleTestCase):
             self.assertNotIn("domain", error.message)
 
     @override_settings(TENANCY_ENABLED=True)
+    @patch("tenancy.models.transaction.atomic")
+    @patch("tenancy.models.Tenant.objects")
     @patch("tenancy.models.Domain.objects")
-    def test_primary_domain_demotes_existing_primary_on_save(self, mock_domain_objects):
+    def test_primary_domain_demotes_existing_primary_on_save(
+        self,
+        mock_domain_objects,
+        mock_tenant_objects,
+        mock_atomic,
+    ):
         from django_pgschemas.routing.models import DomainModel
 
         filter_qs = MagicMock()
@@ -348,6 +434,10 @@ class TenantModelValidationTests(SimpleTestCase):
         with patch.object(DomainModel, "save"):
             domain.save()
 
+        mock_atomic.assert_called_once_with()
+        mock_tenant_objects.select_for_update.return_value.get.assert_called_once_with(
+            pk=42
+        )
         mock_domain_objects.filter.assert_called_once_with(
             tenant_id=42,
             is_primary=True,
@@ -355,6 +445,40 @@ class TenantModelValidationTests(SimpleTestCase):
         filter_qs.exclude.assert_called_once_with(pk=10)
         filter_qs.update.assert_called_once_with(is_primary=False)
 
+    @patch("tenancy.models.transaction.atomic")
+    @patch("tenancy.models.Tenant.objects")
+    @patch("tenancy.models.Domain.objects")
+    @override_settings(TENANCY_ENABLED=True)
+    def test_primary_domain_save_failure_keeps_demotion_inside_transaction(
+        self,
+        mock_domain_objects,
+        mock_tenant_objects,
+        mock_atomic,
+    ):
+        from django_pgschemas.routing.models import DomainModel
+
+        domain = Domain(
+            pk=10,
+            tenant=Tenant(pk=42, schema_name="school_one", name="School One"),
+            domain="newprimary.example.org",
+            is_primary=True,
+        )
+        domain.full_clean = Mock(
+            side_effect=ValidationError({"domain": "Invalid domain."})
+        )
+
+        with patch.object(DomainModel, "save"), self.assertRaises(ValidationError):
+            domain.save()
+
+        mock_atomic.assert_called_once_with()
+        mock_atomic.return_value.__exit__.assert_called_once()
+        self.assertIsNotNone(mock_atomic.return_value.__exit__.call_args.args[0])
+        mock_tenant_objects.select_for_update.return_value.get.assert_called_once_with(
+            pk=42
+        )
+        mock_domain_objects.filter.return_value.exclude.return_value.update.assert_called_once_with(
+            is_primary=False
+        )
 
 class CsrfCacheInvalidationSignalTests(SimpleTestCase):
     @patch("tenancy.middleware.DynamicCsrfMiddleware.invalidate_cache")

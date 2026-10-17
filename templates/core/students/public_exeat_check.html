@@ -17,21 +17,17 @@
     header h1 { margin: 0; font-size: 16px; }
     header p { margin: 4px 0 0; color: #64748b; font-size: 11px; }
     section { margin-top: 14px; padding: 16px; }
-    .student { display: flex; align-items: center; gap: 13px; }
-    .student img, .initial { width: 64px; height: 82px; flex: none; border-radius: 8px; border: 1px solid #e2e8f0; object-fit: cover; }
-    .initial { display: grid; place-items: center; background: #f1f5f9; color: #64748b; font-size: 24px; font-weight: 800; }
-    .student h2 { margin: 0; font-size: 18px; line-height: 1.2; }
-    .student p { margin: 5px 0 0; color: #64748b; font-size: 12px; }
     .badge { display: inline-block; margin-top: 12px; border-radius: 999px; padding: 6px 10px; background: #f1f5f9; color: #334155; font-size: 11px; font-weight: 800; }
-    .badge.approved { background: #dcfce7; color: #166534; }
-    .badge.pending { background: #fef3c7; color: #92400e; }
-    .badge.rejected, .badge.cancelled { background: #fee2e2; color: #991b1b; }
-    dl { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; margin: 16px 0 0; }
-    dt { color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
-    dd { margin: 4px 0 0; font-size: 13px; font-weight: 650; }
+    .badge.authorized { background: #dcfce7; color: #166534; }
+    .badge.unauthorized { background: #fee2e2; color: #991b1b; }
     .empty { color: #475569; font-size: 13px; line-height: 1.55; }
+    .report-form { display: grid; gap: 10px; margin-top: 16px; }
+    .report-form label { font-size: 13px; font-weight: 700; }
+    .report-form textarea { width: 100%; min-height: 96px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; font: inherit; }
+    .report-form button { justify-self: start; border: 0; border-radius: 8px; background: #1e3a8a; color: white; padding: 10px 14px; font: inherit; font-weight: 700; cursor: pointer; }
+    .success { border-radius: 8px; padding: 10px; background: #dcfce7; color: #166534; font-size: 13px; }
+    .error { color: #b91c1c; font-size: 12px; }
     footer { padding: 16px 8px; color: #64748b; text-align: center; font-size: 10px; }
-    @media (max-width: 380px) { dl { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -49,37 +45,40 @@
   </header>
 
   <section>
-    <div class="student">
-      {% if student.photo %}<img src="{% url 'core:public_student_photo' student.public_token %}" alt="Student portrait">
-      {% else %}<div class="initial" aria-hidden="true">{{ student.full_name|slice:":1" }}</div>{% endif %}
-      <div>
-        <h2>{{ student.full_name }}</h2>
-        <p>Admission No. {{ student.admission_no }}</p>
-        <p>{{ student.programme.name }}{% if student.class_group %} · {{ student.class_group.name }}{% endif %}</p>
-        <p>{% if student.house %}{{ student.house.name }}{% else %}Day student{% endif %}</p>
-      </div>
-    </div>
+    <h2 style="margin:0;font-size:16px">QR code recognized</h2>
+    {% if movement_authorized %}
+      <span class="badge authorized">Authorized movement</span>
+      <p class="empty">
+        An approved exeat is active and departure has been recorded at the school gate.
+        The student has not yet been recorded as returned.
+      </p>
+    {% elif approved_exeat_active %}
+      <span class="badge unauthorized">Departure not verified</span>
+      <p class="empty">An approved exeat is active, but gate departure has not been recorded. The student's presence outside campus is not verified by school records.</p>
+      </p>
+    {% else %}
+      <span class="badge unauthorized">No active authorization found</span>
+      <p class="empty">No active approved exeat is recorded. Treat this movement as not authorized and contact school authorities.</p>
+    {% endif %}
   </section>
 
   <section>
-    <h2 style="margin:0;font-size:14px">Latest exeat request</h2>
-    {% if exeat %}
-      <span class="badge {{ exeat.status|lower }}">{{ exeat.get_status_display }}</span>
-      <dl>
-        <div><dt>Exeat type</dt><dd>{{ exeat.get_exeat_type_display }}</dd></div>
-        <div><dt>Approval</dt><dd>{% if exeat.status == "Approved" %}Approved{% elif exeat.status == "Pending" %}Awaiting decision{% else %}{{ exeat.get_status_display }}{% endif %}</dd></div>
-        {% if exeat.status == "Approved" %}
-        <div><dt>Approved departure</dt><dd>{{ exeat.expected_departure|date:"d M Y, H:i" }} UTC</dd></div>
-        <div><dt>Approved return</dt><dd>{{ exeat.expected_return|date:"d M Y, H:i" }} UTC</dd></div>
-        <div><dt>Gate departure</dt><dd>{% if movement and movement.actual_departure %}Recorded · {{ movement.actual_departure|date:"d M Y, H:i" }} UTC{% else %}Not recorded{% endif %}</dd></div>
-        <div><dt>Gate return</dt><dd>{% if movement and movement.actual_return %}Recorded · {{ movement.actual_return|date:"d M Y, H:i" }} UTC{% else %}Not recorded{% endif %}</dd></div>
-        {% endif %}
-      </dl>
+    <h2 style="margin:0;font-size:14px">Report a concern</h2>
+    {% if report_submitted %}
+      <p class="success" role="status">Your report has been sent to school staff for review. Thank you for notifying the school.</p>
     {% else %}
-      <p class="empty">No exeat request has been recorded for this student.</p>
+      <p class="empty">If this movement concerns you, submit a report for school staff to review.</p>
+      <form class="report-form" method="post" action="">
+        {% csrf_token %}
+        <label for="{{ report_form.details.id_for_label }}">{{ report_form.details.label }}</label>
+        {{ report_form.details }}
+        {% if report_form.details.help_text %}<small>{{ report_form.details.help_text }}</small>{% endif %}
+        {% for error in report_form.details.errors %}<span class="error">{{ error }}</span>{% endfor %}
+        <button type="submit">Send report to school staff</button>
+      </form>
     {% endif %}
   </section>
-  <footer>This public check shows only the latest request and recorded main-gate movements. It does not replace staff approval or gate verification.</footer>
+  <footer>This public check does not identify the student or display exeat details. It is not a substitute for direct staff verification.</footer>
 </main>
 </body>
 </html>

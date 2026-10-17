@@ -68,6 +68,21 @@ class ReportFilterForm(forms.Form):
         return cleaned_data
 
 
+class MovementConcernReportForm(forms.Form):
+    details = forms.CharField(
+        max_length=1000,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 4,
+                "maxlength": 1000,
+                "autocomplete": "off",
+            }
+        ),
+        label="What concerns you about this movement?",
+        help_text="Do not include sensitive personal information.",
+    )
+
+
 class ExeatRequestForm(forms.ModelForm):
     """
     STEP 1 — Draft / Request form.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import posixpath
 import re
 from io import BytesIO
 from pathlib import Path
@@ -8,6 +9,8 @@ import qrcode
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 
 from django.conf import settings
+
+from core.storage import PrivateStudentIDExportStorage
 
 
 CARD_WIDTH = 1011
@@ -61,14 +64,30 @@ def safe_student_folder_name(student) -> str:
     return f"{admission_no or student.pk} - {name or 'Student'}"
 
 
-def private_student_id_export_path(
+_STUDENT_ID_EXPORT_STORAGE = None
+
+
+def student_id_export_storage():
+    """Return the shared private storage backend for student-ID archives."""
+    global _STUDENT_ID_EXPORT_STORAGE
+    if _STUDENT_ID_EXPORT_STORAGE is None:
+        _STUDENT_ID_EXPORT_STORAGE = PrivateStudentIDExportStorage()
+    return _STUDENT_ID_EXPORT_STORAGE
+
+
+def student_id_export_name(
     archive_name: str,
     *,
     schema_name: str | None = None,
-) -> Path:
+) -> str:
+    """Return the storage-relative name for a tenant's export archive.
+
+    The name is namespaced by tenant schema when tenancy is enabled, but it is
+    backend-agnostic: the same name resolves to a local path in filesystem
+    mode and to a private S3 object key in S3 mode.
+    """
     if Path(archive_name).name != archive_name or not archive_name.endswith(".zip"):
         raise ValueError("Invalid student ID export archive name.")
-    export_root = Path(settings.BASE_DIR) / ".private" / "student_id_exports"
     if settings.TENANCY_ENABLED:
         from django_pgschemas.schema import get_current_schema
 
@@ -77,8 +96,8 @@ def private_student_id_export_path(
             getattr(schema, "schema_name", None) if schema else None
         )
         if resolved and resolved != "public":
-            export_root /= resolved
-    return export_root / archive_name
+            return posixpath.join(resolved, archive_name)
+    return archive_name
 
 
 def render_student_card_side(

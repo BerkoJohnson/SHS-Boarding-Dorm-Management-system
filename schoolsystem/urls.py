@@ -30,6 +30,8 @@ urlpatterns = [
     path('', include('core.urls')),
 ]
 
+handler403 = "core.views.permission_denied_view"
+
 if settings.MEDIA_STORAGE_BACKEND == "filesystem":
     urlpatterns += [
         path(

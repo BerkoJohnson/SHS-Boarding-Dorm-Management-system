@@ -48,6 +48,7 @@ from .models import (
     SchoolConfiguration,
     ConfigurationAuditLog,
     StudentIDExport,
+    MovementConcernReport,
 )
 from .forms import (
     ExeatCreateForm,
@@ -57,6 +58,7 @@ from .forms import (
     ReportFilterForm,
     StudentRegistrationForm,
     StudentRosterUploadForm,
+    MovementConcernReportForm,
 )
 from .permissions import (
     role_required,
@@ -941,10 +943,11 @@ def student_rotate_public_token_view(request, student_pk):
 
 
 @never_cache
+@require_http_methods(["GET", "POST"])
 @tenant_feature_required("student_id_cards")
 def public_student_exeat_view(request, token):
     student = get_object_or_404(
-        Student.objects.select_related("programme", "house", "class_group"),
+        Student,
         public_token=token,
     )
     now = timezone.now()
@@ -975,24 +978,75 @@ def public_student_exeat_view(request, token):
         .order_by("-expected_departure", "-created_at", "-pk")
         .first()
     )
-    exeat = active_exeat or student.exeats.order_by("-created_at", "-pk").first()
     movement = (
-        ExeatMovement.objects.filter(exeat=exeat).first()
-        if exeat and exeat.status == Exeat.Status.APPROVED
+        ExeatMovement.objects.filter(exeat=active_exeat).first()
+        if active_exeat
         else None
     )
+    report_form = MovementConcernReportForm()
+    report_submitted = False
+    departure_recorded = bool(
+        (movement and movement.actual_departure)
+        or (
+            active_exeat
+            and ExeatReconciliation.objects.filter(
+                exeat=active_exeat,
+                outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+            ).exists()
+        )
+    )
+    if request.method == "POST":
+        report_form = MovementConcernReportForm(request.POST)
+        if report_form.is_valid():
+            MovementConcernReport.objects.create(
+                student=student,
+                exeat=active_exeat,
+                details=report_form.cleaned_data["details"],
+            )
+            report_submitted = True
+            report_form = MovementConcernReportForm()
+
     response = render(
         request,
         "core/students/public_exeat_check.html",
         {
-            "student": student,
-            "exeat": exeat,
-            "movement": movement,
+            "movement_authorized": active_exeat is not None and departure_recorded,
+            "approved_exeat_active": active_exeat is not None,
+            "departure_recorded": departure_recorded,
             "school_configuration": SchoolConfiguration.get_solo(),
+            "report_form": report_form,
+            "report_submitted": report_submitted,
         },
     )
+    if request.method == "POST" and not report_submitted:
+        response.status_code = 400
     response["X-Robots-Tag"] = "noindex, nofollow"
     return response
+
+
+def permission_denied_view(request, exception=None):
+    exception_message = str(exception or "")
+    if exception_message.startswith(
+        "This tenant's subscription does not include "
+    ):
+        feature = exception_message.removeprefix(
+            "This tenant's subscription does not include "
+        ).rstrip(".")
+        explanation = (
+            f"This school’s current plan does not include {feature}. "
+            "Please contact a school administrator to enable access."
+        )
+    else:
+        explanation = (
+            "Your account is not allowed to open this page. "
+            "Please contact a school administrator if you believe you need access."
+        )
+    return render(
+        request,
+        "403.html",
+        {"permission_explanation": explanation},
+        status=403,
+    )
 
 
 @login_required
@@ -1681,8 +1735,8 @@ def exeat_action_view(request, pk, action):
                     current_hm = getattr(request.user, 'housemaster', None)
                     if current_hm is None:
                         current_hm = HouseMaster.objects.filter(
-                            models.Q(staff_id__iexact=request.user.username)
-                            | models.Q(full_name__icontains=request.user.username)
+                            Q(staff_id__iexact=request.user.username)
+                            | Q(full_name__icontains=request.user.username)
                         ).first()
 
                     student_house_id = exeat.student.house_id if exeat.student else None
@@ -3049,14 +3103,18 @@ def download_student_id_export_view(request, export_id):
         messages.error(request, "The selected export is not ready for download yet.")
         return redirect("core:configuration")
 
-    from .services.student_id_images import private_student_id_export_path
+    from .services.student_id_images import (
+        student_id_export_name,
+        student_id_export_storage,
+    )
 
-    archive_path = private_student_id_export_path(export.archive_name)
-    if not archive_path.exists():
+    storage = student_id_export_storage()
+    archive_name = student_id_export_name(export.archive_name)
+    if not storage.exists(archive_name):
         messages.error(request, "The requested export archive could not be found.")
         return redirect("core:configuration")
 
-    response = FileResponse(open(archive_path, 'rb'))
+    response = FileResponse(storage.open(archive_name, 'rb'))
     response["Content-Type"] = "application/zip"
     response["Content-Disposition"] = f'attachment; filename="{export.archive_name}"'
     return response

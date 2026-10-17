@@ -3,7 +3,7 @@ import re
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django_pgschemas.models import TenantModel
 from django_pgschemas.routing.models import DomainModel
@@ -63,15 +63,16 @@ class Domain(DomainModel):
             raise ValidationError(
                 "Set TENANCY_ENABLED=true before registering school domains."
             )
-        # Demote any existing primary domain for this tenant so the
-        # unique_primary_domain_per_tenant constraint is not violated.
-        if self.is_primary and self.tenant_id:
-            Domain.objects.filter(
-                tenant_id=self.tenant_id,
-                is_primary=True,
-            ).exclude(pk=self.pk).update(is_primary=False)
-        self.full_clean()
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            if self.is_primary and self.tenant_id:
+                Tenant.objects.select_for_update().get(pk=self.tenant_id)
+                # Keep demotion atomic with validation and saving the replacement.
+                Domain.objects.filter(
+                    tenant_id=self.tenant_id,
+                    is_primary=True,
+                ).exclude(pk=self.pk).update(is_primary=False)
+            self.full_clean()
+            super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.domain}/{self.folder}" if self.folder else self.domain
@@ -515,4 +516,3 @@ class PlatformAuditLog(models.Model):
 
     def __str__(self):
         return f"[{self.timestamp:%Y-%m-%d %H:%M}] {self.action} on {self.tenant_schema} by {self.operator}"
-

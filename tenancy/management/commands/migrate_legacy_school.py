@@ -1,5 +1,4 @@
 import logging
-import shutil
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files import File
@@ -12,7 +11,10 @@ from django_pgschemas.utils import check_schema_name_not_reserved
 
 from core.models import SchoolConfiguration, Student
 from core.storage import PrivateStudentPhotoStorage
-from core.services.student_id_images import private_student_id_export_path
+from core.services.student_id_images import (
+    student_id_export_name,
+    student_id_export_storage,
+)
 from tenancy.models import Domain, Tenant, normalize_domain
 
 logger = logging.getLogger(__name__)
@@ -330,14 +332,16 @@ class Command(BaseCommand):
         legacy_export_root = (
             settings.BASE_DIR / ".private" / "student_id_exports"
         )
+        export_storage = student_id_export_storage()
         for archive in legacy_export_root.glob("*.zip"):
-            target = private_student_id_export_path(
+            target_name = student_id_export_name(
                 archive.name,
                 schema_name=schema_name,
             )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if not target.exists():
-                shutil.copy2(archive, target)
+            if export_storage.exists(target_name):
+                continue
+            with archive.open("rb") as source:
+                export_storage.save(target_name, File(source))
 
     def _copy_file_field(self, objects, field_name, storage, schema_name):
         for instance in objects.iterator(chunk_size=100):
