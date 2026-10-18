@@ -27,7 +27,7 @@
 
       {% for section in sections %}
         <section>
-          <h2>{{ section.heading }}</h2>
+          <h2 id="{{ section.heading|slugify }}" class="scroll-mt-24">{{ section.heading }}</h2>
           <p>{{ section.body }}</p>
         </section>
       {% endfor %}
@@ -56,7 +56,9 @@
           <h2 class="text-base font-bold">Contents</h2>
           <ul class="mt-4 space-y-2.5">
             {% for section in sections %}
-              <li><span class="text-sm text-eden-slate">{{ section.heading }}</span></li>
+              <li>
+                <a href="#{{ section.heading|slugify }}" class="text-sm text-eden-slate hover:text-eden-navy hover:underline">{{ section.heading }}</a>
+              </li>
             {% endfor %}
           </ul>
         </div>
