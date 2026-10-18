@@ -46,7 +46,7 @@ OG_SIZE = (1200, 630)
 
 
 class Command(BaseCommand):
-    help = "Generate Eden Sys favicons and the Open Graph image from the brand mark."
+    help = "Generate Edensys favicons and the Open Graph image from the brand mark."
 
     def add_arguments(self, parser):
         parser.add_argument(

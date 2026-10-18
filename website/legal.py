@@ -29,7 +29,7 @@ LEGAL_REVIEW_NOTICE = (
 LAST_UPDATED = "October 2026"
 
 PRIVACY_INTRO = (
-    "This policy explains how Eden Creative Systems (\"Eden Sys\", \"we\") "
+    "This policy explains how Eden Creative Systems (\"Edensys\", \"we\") "
     "handles personal information in two separate situations: information you "
     "send us through this website, and information held inside the boarding "
     "management system that a school uses."
@@ -171,7 +171,7 @@ TERMS_SECTIONS = (
         "heading": "Who we are",
         "body": (
             "This website is operated by Eden Creative Systems (also referred "
-            "to as Eden Sys), which develops and owns the SHS Boarding & Dorm "
+            "to as Edensys), which develops and owns the SHS Boarding & Dorm "
             "Management System."
         ),
     },

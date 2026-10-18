@@ -41,7 +41,7 @@ PAGE_MARKERS = {
 
 CONTACT_PHONE = "+233 24 816 0391"
 CONTACT_EMAIL = "berkojohnson@gmail.com"
-ATTRIBUTION = "Developed by Eden Creative Systems (Eden Sys)"
+ATTRIBUTION = "Developed by Eden Creative Systems (Edensys)"
 
 
 @override_settings(ROOT_URLCONF="schoolsystem.urls_public")

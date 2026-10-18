@@ -35,7 +35,7 @@ PUBLIC_PAGE_MAX_AGE = 300
 def _base_context(request, page_key: str, nav_key: str = "") -> dict:
     meta = content.PAGE_META.get(page_key, {})
     title = meta.get("title", "")
-    short_name = getattr(settings, "EDEN_SYS_SHORT_NAME", "Eden Sys")
+    short_name = getattr(settings, "EDEN_SYS_SHORT_NAME", "Edensys")
     product_name = getattr(settings, "EDEN_SYS_PRODUCT_NAME", "")
     full_title = f"{title} | {short_name}" if title else f"{short_name} — {product_name}"
 
@@ -93,7 +93,7 @@ def _inline_json(payload: dict) -> str:
 
 
 def _organisation_json_ld() -> str:
-    """Structured data describing Eden Sys.
+    """Structured data describing Edensys.
 
     Only facts that are configured and verifiable are emitted: no prices, no
     ratings, no certifications, no social profiles.

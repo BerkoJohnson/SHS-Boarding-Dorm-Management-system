@@ -1,4 +1,4 @@
-"""Public marketing website for Eden Creative Systems (Eden Sys).
+"""Public marketing website for Eden Creative Systems (Edensys).
 
 This app is registered in ``settings.PUBLIC_APPS`` so that its tables live in
 the PostgreSQL ``public`` schema. It is served from the ``public`` URLconf

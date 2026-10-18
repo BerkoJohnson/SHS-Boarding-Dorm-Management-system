@@ -20,7 +20,7 @@ CONTACTS = (
     "ecreativesys.com",
     "+233 24 816 0391",
     "berkojohnson@gmail.com",
-    "Developed by Eden Creative Systems (Eden Sys)",
+    "Developed by Eden Creative Systems (Edensys)",
 )
 
 

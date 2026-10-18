@@ -61,7 +61,7 @@ class DemoRequest(models.Model):
     """A demonstration request submitted from the public website.
 
     Contact details are business-confidential. They are readable only by
-    authorised Eden Sys personnel through the ``demo_requests`` management
+    authorised Edensys personnel through the ``demo_requests`` management
     command (the public schema has no Django admin — see the module docstring
     of ``website/management/commands/demo_requests.py``).
     """

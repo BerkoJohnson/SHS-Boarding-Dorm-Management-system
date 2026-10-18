@@ -10,7 +10,7 @@ against the implementation before being written down:
   ``core/models.py`` (``SMSDelivery``, ``SMSConfiguration``).
 
 Nothing here may claim a capability the repository does not implement. Where a
-policy is undecided the answer directs the visitor to contact Eden Sys rather
+policy is undecided the answer directs the visitor to contact Edensys rather
 than inventing a commitment.
 
 Templates render this content; they must never restate it. To change copy,
@@ -33,8 +33,7 @@ SUBHEADLINE = (
 )
 
 PRODUCT_SUMMARY = (
-    "A boarding-school management solution for Ghanaian senior high schools, "
-    "developed by Eden Creative Systems."
+    "A boarding-school management solution for Ghanaian senior high schools."
 )
 
 # ---------------------------------------------------------------------------
@@ -657,7 +656,7 @@ FAQS = (
         "question": "Who owns the system, and is it linked to a particular school?",
         "answer": (
             "The system is developed and owned by Eden Creative Systems "
-            "(Eden Sys). It is in pilot use with a senior high school, which "
+            "(Edensys). It is in pilot use with a senior high school, which "
             "does not own the product and whose name is not used as a "
             "commercial endorsement."
         ),
@@ -821,7 +820,7 @@ NOT_INCLUDED = (
     "No biometric or fingerprint capture — roll call is entered by staff.",
     "No mobile app — the system runs in a web browser on a computer or phone.",
     "No two-factor authentication or single sign-on.",
-    "No card payments — enquiries are followed up directly by Eden Sys.",
+    "No card payments — enquiries are followed up directly by Edensys.",
 )
 
 # ---------------------------------------------------------------------------

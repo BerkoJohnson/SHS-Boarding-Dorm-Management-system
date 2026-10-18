@@ -46,7 +46,7 @@ def _humanise(value) -> str:
 def build_notification_body(demo_request) -> str:
     population = demo_request.boarding_population
     lines = [
-        "A new demonstration request was submitted from the Eden Sys website.",
+        "A new demonstration request was submitted from the Edensys website.",
         "",
         f"School:            {demo_request.school_name}",
         f"Contact:           {demo_request.contact_name}",
@@ -90,7 +90,7 @@ def notify_demo_request(demo_request) -> bool:
         getattr(settings, "DEFAULT_FROM_EMAIL", "") or "no-reply@localhost"
     ).strip()
     subject = (
-        f"[Eden Sys] Demo request — {demo_request.school_name} "
+        f"[Edensys] Demo request — {demo_request.school_name} "
         f"({demo_request.get_region_display()})"
     )
     try:

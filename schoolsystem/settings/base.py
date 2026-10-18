@@ -401,7 +401,7 @@ CELERY_BEAT_SCHEDULE = {
 
 
 # -----------------------------------------------------------------------------
-# PUBLIC MARKETING WEBSITE (Eden Creative Systems / Eden Sys)
+# PUBLIC MARKETING WEBSITE (Eden Creative Systems / Edensys)
 # -----------------------------------------------------------------------------
 # The public website is served from the PostgreSQL "public" schema via a
 # dedicated host, and from its own URLconf (schoolsystem.urls_public). Nothing
@@ -441,7 +441,7 @@ SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
 # --- Business contact details ------------------------------------------------
 # Blank values fall back to the confirmed Eden Creative Systems details below.
 EDEN_SYS_COMPANY = os.getenv("EDEN_SYS_COMPANY", "Eden Creative Systems").strip()
-EDEN_SYS_SHORT_NAME = os.getenv("EDEN_SYS_SHORT_NAME", "Eden Sys").strip()
+EDEN_SYS_SHORT_NAME = os.getenv("EDEN_SYS_SHORT_NAME", "Edensys").strip()
 EDEN_SYS_PRODUCT_NAME = os.getenv(
     "EDEN_SYS_PRODUCT_NAME", "SHS Boarding & Dorm Management System"
 ).strip()
@@ -450,7 +450,7 @@ EDEN_SYS_EMAIL = os.getenv("EDEN_SYS_EMAIL", "berkojohnson@gmail.com").strip()
 EDEN_SYS_DOMAIN = os.getenv("EDEN_SYS_DOMAIN", "ecreativesys.com").strip()
 EDEN_SYS_ATTRIBUTION = os.getenv(
     "EDEN_SYS_ATTRIBUTION",
-    "Developed by Eden Creative Systems (Eden Sys)",
+    "Developed by Eden Creative Systems (Edensys)",
 ).strip()
 
 # Where the "Login" call to action points. Each school is served from its own

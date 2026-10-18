@@ -258,7 +258,7 @@ class PublicWebsiteSettingsTests(SimpleTestCase):
         self.assertEqual(settings.EDEN_SYS_DOMAIN, "ecreativesys.com")
         self.assertEqual(
             settings.EDEN_SYS_ATTRIBUTION,
-            "Developed by Eden Creative Systems (Eden Sys)",
+            "Developed by Eden Creative Systems (Edensys)",
         )
 
     def test_demo_request_throttling_is_configured(self):
