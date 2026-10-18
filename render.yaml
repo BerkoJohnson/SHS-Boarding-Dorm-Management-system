@@ -80,14 +80,22 @@ services:
         value: "5432"
       - key: PGSSLMODE
         value: require
+      # Must be at least 50 characters with at least 5 unique characters, or
+      # production refuses to start. Do NOT use `generateValue: true` here:
+      # Render mints a base64-encoded 256-bit value (~44 characters), which is
+      # shorter than this project's minimum. Generate one instead with:
+      #   python -c "import secrets;print(secrets.token_urlsafe(64))"
       - key: DJANGO_SECRET_KEY
         sync: false
       # ALLOWED_HOSTS is ignored while TENANCY_ENABLED=True; leave empty.
       - key: ALLOWED_HOSTS
         sync: false
-      # e.g. https://shs-boarding-staging.onrender.com
+      # Must list the service's own origin AND the marketing host. The public
+      # site is deliberately not a tenant, so DynamicCsrfMiddleware cannot fall
+      # back to the Domain table for it and would reject the demonstration
+      # form's HTTPS POST without this entry.
       - key: CSRF_TRUSTED_ORIGINS
-        sync: false
+        value: "https://shs-boarding-staging.onrender.com,https://ecreativesys.com,https://www.ecreativesys.com"
       # Durable media (student photos, crests, ID exports).
       - key: MEDIA_STORAGE_BACKEND
         value: neon_s3
@@ -101,40 +109,58 @@ services:
         sync: false
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
-      # Console email in staging (never sends real mail).
+      # Mail transport. Deliberately NOT pinned with `value:`: a `value:` entry
+      # is re-applied on every Blueprint sync, which would silently revert a
+      # dashboard change back to the console backend. Leave blank on a staging
+      # service (falls back to the console backend, which never sends mail) and
+      # set this on a service that must send real mail:
+      #   django.core.mail.backends.smtp.EmailBackend
       - key: EMAIL_BACKEND
-        value: django.core.mail.backends.console.EmailBackend
-      # To send real mail, set EMAIL_BACKEND to
-      # django.core.mail.backends.smtp.EmailBackend and fill in the transport
-      # below. Blank values are ignored by the console and locmem backends.
-      - key: DEFAULT_FROM_EMAIL
         sync: false
+      # Transport. Not secret, so it is set here. EMAIL_USE_TLS and
+      # EMAIL_USE_SSL are mutually exclusive; only one may be true.
       - key: EMAIL_HOST
-        sync: false
+        value: "smtp.gmail.com"
       - key: EMAIL_PORT
-        sync: false
+        value: "587"
+      - key: EMAIL_USE_TLS
+        value: "True"
+      - key: EMAIL_USE_SSL
+        value: "False"
+      - key: DEFAULT_FROM_EMAIL
+        value: "berkojohnson@gmail.com"
+      # SMTP credentials are secrets: they stay out of the repository.
       - key: EMAIL_HOST_USER
         sync: false
       - key: EMAIL_HOST_PASSWORD
         sync: false
-      - key: EMAIL_USE_TLS
-        sync: false
-      # Keep SMS off in staging - prevents real messages.
+      # Keeps *school/guardian* SMS off, so no real messages reach parents.
+      # It does NOT disable the demonstration-request alert below: that alert is
+      # driven only by DEMO_REQUEST_SMS_TO.
       - key: SMS_ENABLED
         value: "False"
-      # --- Public marketing website ---------------------------------------
-      # Comma-separated hostnames that serve the marketing site, e.g.
-      # `ecreativesys.com`. Empty disables the bypass. Never list a school's
-      # hostname here.
-      - key: PUBLIC_WEBSITE_DOMAIN
+      # Sender ID for outgoing school SMS, and the fallback sender for the
+      # demonstration-request alert. Must be approved on your SMSOnlineGH
+      # account, so change it there first if it differs.
+      - key: SMS_SENDER_ID
+        value: "EDENSYS"
+      # SMSOnlineGH credentials: secret. Required by the demonstration-request
+      # alert and by school SMS dispatch.
+      - key: SMS_ONLINE_GH_API_KEY
         sync: false
+      # --- Public marketing website ---------------------------------------
+      # Comma-separated hostnames that serve the marketing site. Hostnames
+      # only: no scheme, no port, no path. Empty disables the bypass. Never
+      # list a school's hostname here.
+      - key: PUBLIC_WEBSITE_DOMAIN
+        value: "ecreativesys.com,www.ecreativesys.com"
       - key: PUBLIC_WEBSITE_ENABLED
         value: "True"
       # The site's own absolute origin for canonical URLs, Open Graph tags, the
       # sitemap and the robots.txt Sitemap line. Production:
       # https://ecreativesys.com. Empty falls back to https://EDEN_SYS_DOMAIN.
       - key: SITE_URL
-        sync: false
+        value: "https://ecreativesys.com"
       # Where school staff sign in. Published only when it is on SITE_URL's
       # domain — the site never links to a school's hostname. Empty hides the
       # "Login" link entirely.
@@ -144,16 +170,19 @@ services:
       - key: PRICING_PUBLIC_ENABLED
         value: "False"
       # Where demonstration requests are emailed. Empty falls back to
-      # DEFAULT_FROM_EMAIL.
+      # EDEN_SYS_EMAIL, then DEFAULT_FROM_EMAIL.
       - key: DEMO_REQUEST_NOTIFY_EMAILS
-        sync: false
-      # Optional SMS alert for new demonstration requests (a platform alert to
-      # the business, not a message to a school). Empty disables it. Needs
-      # SMS_ONLINE_GH_API_KEY and is independent of SMS_ENABLED.
+        value: "berkojohnson@gmail.com"
+      # SMS alert for new demonstration requests: a platform alert to the
+      # business, not a message to a school. Needs SMS_ONLINE_GH_API_KEY and is
+      # independent of SMS_ENABLED. Every submission sends a real, chargeable
+      # SMS, so this is left for the dashboard: set it to the destination
+      # number(s), comma-separated, on the service that should send alerts, and
+      # leave it blank on a staging service that should stay silent.
       - key: DEMO_REQUEST_SMS_TO
         sync: false
       - key: DEMO_REQUEST_SMS_SENDER
-        sync: false
+        value: "EDENSYS"
       # Staging: avoid pinning HTTPS for a year. Raise to 31536000 for production.
       - key: SECURE_HSTS_SECONDS
         value: "0"
