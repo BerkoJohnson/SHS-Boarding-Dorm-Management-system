@@ -8,6 +8,36 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_PATH = BASE_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
+
+def env_int(name, default):
+    """Read an integer setting, falling back to *default* when unset or blank.
+
+    Hosting dashboards and blueprints frequently create a variable but leave it
+    empty. Treating blank as "unset" keeps an image/container build (for example
+    ``collectstatic``) from failing on a knob that only matters at runtime.
+    """
+    raw = os.getenv(name, "")
+    value = raw.strip()
+    if not value:
+        value = str(default)
+    try:
+        return int(value)
+    except ValueError as error:
+        raise ValueError(f"{name} must be an integer, got {raw!r}.") from error
+
+
+def env_float(name, default):
+    """Read a float setting, falling back to *default* when unset or blank."""
+    raw = os.getenv(name, "")
+    value = raw.strip()
+    if not value:
+        value = str(default)
+    try:
+        return float(value)
+    except ValueError as error:
+        raise ValueError(f"{name} must be a number, got {raw!r}.") from error
+
+
 DATABASE_PROFILE = os.getenv("DATABASE_PROFILE", "local").strip().lower() or "local"
 if DATABASE_PROFILE not in {"local", "neon"}:
     raise ValueError("DATABASE_PROFILE must be either 'local' or 'neon'")
@@ -62,11 +92,19 @@ PUBLIC_APPS = [
     "django_pgschemas",
     "django_celery_beat",
     "tenancy",
+    # The public marketing website for Eden Creative Systems. It lives in the
+    # public schema so its enquiry table can never be read from, or written to,
+    # a school's tenant schema.
+    "website",
 ]
 
 TENANTS = {
     "public": {
         "APPS": PUBLIC_APPS,
+        # NOTE: django-pgschemas forbids a 'URLCONF' key on the public schema
+        # (see django_pgschemas.checks.ensure_public_schema). The public
+        # website's URLconf is therefore declared as PUBLIC_WEBSITE_URLCONF
+        # below and applied by VerifiedDomainRoutingMiddleware.
     },
     "default": {
         "TENANT_MODEL": "tenancy.Tenant",
@@ -90,6 +128,7 @@ else:
         "django_celery_beat",
         "core",
         "tenancy",
+        "website",
     ]
 
 MIDDLEWARE = [
@@ -130,6 +169,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "core.context_processors.header_context",
+                "website.context_processors.public_site",
             ],
         },
     },
@@ -201,31 +241,27 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = True  # Force re-login if browser is closed
 # the Redis URL) for accurate, cluster-wide throttling.
 CACHES = {
     "default": {
-        "BACKEND": os.getenv(
-            "CACHE_BACKEND",
-            "django.core.cache.backends.locmem.LocMemCache",
-        ),
-        "LOCATION": os.getenv("CACHE_LOCATION", "schoolsystem-cache"),
+        "BACKEND": os.getenv("CACHE_BACKEND", "").strip()
+        or "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": os.getenv("CACHE_LOCATION", "").strip() or "schoolsystem-cache",
     }
 }
 
 # Login throttling: max attempts per client IP within the window (seconds).
-LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "10"))
-LOGIN_RATE_WINDOW = int(os.getenv("LOGIN_RATE_WINDOW", "300"))
+LOGIN_RATE_LIMIT = env_int("LOGIN_RATE_LIMIT", 10)
+LOGIN_RATE_WINDOW = env_int("LOGIN_RATE_WINDOW", 300)
 
 # Public "report a concern" throttling: max reports per client IP per window.
-PUBLIC_REPORT_RATE_LIMIT = int(os.getenv("PUBLIC_REPORT_RATE_LIMIT", "5"))
-PUBLIC_REPORT_RATE_WINDOW = int(os.getenv("PUBLIC_REPORT_RATE_WINDOW", "3600"))
+PUBLIC_REPORT_RATE_LIMIT = env_int("PUBLIC_REPORT_RATE_LIMIT", 5)
+PUBLIC_REPORT_RATE_WINDOW = env_int("PUBLIC_REPORT_RATE_WINDOW", 3600)
 
 # Number of trusted reverse-proxy hops in front of the app. Used to select the
 # real client address from X-Forwarded-For when building rate-limit keys
 # (Render terminates TLS and adds one hop, so the default of 1 is correct).
-TRUSTED_PROXY_COUNT = max(1, int(os.getenv("TRUSTED_PROXY_COUNT", "1")))
+TRUSTED_PROXY_COUNT = max(1, env_int("TRUSTED_PROXY_COUNT", 1))
 
 # Lifetime of a public student-ID QR token, in days. 0 disables expiry.
-STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS = int(
-    os.getenv("STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS", "0")
-)
+STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS = env_int("STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS", 0)
 
 
 # Internationalization
@@ -264,11 +300,13 @@ if MEDIA_STORAGE_BACKEND not in {"filesystem", "neon_s3"}:
 # MAILERS setting, so a console backend configured under that name was silently
 # ignored and mail fell back to SMTP to localhost. Default to the console
 # backend (safe for staging, never sends real mail) and allow an override.
-EMAIL_BACKEND = os.getenv(
-    "EMAIL_BACKEND",
-    "django.core.mail.backends.console.EmailBackend",
-).strip()
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@localhost").strip()
+EMAIL_BACKEND = (
+    os.getenv("EMAIL_BACKEND", "").strip()
+    or "django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = (
+    os.getenv("DEFAULT_FROM_EMAIL", "").strip() or "no-reply@localhost"
+)
 
 STORAGES = {
     "default": {
@@ -329,8 +367,8 @@ SMS_ENABLED = os.getenv("SMS_ENABLED", "false").strip().lower() in {
     "on",
 }
 SMS_TIME_ZONE = os.getenv("SMS_TIME_ZONE", TIME_ZONE)
-SMS_HTTP_TIMEOUT = float(os.getenv("SMS_HTTP_TIMEOUT", "10"))
-SMS_MAX_ATTEMPTS = int(os.getenv("SMS_MAX_ATTEMPTS", "5"))
+SMS_HTTP_TIMEOUT = env_float("SMS_HTTP_TIMEOUT", 10)
+SMS_MAX_ATTEMPTS = env_int("SMS_MAX_ATTEMPTS", 5)
 
 # Celery / Redis
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
@@ -360,3 +398,84 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 24 * 60 * 60.0,
     },
 }
+
+
+# -----------------------------------------------------------------------------
+# PUBLIC MARKETING WEBSITE (Eden Creative Systems / Eden Sys)
+# -----------------------------------------------------------------------------
+# The public website is served from the PostgreSQL "public" schema via a
+# dedicated host, and from its own URLconf (schoolsystem.urls_public). Nothing
+# in this block affects tenant routing or the authenticated school application.
+
+# Hosts that serve the public marketing website. Comma-separated hostnames
+# only — no scheme and no port (a request's port is stripped before
+# comparison). Leave empty to disable the bypass entirely.
+#
+# List the main domain here. A school's hostname must never be listed: the
+# marketing site would then shadow that school's own site, and the public site
+# must not publish school addresses in any case.
+# Production: "ecreativesys.com" (add "www.ecreativesys.com" only if that
+# hostname is also configured in DNS; canonical links still name the main
+# domain, so crawlers are not split between the two).
+# Local tenancy development: "localhost,127.0.0.1"
+PUBLIC_WEBSITE_DOMAIN = os.getenv("PUBLIC_WEBSITE_DOMAIN", "").strip()
+
+# Master switch. When False the middleware behaves exactly as before and the
+# public host falls through to the normal (fail-closed) tenant resolution.
+PUBLIC_WEBSITE_ENABLED = os.getenv(
+    "PUBLIC_WEBSITE_ENABLED", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+# URLconf used to serve the public website. Kept as a setting rather than a
+# TENANTS['public']['URLCONF'] key because django-pgschemas rejects the latter.
+PUBLIC_WEBSITE_URLCONF = os.getenv(
+    "PUBLIC_WEBSITE_URLCONF", "schoolsystem.urls_public"
+).strip()
+
+# Canonical origin used for absolute URLs, the sitemap, and Open Graph tags.
+# Empty falls back to https://<EDEN_SYS_DOMAIN>, and only then to the host of
+# the incoming request (local development and the /site/ preview). Never
+# hardcode a production hostname in a template.
+SITE_URL = os.getenv("SITE_URL", "").strip().rstrip("/")
+
+# --- Business contact details ------------------------------------------------
+# Blank values fall back to the confirmed Eden Creative Systems details below.
+EDEN_SYS_COMPANY = os.getenv("EDEN_SYS_COMPANY", "Eden Creative Systems").strip()
+EDEN_SYS_SHORT_NAME = os.getenv("EDEN_SYS_SHORT_NAME", "Eden Sys").strip()
+EDEN_SYS_PRODUCT_NAME = os.getenv(
+    "EDEN_SYS_PRODUCT_NAME", "SHS Boarding & Dorm Management System"
+).strip()
+EDEN_SYS_PHONE = os.getenv("EDEN_SYS_PHONE", "+233 24 816 0391").strip()
+EDEN_SYS_EMAIL = os.getenv("EDEN_SYS_EMAIL", "berkojohnson@gmail.com").strip()
+EDEN_SYS_DOMAIN = os.getenv("EDEN_SYS_DOMAIN", "ecreativesys.com").strip()
+EDEN_SYS_ATTRIBUTION = os.getenv(
+    "EDEN_SYS_ATTRIBUTION",
+    "Developed by Eden Creative Systems (Eden Sys)",
+).strip()
+
+# Where the "Login" call to action points. Each school is served from its own
+# hostname, so there is no shared login URL, and the marketing site must never
+# link to a school's hostname. The value is published only when it is on the
+# site's own domain (SITE_URL / EDEN_SYS_DOMAIN); anything else is dropped and
+# reported by the website.W001 check. Empty hides the link.
+EDEN_PORTAL_LOGIN_URL = os.getenv("EDEN_PORTAL_LOGIN_URL", "").strip()
+
+# --- Published pricing ------------------------------------------------------
+# Pricing stays unpublished until the commercial terms are explicitly approved.
+# While False the pricing page shows "Contact us for pricing" and no figures are
+# rendered anywhere on the site.
+PRICING_PUBLIC_ENABLED = os.getenv(
+    "PRICING_PUBLIC_ENABLED", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+# --- Demonstration enquiries -------------------------------------------------
+# Recipients notified when a demonstration request is submitted. Falls back to
+# DEFAULT_FROM_EMAIL when empty. Email delivery failures never block storage.
+env_notify = os.getenv("DEMO_REQUEST_NOTIFY_EMAILS", "")
+DEMO_REQUEST_NOTIFY_EMAILS = [
+    address.strip() for address in env_notify.split(",") if address.strip()
+]
+
+# Demonstration-request throttling: max submissions per client IP per window.
+DEMO_REQUEST_RATE_LIMIT = int(os.getenv("DEMO_REQUEST_RATE_LIMIT", "5"))
+DEMO_REQUEST_RATE_WINDOW = int(os.getenv("DEMO_REQUEST_RATE_WINDOW", "3600"))

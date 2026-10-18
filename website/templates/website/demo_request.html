@@ -1,0 +1,200 @@
+{% extends "website/base_public.html" %}
+
+{% block robots %}{% if submitted or rate_limited or form.errors %}<meta name="robots" content="noindex, nofollow">{% else %}<meta name="robots" content="index, follow">{% endif %}{% endblock %}
+
+{% block content %}
+
+<section class="border-b border-eden-line bg-gradient-to-b from-eden-mist to-white">
+  <div class="site-wrap py-14 lg:py-16">
+    <p class="eyebrow">Request a demo</p>
+    <h1 class="mt-4 max-w-4xl text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+      See the system against your own boarding processes
+    </h1>
+    <p class="lede mt-5 max-w-3xl">
+      Tell us a little about your school. We will come back to you to arrange a
+      walkthrough of the workflows that matter to you — roll call, exeats, gate
+      control, ID cards and guardian messaging.
+    </p>
+  </div>
+</section>
+
+<div class="site-wrap py-14 lg:py-16">
+  <div class="grid gap-10 lg:grid-cols-12">
+
+    {# ------------------------------------------------------- main column -- #}
+    <div class="lg:col-span-7">
+
+      {% if submitted %}
+        {# Success is only shown after the record has been stored. #}
+        <div class="rounded-2xl border border-eden-green/30 bg-eden-greenSoft p-7 lg:p-8" role="status">
+          <span class="inline-flex h-11 w-11 items-center justify-center rounded-full bg-eden-green text-white">
+            <svg class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M8.1 13.6 4.5 10l1.1-1.1 2.5 2.5 6-6L15.2 6.5l-7.1 7.1Z"/>
+            </svg>
+          </span>
+
+          <h2 class="mt-5 text-2xl font-bold">Thank you — your request has been received</h2>
+
+          <p class="mt-3 text-base leading-relaxed text-eden-greenInk">
+            We have your details for <strong>{{ enquiry.school_name }}</strong> and
+            will follow up on the contact information you provided.
+            {% if enquiry.preferred_demo_method != 'no_preference' %}
+              You asked for a {{ enquiry.get_preferred_demo_method_display|lower }}, which we have noted.
+            {% endif %}
+          </p>
+
+          <dl class="mt-6 grid gap-3 rounded-xl border border-eden-green/20 bg-white p-5 sm:grid-cols-2">
+            <div>
+              <dt class="text-xs font-bold uppercase tracking-[0.12em] text-eden-slate">Reference</dt>
+              <dd class="mt-1 text-sm font-semibold text-eden-navy">#{{ enquiry.pk }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-bold uppercase tracking-[0.12em] text-eden-slate">Submitted</dt>
+              <dd class="mt-1 text-sm font-semibold text-eden-navy">{{ enquiry.created_at|date:"j F Y, H:i" }}</dd>
+            </div>
+          </dl>
+
+          <p class="mt-6 text-sm leading-relaxed text-eden-greenInk">
+            If it is urgent, call or message us and mention your reference number.
+          </p>
+          <div class="mt-5 flex flex-col gap-3 sm:flex-row">
+            {% if site.phone_href %}<a href="{{ site.phone_href }}" class="btn-primary">Call {{ site.phone_display }}</a>{% endif %}
+            {% if site.email_href %}<a href="{{ site.email_href }}" class="btn-secondary">Email us</a>{% endif %}
+          </div>
+        </div>
+      {% else %}
+
+        {% if rate_limited %}
+          <div class="mb-8 rounded-xl border border-eden-goldBright/50 bg-eden-goldSoft p-5" role="alert">
+            <h2 class="text-base font-bold text-eden-navy">Too many requests from this connection</h2>
+            <p class="mt-2 text-sm leading-relaxed text-eden-goldInk">
+              We have received several requests recently from this network. Please
+              wait a little before trying again, or contact us directly using the
+              details below and we will help you straight away.
+            </p>
+            {% if site.phone_href %}
+              <p class="mt-3 text-sm font-semibold text-eden-goldInk">
+                <a href="{{ site.phone_href }}" class="underline underline-offset-4">{{ site.phone_display }}</a>
+              </p>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        {% if form.non_field_errors %}
+          <div class="mb-8 rounded-xl border border-red-300 bg-red-50 p-5" role="alert">
+            {% for error in form.non_field_errors %}
+              <p class="text-sm font-medium leading-relaxed text-red-800">{{ error }}</p>
+            {% endfor %}
+          </div>
+        {% elif form.errors %}
+          <div class="mb-8 rounded-xl border border-red-300 bg-red-50 p-5" role="alert">
+            <p class="text-sm font-medium leading-relaxed text-red-800">
+              Please check the highlighted fields below and try again.
+            </p>
+          </div>
+        {% endif %}
+
+        <form method="post" action="{% url 'website:demo_request' %}" novalidate class="space-y-6">
+          {% csrf_token %}
+
+          {# Honeypot: hidden from people, presented to bots. #}
+          <div class="honeypot" aria-hidden="true">
+            <label for="{{ form.website.id_for_label }}">Website</label>
+            {{ form.website }}
+          </div>
+
+          <fieldset class="space-y-6">
+            <legend class="sr-only">About your school</legend>
+
+            {% include "website/partials/_field.html" with field=form.school_name %}
+
+            <div class="grid gap-6 sm:grid-cols-2">
+              {% include "website/partials/_field.html" with field=form.contact_name %}
+              {% include "website/partials/_field.html" with field=form.role %}
+            </div>
+
+            <div class="grid gap-6 sm:grid-cols-2">
+              {% include "website/partials/_field.html" with field=form.phone %}
+              {% include "website/partials/_field.html" with field=form.email %}
+            </div>
+
+            <div class="grid gap-6 sm:grid-cols-2">
+              {% include "website/partials/_field.html" with field=form.region %}
+              {% include "website/partials/_field.html" with field=form.boarding_population %}
+            </div>
+
+            {% include "website/partials/_field.html" with field=form.preferred_demo_method %}
+            {% include "website/partials/_field.html" with field=form.message %}
+          </fieldset>
+
+          <div class="rounded-xl border border-eden-line bg-eden-mist p-5">
+            <label for="{{ form.consent.id_for_label }}" class="flex cursor-pointer items-start gap-3">
+              {{ form.consent }}
+              <span class="text-sm leading-relaxed text-eden-slate">
+                {{ form.consent.label }}
+                We use your details only to respond to this request. See our
+                <a href="{% url 'website:privacy' %}" class="link">Privacy Policy</a>.
+              </span>
+            </label>
+            {% for error in form.consent.errors %}
+              <span id="id_consent-error" class="field-error" role="alert">{{ error }}</span>
+            {% endfor %}
+          </div>
+
+          <div class="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <button type="submit" class="btn-primary">{{ cta.primary }}</button>
+            <p class="text-sm text-eden-slate">No obligation, and no payment details are ever requested.</p>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+
+    {# --------------------------------------------------------- side rail -- #}
+    <aside class="lg:col-span-5">
+      <div class="card">
+        <h2 class="text-base font-bold">What happens next</h2>
+        <ol class="mt-4 space-y-4">
+          <li class="flex gap-3">
+            <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-eden-navy text-xs font-bold text-white">1</span>
+            <p class="text-sm leading-relaxed text-eden-slate">We read your request and check it against your school's size and setup.</p>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-eden-navy text-xs font-bold text-white">2</span>
+            <p class="text-sm leading-relaxed text-eden-slate">We contact you to agree a time, using the method you preferred.</p>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-eden-navy text-xs font-bold text-white">3</span>
+            <p class="text-sm leading-relaxed text-eden-slate">We walk through the boarding workflows with the staff who would use them.</p>
+          </li>
+          <li class="flex gap-3">
+            <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-eden-navy text-xs font-bold text-white">4</span>
+            <p class="text-sm leading-relaxed text-eden-slate">If it looks like a fit, we set out what your school would pay and how onboarding would run.</p>
+          </li>
+        </ol>
+      </div>
+
+      <div class="mt-5 rounded-xl border border-eden-line bg-white p-6">
+        <h2 class="text-base font-bold">Would rather talk now?</h2>
+        <ul class="mt-4 space-y-3 text-sm">
+          {% if site.phone_href %}
+            <li><a href="{{ site.phone_href }}" class="link">{{ site.phone_display }}</a></li>
+          {% endif %}
+          {% if site.whatsapp_href %}
+            <li><a href="{{ site.whatsapp_href }}" class="link" rel="noopener">WhatsApp us</a></li>
+          {% endif %}
+          {% if site.email_href %}
+            <li><a href="{{ site.email_href }}" class="link break-all">{{ site.email }}</a></li>
+          {% endif %}
+        </ul>
+      </div>
+
+      <p class="mt-5 text-xs leading-relaxed text-eden-slate">
+        Your details are stored securely and seen only by {{ site.company }}
+        personnel handling your enquiry. This form is rate limited to prevent
+        automated abuse.
+      </p>
+    </aside>
+  </div>
+</div>
+
+{% endblock %}

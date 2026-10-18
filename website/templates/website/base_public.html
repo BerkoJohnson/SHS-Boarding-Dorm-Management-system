@@ -1,0 +1,51 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ page_title }}{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}{{ meta_description }}{% endblock %}">
+  {% block robots %}<meta name="robots" content="index, follow">{% endblock %}
+  <link rel="canonical" href="{% block canonical %}{{ canonical_url }}{% endblock %}">
+
+  <meta name="theme-color" content="#001a4d">
+  <meta name="format-detection" content="telephone=no">
+
+  {# Open Graph / social preview. og:image is generated from the brand mark by #}
+  {# `manage.py build_brand_assets`; no third-party service is contacted.       #}
+  <meta property="og:type" content="{% block og_type %}website{% endblock %}">
+  <meta property="og:site_name" content="{{ site.company }}">
+  <meta property="og:locale" content="en_GH">
+  <meta property="og:title" content="{% block og_title %}{{ page_title }}{% endblock %}">
+  <meta property="og:description" content="{% block og_description %}{{ meta_description }}{% endblock %}">
+  <meta property="og:url" content="{{ canonical_url }}">
+  {% if og_image_url %}<meta property="og:image" content="{{ og_image_url }}">{% endif %}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ page_title }}">
+  <meta name="twitter:description" content="{{ meta_description }}">
+  {% if og_image_url %}<meta name="twitter:image" content="{{ og_image_url }}">{% endif %}
+
+  {# Favicons and touch icon derived from the brand mark. A web app manifest is  #}
+  {# deliberately not used: ManifestStaticFilesStorage hashes file names but not  #}
+  {# the contents of a manifest, so its icon paths would break in production.    #}
+  <link rel="icon" href="{% static 'img/eden/favicon/favicon.ico' %}" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'img/eden/favicon/favicon-32x32.png' %}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{% static 'img/eden/favicon/favicon-16x16.png' %}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'img/eden/favicon/apple-touch-icon.png' %}">
+
+  <link rel="stylesheet" href="{% static 'css/site.css' %}">
+
+  {% block structured_data %}{% endblock %}
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  {% include "website/partials/_header.html" %}
+
+  <main id="main" tabindex="-1">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% include "website/partials/_footer.html" %}
+</body>
+</html>

@@ -15,7 +15,11 @@
 <main>
   <h1>This page is unavailable</h1>
   <p>{{ permission_explanation }}</p>
-  <p><a href="{% url 'core:dashboard' %}">Return to the school dashboard</a></p>
+  {% if user.is_authenticated %}
+    <p><a href="{% url 'core:dashboard' %}">Return to the school dashboard</a></p>
+  {% else %}
+    <p><a href="/">Go to the home page</a></p>
+  {% endif %}
 </main>
 </body>
 </html>

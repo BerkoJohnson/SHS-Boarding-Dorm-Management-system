@@ -1,0 +1,82 @@
+{% extends "website/base_public.html" %}
+
+{% block content %}
+
+<section class="border-b border-eden-line bg-gradient-to-b from-eden-mist to-white">
+  <div class="site-wrap py-14 lg:py-16">
+    <p class="eyebrow">How it works</p>
+    <h1 class="mt-4 max-w-4xl text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+      From first conversation to a working boarding system
+    </h1>
+    <p class="lede mt-5 max-w-3xl">
+      Four stages. The school is configured first, student records follow, and
+      the workflows come on as your staff are ready for each one.
+    </p>
+  </div>
+</section>
+
+<section class="site-wrap py-14 lg:py-16" aria-labelledby="stages-heading">
+  <h2 id="stages-heading" class="sr-only">The four stages</h2>
+
+  <ol class="space-y-6">
+    {% for step in steps %}
+      <li class="grid gap-6 rounded-xl border border-eden-line bg-white p-6 shadow-card lg:grid-cols-12 lg:p-8">
+        <div class="lg:col-span-4">
+          <div class="flex items-center gap-3">
+            <span class="flex h-10 w-10 items-center justify-center rounded-full bg-eden-navy text-base font-bold text-white">{{ step.number }}</span>
+            <span class="text-xs font-bold uppercase tracking-[0.14em] text-eden-goldInk">Stage {{ step.number }}</span>
+          </div>
+          <h3 class="mt-4 text-lg font-bold leading-snug">{{ step.title }}</h3>
+        </div>
+        <p class="text-sm leading-relaxed text-eden-slate lg:col-span-8 lg:border-l lg:border-eden-line lg:pl-8 lg:text-base">{{ step.body }}</p>
+      </li>
+    {% endfor %}
+  </ol>
+</section>
+
+<section class="border-y border-eden-line bg-eden-mist" aria-labelledby="prep-heading">
+  <div class="site-wrap py-14 lg:py-16">
+    <div class="grid gap-10 lg:grid-cols-12">
+      <div class="lg:col-span-4">
+        <div class="section-rule"></div>
+        <h2 id="prep-heading" class="mt-5 text-2xl font-bold">What we need from your school</h2>
+        <p class="mt-4 text-sm leading-relaxed text-eden-slate">
+          None of this has to be perfect before we start. It is the information
+          that shapes your setup.
+        </p>
+      </div>
+
+      <ul class="grid gap-5 sm:grid-cols-2 lg:col-span-8">
+        {% for item in preparation %}
+          <li class="rounded-xl border border-eden-line bg-white p-5">
+            <h3 class="text-base font-bold">{{ item.title }}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ item.body }}</p>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="site-wrap py-14 lg:py-16" aria-labelledby="notes-heading">
+  <div class="max-w-3xl">
+    <div class="section-rule"></div>
+    <h2 id="notes-heading" class="mt-5 text-2xl font-bold sm:text-3xl">Worth knowing before you start</h2>
+    <p class="lede mt-4">
+      These are the practical details that tend to matter most in the first weeks.
+    </p>
+  </div>
+
+  <ul class="mt-10 grid gap-5 sm:grid-cols-2">
+    {% for note in rollout_notes %}
+      <li class="card">
+        <h3 class="text-base font-bold">{{ note.title }}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ note.body }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+{% include "website/partials/_cta.html" %}
+
+{% endblock %}

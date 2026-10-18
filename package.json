@@ -4,7 +4,9 @@
   },
   "scripts": {
     "dev": "tailwindcss -i ./static/src/input.css -o ./static/css/output.css --watch",
-    "build": "tailwindcss -i ./static/src/input.css -o ./static/css/output.css --minify"
+    "build": "tailwindcss -i ./static/src/input.css -o ./static/css/output.css --minify",
+    "dev:site": "tailwindcss -c ./tailwind.site.config.js -i ./static/src/site.css -o ./static/css/site.css --watch",
+    "build:site": "tailwindcss -c ./tailwind.site.config.js -i ./static/src/site.css -o ./static/css/site.css --minify"
   },
   "dependencies": {
     "ecc-universal": "^2.2.3"

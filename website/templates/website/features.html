@@ -1,0 +1,97 @@
+{% extends "website/base_public.html" %}
+
+{% block content %}
+
+<section class="border-b border-eden-line bg-gradient-to-b from-eden-mist to-white">
+  <div class="site-wrap py-14 lg:py-16">
+    <p class="eyebrow">Features</p>
+    <h1 class="mt-4 max-w-4xl text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+      What the boarding system actually does
+    </h1>
+    <p class="lede mt-5 max-w-3xl">
+      Eight areas of boarding and dormitory management, each one working in the
+      system today. Nothing on this page is planned or aspirational.
+    </p>
+
+    <nav class="mt-8" aria-label="Feature sections">
+      <ul class="flex flex-wrap gap-2">
+        {% for feature in features %}
+          <li>
+            <a href="#{{ feature.key }}" class="inline-flex items-center gap-2 rounded-full border border-eden-line bg-white px-3.5 py-1.5 text-xs font-semibold text-eden-navy no-underline hover:border-eden-blueBright hover:bg-eden-blueSoft">
+              <span class="text-eden-goldInk">{{ feature.number }}</span>{{ feature.title }}
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<div class="site-wrap space-y-14 py-14 lg:space-y-16 lg:py-16">
+  {% for feature in features %}
+    <section id="{{ feature.key }}" class="scroll-mt-24" aria-labelledby="feature-{{ feature.key }}">
+      <div class="grid gap-8 lg:grid-cols-12">
+        <div class="lg:col-span-4">
+          <span class="text-xs font-bold tracking-[0.16em] text-eden-goldInk">{{ feature.number }}</span>
+          <h2 id="feature-{{ feature.key }}" class="mt-3 text-xl font-bold leading-snug sm:text-2xl">{{ feature.title }}</h2>
+          <p class="mt-3 text-sm leading-relaxed text-eden-slate">{{ feature.summary }}</p>
+
+          <div class="mt-5 rounded-xl border border-eden-blue/20 bg-eden-blueSoft p-4">
+            <p class="text-xs font-bold uppercase tracking-[0.12em] text-eden-blueInk">What it means for the school</p>
+            <p class="mt-2 text-sm leading-relaxed text-eden-blueInk">{{ feature.benefit }}</p>
+          </div>
+        </div>
+
+        <div class="lg:col-span-8">
+          <ul class="grid gap-3 sm:grid-cols-2">
+            {% for point in feature.points %}
+              <li class="flex items-start gap-3 rounded-lg border border-eden-line bg-white p-4">
+                <svg class="mt-0.5 h-4 w-4 shrink-0 text-eden-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path d="M8.1 13.6 4.5 10l1.1-1.1 2.5 2.5 6-6L15.2 6.5l-7.1 7.1Z"/>
+                </svg>
+                <span class="text-sm leading-relaxed text-eden-slate">{{ point }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </section>
+  {% endfor %}
+</div>
+
+<section class="border-t border-eden-line bg-eden-mist">
+  <div class="site-wrap py-14 lg:py-16">
+    <div class="grid gap-8 lg:grid-cols-12">
+      <div class="lg:col-span-7">
+        <div class="section-rule"></div>
+        <h2 class="mt-5 text-2xl font-bold">What is not included</h2>
+        <p class="mt-4 text-base leading-relaxed text-eden-slate">
+          Stating limits plainly matters as much as listing capabilities. The
+          following are not part of the system:
+        </p>
+        <ul class="mt-6 grid gap-2.5 sm:grid-cols-2">
+          {% for limit in not_included %}
+            <li class="flex items-start gap-2.5 text-sm text-eden-slate">
+              <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-eden-slate/50"></span>
+              {{ limit }}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="lg:col-span-5">
+        <div class="card">
+          <h3 class="text-base font-bold">Need a capability that is not listed?</h3>
+          <p class="mt-2 text-sm leading-relaxed text-eden-slate">
+            Tell us what your school needs. If it is something we can support we
+            will say so clearly, and if it is not we will say that too.
+          </p>
+          <a href="{% url 'website:contact' %}" class="btn-primary mt-5 w-full">{{ cta.secondary }}</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% include "website/partials/_cta.html" %}
+
+{% endblock %}

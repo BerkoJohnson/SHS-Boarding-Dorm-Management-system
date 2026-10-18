@@ -1,0 +1,328 @@
+{% extends "website/base_public.html" %}
+
+{% block structured_data %}
+  {# Factual identity only: no prices, no ratings, no invented credentials. #}
+  <script type="application/ld+json" nonce="{{ request.csp_nonce }}">{{ structured_data|safe }}</script>
+{% endblock %}
+
+{% block content %}
+
+{# ---------------------------------------------------------------- hero ---- #}
+<section class="border-b border-eden-line bg-gradient-to-b from-eden-mist to-white">
+  <div class="site-wrap grid gap-12 py-14 lg:grid-cols-12 lg:gap-10 lg:py-20">
+    <div class="lg:col-span-6 lg:py-6">
+      <p class="eyebrow">{{ site.company }} &middot; {{ site.product_name }}</p>
+
+      <h1 class="mt-4 text-3xl font-extrabold leading-[1.15] tracking-tight sm:text-4xl lg:text-[2.7rem]">
+        {{ headline }}
+      </h1>
+
+      <p class="lede mt-5 max-w-xl">{{ subheadline }}</p>
+
+      <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+        <a href="{% url 'website:demo_request' %}" class="btn-primary">{{ cta.primary }}</a>
+        <a href="{% url 'website:contact' %}" class="btn-secondary">{{ cta.secondary }}</a>
+      </div>
+
+      <dl class="mt-10 grid gap-x-8 gap-y-5 sm:grid-cols-2">
+        <div class="border-l-2 border-eden-goldBright pl-4">
+          <dt class="text-sm font-bold text-eden-navy">Each school is isolated</dt>
+          <dd class="mt-1 text-sm text-eden-slate">Your school's records live in your own environment, never in a shared pool.</dd>
+        </div>
+        <div class="border-l-2 border-eden-green pl-4">
+          <dt class="text-sm font-bold text-eden-navy">Nothing to install</dt>
+          <dd class="mt-1 text-sm text-eden-slate">Hosting and updates are managed for you. Staff just sign in and work.</dd>
+        </div>
+        <div class="border-l-2 border-eden-blue pl-4">
+          <dt class="text-sm font-bold text-eden-navy">Built for boarding</dt>
+          <dd class="mt-1 text-sm text-eden-slate">Houses, dormitories and rooms drive the workflows, not a generic student list.</dd>
+        </div>
+        <div class="border-l-2 border-eden-blueBright pl-4">
+          <dt class="text-sm font-bold text-eden-navy">Guardians kept informed</dt>
+          <dd class="mt-1 text-sm text-eden-slate">Text messages at request, approval, departure, return and overdue.</dd>
+        </div>
+      </dl>
+    </div>
+
+    {# ------------------------------------------------- product preview ---- #}
+    <div class="lg:col-span-6">
+      <div class="overflow-hidden rounded-2xl border border-eden-line bg-white shadow-panel">
+        <div class="flex items-center justify-between gap-3 border-b border-eden-line bg-eden-navy px-5 py-3">
+          <div class="flex items-center gap-2">
+            <span class="h-2.5 w-2.5 rounded-full bg-eden-goldBright"></span>
+            <span class="text-xs font-bold uppercase tracking-[0.14em] text-white/75">Boarding operations</span>
+          </div>
+          <span class="chip bg-white/10 text-white/80">Live view</span>
+        </div>
+
+        <div class="space-y-5 p-5">
+          {# Roll call #}
+          <div class="rounded-xl border border-eden-line bg-eden-mist/60 p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p class="text-sm font-bold">{{ preview.roll_call.title }}</p>
+                <p class="text-xs text-eden-slate">{{ preview.roll_call.meta }}</p>
+              </div>
+              <dl class="flex gap-2">
+                {% for stat in preview.roll_call.stats %}
+                  <div class="rounded-lg bg-white px-3 py-1.5 text-center shadow-sm">
+                    <dt class="text-[10px] font-semibold uppercase tracking-wider text-eden-slate">{{ stat.label }}</dt>
+                    <dd class="text-sm font-bold
+                      {% if stat.tone == 'green' %}text-eden-greenInk{% elif stat.tone == 'blue' %}text-eden-blueInk{% else %}text-eden-goldInk{% endif %}">{{ stat.value }}</dd>
+                  </div>
+                {% endfor %}
+              </dl>
+            </div>
+
+            <ul class="mt-3 divide-y divide-eden-line overflow-hidden rounded-lg bg-white">
+              {% for row in preview.roll_call.rows %}
+                <li class="flex items-center justify-between gap-3 px-3 py-2">
+                  <span class="text-xs font-medium text-eden-ink">{{ row.name }}</span>
+                  <span class="text-[11px] text-eden-slate">Room {{ row.room }}</span>
+                  <span class="{% if row.tone == 'green' %}chip-green{% elif row.tone == 'blue' %}chip-blue{% else %}chip-amber{% endif %}">{{ row.status }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+
+          <div class="grid gap-5 sm:grid-cols-2">
+            {# Exeat approvals #}
+            <div class="rounded-xl border border-eden-line p-4">
+              <p class="text-sm font-bold">{{ preview.exeat.title }}</p>
+              <p class="text-xs text-eden-slate">{{ preview.exeat.meta }}</p>
+              <ul class="mt-3 space-y-2.5">
+                {% for row in preview.exeat.rows %}
+                  <li class="rounded-lg bg-eden-mist/70 p-2.5">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="text-[11px] font-bold text-eden-navy">{{ row.reference }}</span>
+                      <span class="{% if row.tone == 'green' %}chip-green{% elif row.tone == 'amber' %}chip-amber{% else %}chip-red{% endif %}">{{ row.status }}</span>
+                    </div>
+                    <p class="mt-1 text-[11px] text-eden-slate">{{ row.detail }}</p>
+                    <p class="text-[11px] text-eden-slate">{{ row.window }}</p>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+
+            {# Guardian SMS #}
+            <div class="rounded-xl border border-eden-line p-4">
+              <p class="text-sm font-bold">Guardian notifications</p>
+              <p class="text-xs text-eden-slate">Automatic text messages</p>
+              <ul class="mt-3 space-y-2">
+                {% for note in preview.notifications %}
+                  <li class="flex items-start gap-2 text-[11px] text-eden-slate">
+                    <svg class="mt-0.5 h-3.5 w-3.5 shrink-0 text-eden-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      <path d="M8.1 13.6 4.5 10l1.1-1.1 2.5 2.5 6-6L15.2 6.5l-7.1 7.1Z"/>
+                    </svg>
+                    <span>{{ note }}</span>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+
+          <p class="flex items-start gap-2 text-[11px] leading-relaxed text-eden-slate">
+            <svg class="mt-0.5 h-3.5 w-3.5 shrink-0 text-eden-slate" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Zm1 11H9v-2h2v2Zm0-4H9V6h2v3Z"/>
+            </svg>
+            {{ preview.disclaimer }}
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ---------------------------------------------------- operational pain ---- #}
+<section class="site-wrap py-16 lg:py-20" aria-labelledby="challenges-heading">
+  <div class="max-w-3xl">
+    <div class="section-rule"></div>
+    <h2 id="challenges-heading" class="mt-5 text-2xl font-bold sm:text-3xl">
+      Boarding records are only useful if they can be trusted
+    </h2>
+    <p class="lede mt-4">
+      Most schools already run these processes well. The difficulty is proving
+      what happened, and finding the answer quickly when someone asks.
+    </p>
+  </div>
+
+  <ul class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+    {% for item in challenges %}
+      <li class="card">
+        <h3 class="text-base font-bold">{{ item.title }}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ item.body }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+</section>
+
+{# --------------------------------------------------------- the features --- #}
+<section class="border-y border-eden-line bg-eden-mist" aria-labelledby="features-heading">
+  <div class="site-wrap py-16 lg:py-20">
+    <div class="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+      <div class="max-w-2xl">
+        <div class="section-rule"></div>
+        <h2 id="features-heading" class="mt-5 text-2xl font-bold sm:text-3xl">What the system does</h2>
+        <p class="lede mt-4">
+          Every capability below is part of the working system, not a roadmap item.
+        </p>
+      </div>
+      <a href="{% url 'website:features' %}" class="link shrink-0">See all features in detail</a>
+    </div>
+
+    <ul class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      {% for feature in features %}
+        <li class="card flex flex-col">
+          <span class="text-xs font-bold tracking-[0.14em] text-eden-goldInk">{{ feature.number }}</span>
+          <h3 class="mt-2 text-base font-bold leading-snug">{{ feature.title }}</h3>
+          <p class="mt-2 flex-1 text-sm leading-relaxed text-eden-slate">{{ feature.summary }}</p>
+          <p class="mt-4 border-t border-eden-line pt-3 text-sm leading-relaxed text-eden-blueInk">{{ feature.benefit }}</p>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+{# -------------------------------------------------------- how it works ---- #}
+<section class="site-wrap py-16 lg:py-20" aria-labelledby="steps-heading">
+  <div class="max-w-3xl">
+    <div class="section-rule"></div>
+    <h2 id="steps-heading" class="mt-5 text-2xl font-bold sm:text-3xl">Getting your school running</h2>
+    <p class="lede mt-4">
+      We set the school up first, then bring the workflows on as your staff are
+      ready for each one.
+    </p>
+  </div>
+
+  <ol class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+    {% for step in steps %}
+      <li class="relative rounded-xl border border-eden-line bg-white p-6 shadow-card">
+        <span class="flex h-9 w-9 items-center justify-center rounded-full bg-eden-navy text-sm font-bold text-white">{{ step.number }}</span>
+        <h3 class="mt-4 text-base font-bold leading-snug">{{ step.title }}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ step.body }}</p>
+      </li>
+    {% endfor %}
+  </ol>
+
+  <p class="mt-8">
+    <a href="{% url 'website:how_it_works' %}" class="link">Read how the rollout works in full</a>
+  </p>
+</section>
+
+{# -------------------------------------------------------------- benefits -- #}
+<section class="border-y border-eden-line bg-white" aria-labelledby="benefits-heading">
+  <div class="site-wrap py-16 lg:py-20">
+    <div class="grid gap-10 lg:grid-cols-12">
+      <div class="lg:col-span-5">
+        <div class="section-rule"></div>
+        <h2 id="benefits-heading" class="mt-5 text-2xl font-bold sm:text-3xl">Why schools choose it</h2>
+        <p class="mt-4 text-base leading-relaxed text-eden-slate">
+          The aim is not more paperwork. It is one dependable record, and
+          answers you can give with confidence.
+        </p>
+        <a href="{% url 'website:demo_request' %}" class="btn-primary mt-7">Request a Demo</a>
+      </div>
+
+      <ul class="grid gap-6 sm:grid-cols-2 lg:col-span-7">
+        {% for item in benefits %}
+          <li>
+            <h3 class="flex items-start gap-2 text-base font-bold">
+              <svg class="mt-1 h-4 w-4 shrink-0 text-eden-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path d="M8.1 13.6 4.5 10l1.1-1.1 2.5 2.5 6-6L15.2 6.5l-7.1 7.1Z"/>
+              </svg>
+              {{ item.title }}
+            </h3>
+            <p class="mt-2 pl-6 text-sm leading-relaxed text-eden-slate">{{ item.body }}</p>
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+
+{# ----------------------------------------------------------------- trust -- #}
+<section class="site-wrap py-16 lg:py-20" aria-labelledby="trust-heading">
+  <div class="max-w-3xl">
+    <div class="section-rule"></div>
+    <h2 id="trust-heading" class="mt-5 text-2xl font-bold sm:text-3xl">How student data is handled</h2>
+    <p class="lede mt-4">
+      Boarding records contain children's information, so the important details
+      should be stated plainly.
+    </p>
+  </div>
+
+  <ul class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+    {% for fact in privacy_facts %}
+      <li class="rounded-xl border border-eden-line bg-eden-mist/60 p-6">
+        <h3 class="text-base font-bold">{{ fact.title }}</h3>
+        <p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ fact.body }}</p>
+      </li>
+    {% endfor %}
+  </ul>
+
+  <p class="mt-8 text-sm text-eden-slate">
+    Read the full <a href="{% url 'website:privacy' %}" class="link">Privacy Policy</a>.
+  </p>
+</section>
+
+{# --------------------------------------------------------------- pricing -- #}
+<section class="border-y border-eden-line bg-eden-mist" aria-labelledby="pricing-heading">
+  <div class="site-wrap py-16 lg:py-20">
+    <div class="grid gap-10 lg:grid-cols-12 lg:items-center">
+      <div class="lg:col-span-7">
+        <div class="section-rule"></div>
+        <h2 id="pricing-heading" class="mt-5 text-2xl font-bold sm:text-3xl">What you pay for</h2>
+        <p class="mt-4 text-base leading-relaxed text-eden-slate">
+          Pricing is built from a subscription plus an amount that reflects how
+          many students are on the system. Cloud hosting is provided, and text
+          messages are charged separately on the messages actually sent.
+        </p>
+      </div>
+
+      <div class="lg:col-span-5">
+        <div class="card">
+          {% if pricing_published %}
+            <h3 class="text-lg font-bold">Published plans</h3>
+            <p class="mt-2 text-sm leading-relaxed text-eden-slate">
+              See the current plans, what each one includes, and what is billed separately.
+            </p>
+            <a href="{% url 'website:pricing' %}" class="btn-primary mt-5 w-full">View pricing</a>
+          {% else %}
+            <h3 class="text-lg font-bold">Contact us for pricing</h3>
+            <p class="mt-2 text-sm leading-relaxed text-eden-slate">
+              We are finalising the published price list. Tell us the size of
+              your boarding house and we will give you exact figures for your
+              school.
+            </p>
+            <a href="{% url 'website:contact' %}" class="btn-primary mt-5 w-full">Get a figure for your school</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ------------------------------------------------------------------- faq -- #}
+<section class="site-wrap py-16 lg:py-20" aria-labelledby="faq-heading">
+  <div class="max-w-3xl">
+    <div class="section-rule"></div>
+    <h2 id="faq-heading" class="mt-5 text-2xl font-bold sm:text-3xl">Common questions</h2>
+  </div>
+
+  <dl class="mt-10 grid gap-5 lg:grid-cols-2">
+    {% for item in faq_preview %}
+      <div class="rounded-xl border border-eden-line bg-white p-6 shadow-card">
+        <dt class="text-base font-bold">{{ item.question }}</dt>
+        <dd class="mt-2 text-sm leading-relaxed text-eden-slate">{{ item.answer }}</dd>
+      </div>
+    {% endfor %}
+  </dl>
+
+  <p class="mt-8">
+    <a href="{% url 'website:faq' %}" class="link">Read all frequently asked questions</a>
+  </p>
+</section>
+
+{% include "website/partials/_cta.html" %}
+
+{% endblock %}

@@ -1,0 +1,66 @@
+{% load static %}
+{# Site header. The mobile navigation is CSS-only (no JavaScript) so it works  #}
+{# even if scripts are blocked, and the toggle remains keyboard reachable.     #}
+<header class="sticky top-0 z-40 border-b border-eden-line bg-white/95 backdrop-blur">
+  <div class="site-wrap flex h-16 items-center justify-between gap-4 lg:h-20">
+
+    <a href="{% url 'website:home' %}" class="flex shrink-0 items-center gap-3 no-underline">
+      {# The supplied mark is used unmodified at its native aspect ratio. #}
+      <img src="{% static 'img/eden-creative-systems-mark.png' %}"
+           alt=""
+           width="40" height="40" decoding="async"
+           class="h-9 w-9 shrink-0 rounded-md object-contain lg:h-10 lg:w-10">
+      <span class="flex flex-col leading-tight">
+        <span class="text-[15px] font-extrabold tracking-tight text-eden-navy lg:text-base">{{ site.short_name }}</span>
+        <span class="hidden text-[10px] font-semibold uppercase tracking-[0.14em] text-eden-slate sm:block">{{ site.company }}</span>
+      </span>
+    </a>
+
+    <nav class="hidden items-center gap-0.5 md:flex" aria-label="Primary">
+      {% for link in nav_links %}
+        <a href="{% url link.url_name %}"
+           class="rounded-md px-3 py-2 text-sm font-semibold no-underline hover:bg-eden-mist
+                  {% if nav_key == link.key %}text-eden-navy{% else %}text-eden-slate hover:text-eden-navy{% endif %}"
+           {% if nav_key == link.key %}aria-current="page"{% endif %}>{{ link.label }}</a>
+      {% endfor %}
+    </nav>
+
+    <div class="flex items-center gap-2">
+      {% if site.portal_login_url %}
+        <a href="{{ site.portal_login_url }}"
+           class="hidden rounded-md px-3 py-2 text-sm font-semibold text-eden-slate no-underline hover:text-eden-navy lg:inline-flex"
+           rel="nofollow">{{ cta.login }}</a>
+      {% endif %}
+      <a href="{% url 'website:demo_request' %}" class="btn-primary hidden px-4 py-2 text-sm sm:inline-flex">{{ cta.primary }}</a>
+      <label for="site-nav-toggle"
+             class="inline-flex cursor-pointer items-center gap-2 rounded-md border border-eden-line px-3 py-2 text-sm font-semibold text-eden-navy md:hidden">
+        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" d="M3 5h14M3 10h14M3 15h14"/>
+        </svg>
+        Menu
+        <span class="sr-only">, toggle navigation</span>
+      </label>
+    </div>
+  </div>
+
+  <input id="site-nav-toggle" type="checkbox" class="peer sr-only">
+  <div class="hidden border-t border-eden-line bg-white peer-checked:block md:hidden">
+    <nav class="site-wrap flex flex-col py-3" aria-label="Primary, mobile">
+      {% for link in nav_links %}
+        <a href="{% url link.url_name %}"
+           class="rounded-md px-3 py-3 text-base font-semibold text-eden-navy no-underline hover:bg-eden-mist"
+           {% if nav_key == link.key %}aria-current="page"{% endif %}>{{ link.label }}</a>
+      {% endfor %}
+      <a href="{% url 'website:privacy' %}" class="rounded-md px-3 py-3 text-base font-medium text-eden-slate no-underline hover:bg-eden-mist">Privacy Policy</a>
+      <a href="{% url 'website:terms' %}" class="rounded-md px-3 py-3 text-base font-medium text-eden-slate no-underline hover:bg-eden-mist">Terms of Service</a>
+
+      <div class="mt-3 flex flex-col gap-2 border-t border-eden-line pt-4">
+        <a href="{% url 'website:demo_request' %}" class="btn-primary w-full">{{ cta.primary }}</a>
+        <a href="{% url 'website:contact' %}" class="btn-secondary w-full">{{ cta.secondary }}</a>
+        {% if site.portal_login_url %}
+          <a href="{{ site.portal_login_url }}" class="btn-secondary w-full" rel="nofollow">{{ cta.login }}</a>
+        {% endif %}
+      </div>
+    </nav>
+  </div>
+</header>

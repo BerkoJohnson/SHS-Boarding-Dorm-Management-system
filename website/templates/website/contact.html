@@ -1,0 +1,104 @@
+{% extends "website/base_public.html" %}
+
+{% block content %}
+
+<section class="border-b border-eden-line bg-gradient-to-b from-eden-mist to-white">
+  <div class="site-wrap py-14 lg:py-16">
+    <p class="eyebrow">Contact</p>
+    <h1 class="mt-4 max-w-4xl text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+      Talk to {{ site.company }}
+    </h1>
+    <p class="lede mt-5 max-w-3xl">{{ intro }}</p>
+  </div>
+</section>
+
+<section class="site-wrap py-14 lg:py-16" aria-labelledby="channels-heading">
+  <h2 id="channels-heading" class="sr-only">Ways to reach us</h2>
+
+  <div class="grid gap-5 lg:grid-cols-3">
+    {% if site.phone_href %}
+      <div class="card flex flex-col">
+        <span class="flex h-10 w-10 items-center justify-center rounded-full bg-eden-blueSoft text-eden-blueInk">
+          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M2 4.5A2.5 2.5 0 0 1 4.5 2h1A1.5 1.5 0 0 1 7 3.2l.5 2a1.5 1.5 0 0 1-.6 1.6l-.9.6a9 9 0 0 0 4.6 4.6l.6-.9a1.5 1.5 0 0 1 1.6-.6l2 .5A1.5 1.5 0 0 1 18 12.5v1A2.5 2.5 0 0 1 15.5 16h-.3A15.2 15.2 0 0 1 2 4.8Z"/>
+          </svg>
+        </span>
+        <h3 class="mt-4 text-base font-bold">Call us</h3>
+        <p class="mt-2 flex-1 text-sm leading-relaxed text-eden-slate">
+          The fastest way to get an answer, and the best way to reach us about an
+          active enquiry.
+        </p>
+        <a href="{{ site.phone_href }}" class="link mt-4">{{ site.phone_display }}</a>
+      </div>
+    {% endif %}
+
+    {% if site.whatsapp_href %}
+      <div class="card flex flex-col">
+        <span class="flex h-10 w-10 items-center justify-center rounded-full bg-eden-greenSoft text-eden-greenInk">
+          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M10 2a8 8 0 0 0-6.9 12.1L2 18l4.1-1.1A8 8 0 1 0 10 2Zm4.2 11.3c-.2.5-1.1 1-1.6 1-.4 0-1 0-1.9-.4a9.5 9.5 0 0 1-4.6-4.4c-.3-.6-.5-1.2-.5-1.7 0-.6.3-1.2.6-1.5.2-.2.4-.3.6-.3h.4c.2 0 .3.1.4.4l.6 1.3c0 .2 0 .3-.1.5l-.3.4c-.1.1-.2.2-.1.4a6 6 0 0 0 2.7 2.4c.2.1.4.1.5-.1l.5-.6c.1-.2.3-.2.5-.1l1.3.6c.2.1.3.2.3.4 0 .2 0 .5-.2.8Z"/>
+          </svg>
+        </span>
+        <h3 class="mt-4 text-base font-bold">WhatsApp</h3>
+        <p class="mt-2 flex-1 text-sm leading-relaxed text-eden-slate">
+          Message us on the same number. Useful for sharing a roster format or a
+          quick question.
+        </p>
+        <a href="{{ site.whatsapp_href }}" class="link mt-4" rel="noopener">Message {{ site.phone_display }}</a>
+      </div>
+    {% endif %}
+
+    {% if site.email_href %}
+      <div class="card flex flex-col">
+        <span class="flex h-10 w-10 items-center justify-center rounded-full bg-eden-goldSoft text-eden-goldInk">
+          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h13A1.5 1.5 0 0 1 18 5.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 2 14.5v-9Zm1.9.5L10 10.1 16.1 6H3.9Z"/>
+          </svg>
+        </span>
+        <h3 class="mt-4 text-base font-bold">Email</h3>
+        <p class="mt-2 flex-1 text-sm leading-relaxed text-eden-slate">
+          Best if you want to send details, a spreadsheet template question, or a
+          written request.
+        </p>
+        <a href="{{ site.email_href }}" class="link mt-4 break-all">{{ site.email }}</a>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="mt-10 grid gap-8 lg:grid-cols-12">
+    <div class="lg:col-span-7">
+      <h2 class="text-xl font-bold">What helps us answer quickly</h2>
+      <p class="mt-3 text-sm leading-relaxed text-eden-slate">
+        You do not need to prepare any of this, but it usually shortens the
+        conversation:
+      </p>
+      <ul class="mt-5 space-y-3">
+        {% for item in helpful %}
+          <li class="flex items-start gap-3 text-sm leading-relaxed text-eden-slate">
+            <svg class="mt-0.5 h-4 w-4 shrink-0 text-eden-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M8.1 13.6 4.5 10l1.1-1.1 2.5 2.5 6-6L15.2 6.5l-7.1 7.1Z"/>
+            </svg>
+            {{ item }}
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="lg:col-span-5">
+      <div class="card">
+        <h2 class="text-base font-bold">Prefer we come to you?</h2>
+        <p class="mt-2 text-sm leading-relaxed text-eden-slate">
+          Send a demonstration request and we will follow up to arrange a time
+          that suits your staff.
+        </p>
+        <a href="{% url 'website:demo_request' %}" class="btn-primary mt-5 w-full">{{ cta.primary }}</a>
+      </div>
+
+      <p class="mt-5 text-sm leading-relaxed text-eden-slate">{{ response_note }}</p>
+    </div>
+  </div>
+</section>
+
+{% include "website/partials/_cta.html" %}
+
+{% endblock %}

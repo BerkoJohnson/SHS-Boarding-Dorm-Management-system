@@ -2,6 +2,7 @@
 Context processor supplying top command bar notifications and authenticated user metadata.
 """
 from typing import Dict, Any, List
+from django.db import DatabaseError
 from django.utils import timezone
 from django.db.models import Q
 from core.models import (
@@ -50,35 +51,71 @@ def get_user_initials(user) -> str:
     return "AD"
 
 
+def get_school_configuration_safe() -> SchoolConfiguration:
+    """Return the school's singleton configuration, or an unsaved default.
+
+    The public Eden Creative Systems website is served from the PostgreSQL
+    ``public`` schema, which intentionally contains no ``core_*`` tables.
+    Rendering a public page there must not raise a database error, so a
+    missing table degrades to an empty (unsaved) configuration instance
+    instead of a 500. The authenticated application is unaffected because its
+    tables always exist in the tenant schema.
+    """
+    try:
+        return SchoolConfiguration.get_solo()
+    except DatabaseError:
+        return SchoolConfiguration()
+
+
+def _guest_context(school_configuration: SchoolConfiguration) -> Dict[str, Any]:
+    """Return the context shape used for a visitor with no staff session."""
+    return {
+        "school_configuration": school_configuration,
+        "notifications": [],
+        "notification_count": 0,
+        "overdue_count": 0,
+        "pending_exeat_count": 0,
+        "critical_incident_count": 0,
+        "user_initials": "AD",
+        "user_role_display": "Guest",
+        "user_assigned_house": None,
+        "has_house_scope": False,
+        "user_assigned_dormitory": None,
+        "user_staff_id": "",
+        "user_phone": "",
+        "user_jurisdiction_scope": "",
+        "user_profile": None,
+        "user_housemaster": None,
+        "is_senior_housemaster": False,
+        "is_gate_officer": False,
+        "can_view_houses": False,
+        "can_view_conduct": False,
+        "can_view_exeats": False,
+        "can_view_reports": False,
+        "can_view_config": False,
+        "can_manage_students": False,
+        "can_view_student_records": False,
+        "can_create_exeat": False,
+        "can_approve_exeat": False,
+        "can_access_gate": False,
+        "can_access_roll_call": False,
+    }
+
+
 def header_context(request) -> Dict[str, Any]:
     """
     Provides real-time operational alerts (overdue gate logs, pending approvals,
     critical incidents) and authenticated user state to templates inheriting base.html.
     """
-    school_configuration = SchoolConfiguration.get_solo()
+    # The public marketing website is served from the platform schema, which
+    # intentionally contains no school tables. Short-circuit before any query
+    # so that a public page render is entirely database-free.
+    if getattr(request, "is_public_website", False):
+        return _guest_context(SchoolConfiguration())
+
+    school_configuration = get_school_configuration_safe()
     if not hasattr(request, "user") or not request.user.is_authenticated:
-        return {
-            "school_configuration": school_configuration,
-            "notifications": [],
-            "notification_count": 0,
-            "overdue_count": 0,
-            "pending_exeat_count": 0,
-            "critical_incident_count": 0,
-            "user_initials": "AD",
-            "user_role_display": "Guest",
-            "user_assigned_house": None,
-            "can_view_houses": False,
-            "can_view_conduct": False,
-            "can_view_exeats": False,
-            "can_view_reports": False,
-            "can_view_config": False,
-            "can_manage_students": False,
-            "can_view_student_records": False,
-            "can_create_exeat": False,
-            "can_approve_exeat": False,
-            "can_access_gate": False,
-            "can_access_roll_call": False,
-        }
+        return _guest_context(school_configuration)
 
     now = timezone.now()
     user = request.user

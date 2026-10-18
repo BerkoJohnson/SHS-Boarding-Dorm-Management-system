@@ -1,0 +1,29 @@
+{% extends "website/base_public.html" %}
+
+{% block title %}{{ status_code }} — {{ site.company }}{% endblock %}
+{% block robots %}<meta name="robots" content="noindex, nofollow">{% endblock %}
+
+{% block content %}
+<section class="site-wrap py-20 lg:py-28">
+  <div class="max-w-2xl">
+    {# Deliberately a readable tone: a large, decorative-looking numeral that  #}
+    {# fails contrast is still text, and it is the only place the status code   #}
+    {# appears in the page body.                                              #}
+    <p class="text-5xl font-extrabold tracking-tight text-eden-slate">{{ status_code }}</p>
+    <h1 class="mt-4 text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">{{ heading }}</h1>
+    <p class="lede mt-5">{{ body }}</p>
+
+    <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+      <a href="{% url 'website:home' %}" class="btn-primary">Back to the home page</a>
+      <a href="{% url 'website:contact' %}" class="btn-secondary">{{ cta.secondary }}</a>
+    </div>
+
+    <ul class="mt-10 flex flex-wrap gap-x-5 gap-y-2 text-sm text-eden-slate">
+      <li><a href="{% url 'website:features' %}" class="link">Features</a></li>
+      <li><a href="{% url 'website:pricing' %}" class="link">Pricing</a></li>
+      <li><a href="{% url 'website:faq' %}" class="link">FAQs</a></li>
+      <li><a href="{% url 'website:demo_request' %}" class="link">{{ cta.primary }}</a></li>
+    </ul>
+  </div>
+</section>
+{% endblock %}

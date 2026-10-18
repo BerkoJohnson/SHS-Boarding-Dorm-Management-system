@@ -106,7 +106,7 @@ if csp_report_uri:
 
 
 def _environment_flag(name, default="false"):
-    value = os.getenv(name, default).strip().lower()
+    value = os.getenv(name, "").strip().lower() or str(default).strip().lower()
     if value not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
         raise ImproperlyConfigured(f"{name} must be a boolean value.")
     return value in {"1", "true", "yes", "on"}
@@ -115,7 +115,7 @@ def _environment_flag(name, default="false"):
 try:
     # Default to one year of HSTS so production is not silently downgradeable.
     # Subdomain/preload directives stay opt-in (see the guards below).
-    SECURE_HSTS_SECONDS = int(os.getenv("SECURE_HSTS_SECONDS", "31536000"))
+    SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 31536000)
 except ValueError as error:
     raise ImproperlyConfigured(
         "SECURE_HSTS_SECONDS must be a non-negative integer."

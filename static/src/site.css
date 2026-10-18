@@ -1,0 +1,201 @@
+/* Public Eden Creative Systems website stylesheet.
+ *
+ * Built with `npm run build:site` from tailwind.site.config.js.
+ * The generated file is committed to the repository, exactly as
+ * static/css/output.css is, so deploys do not depend on Node being available.
+ *
+ * Colour keys are written in their generated (hyphenated) class form inside
+ * `@apply` — `bg-eden-navy`, not `bg-eden.navy` — because the dotted form is
+ * only understood by `theme()`.
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-white font-sans text-base leading-relaxed text-eden-ink;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-eden-navy;
+    text-wrap: balance;
+  }
+
+  /* Visible focus for every interactive element, including the CSS-only
+   * mobile navigation toggle, which is reachable by keyboard. */
+  :focus-visible {
+    outline: 3px solid theme('colors.eden.blueBright');
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background-color: theme('colors.eden.goldSoft');
+    color: theme('colors.eden.goldInk');
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  .site-wrap {
+    @apply mx-auto w-full max-w-6xl px-5 sm:px-8;
+  }
+
+  .site-wrap-narrow {
+    @apply mx-auto w-full max-w-3xl px-5 sm:px-8;
+  }
+
+  /* --- Buttons --------------------------------------------------------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-6 py-3
+           text-base font-semibold no-underline transition-colors;
+  }
+
+  .btn-primary {
+    @apply btn bg-eden-blue text-white hover:bg-eden-blueDark;
+  }
+
+  .btn-secondary {
+    @apply btn border border-eden-navy bg-white text-eden-navy
+           hover:bg-eden-mist;
+  }
+
+  .btn-on-navy {
+    @apply btn bg-white text-eden-navy hover:bg-eden-mist;
+  }
+
+  .btn-ghost-on-navy {
+    @apply btn border border-white/40 text-white hover:border-white/80
+           hover:bg-white/10;
+  }
+
+  .link {
+    @apply font-medium text-eden-blue underline decoration-eden-blue/40
+           underline-offset-4 hover:decoration-eden-blue;
+  }
+
+  /* --- Typography ------------------------------------------------------ */
+  .eyebrow {
+    @apply text-xs font-bold uppercase tracking-[0.16em] text-eden-goldInk;
+  }
+
+  .lede {
+    @apply text-lg leading-relaxed text-eden-slate sm:text-xl;
+  }
+
+  .prose-site p {
+    @apply mb-5 text-eden-slate;
+  }
+
+  .prose-site h2 {
+    @apply mb-4 mt-10 text-2xl font-bold;
+  }
+
+  .prose-site h3 {
+    @apply mb-3 mt-8 text-lg font-semibold;
+  }
+
+  .prose-site ul {
+    @apply mb-5 list-disc space-y-2 pl-6 text-eden-slate;
+  }
+
+  /* --- Cards and surfaces --------------------------------------------- */
+  .card {
+    @apply rounded-xl border border-eden-line bg-white p-6 shadow-card;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs
+           font-semibold;
+  }
+
+  .chip-blue {
+    @apply chip bg-eden-blueSoft text-eden-blueInk;
+  }
+
+  .chip-green {
+    @apply chip bg-eden-greenSoft text-eden-greenInk;
+  }
+
+  .chip-amber {
+    @apply chip bg-eden-goldSoft text-eden-goldInk;
+  }
+
+  .chip-red {
+    @apply chip bg-red-50 text-red-800;
+  }
+
+  .chip-slate {
+    @apply chip bg-eden-mist text-eden-slate;
+  }
+
+  .section-rule {
+    @apply h-1 w-14 rounded-full bg-eden-goldBright;
+  }
+
+  /* --- Forms ----------------------------------------------------------- */
+  .field-label {
+    @apply mb-1.5 block text-sm font-semibold text-eden-navy;
+  }
+
+  .field-help {
+    @apply mt-1.5 block text-sm text-eden-slate;
+  }
+
+  .field-input {
+    @apply block w-full rounded-lg border border-eden-line bg-white px-3.5 py-2.5
+           text-base text-eden-ink shadow-sm placeholder:text-eden-slate/85
+           focus:border-eden-blue focus:outline-none focus:ring-2
+           focus:ring-eden-blueBright/40;
+  }
+
+  .field-error {
+    @apply mt-1.5 block text-sm font-medium text-red-700;
+  }
+
+  .field-invalid {
+    @apply border-red-400 focus:border-red-500 focus:ring-red-300;
+  }
+
+  /* Honeypot: kept out of the visual and accessibility tree without using
+   * display:none, which some bots treat as a signal. */
+  .honeypot {
+    @apply absolute h-px w-px overflow-hidden opacity-0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Skip link: hidden until focused. */
+  .skip-link {
+    @apply absolute left-4 top-4 z-50 -translate-y-24 rounded-lg bg-eden-navy
+           px-4 py-3 font-semibold text-white transition-transform
+           focus:translate-y-0;
+  }
+}

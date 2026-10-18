@@ -1,0 +1,173 @@
+{% extends "website/base_public.html" %}
+
+{% block content %}
+
+<section class="border-b border-eden-line bg-gradient-to-b from-eden-mist to-white">
+  <div class="site-wrap py-14 lg:py-16">
+    <p class="eyebrow">Pricing</p>
+    <h1 class="mt-4 max-w-4xl text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+      Straightforward pricing for boarding management
+    </h1>
+
+    {% if pricing.published %}
+      <p class="lede mt-5 max-w-3xl">
+        {{ pricing.disclaimer }}
+      </p>
+    {% else %}
+      <p class="lede mt-5 max-w-3xl">{{ pricing.disclaimer }}</p>
+    {% endif %}
+  </div>
+</section>
+
+{# ------------------------------------------------- published price list --- #}
+{% if pricing.published %}
+  <section class="site-wrap py-14 lg:py-16" aria-labelledby="plans-heading">
+    <h2 id="plans-heading" class="sr-only">Plans</h2>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+      {% for plan in pricing.plans %}
+        <div class="flex flex-col rounded-2xl border border-eden-line bg-white p-6 shadow-card">
+          <h3 class="text-lg font-bold">{{ plan.name }}</h3>
+          {% if plan.summary %}<p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ plan.summary }}</p>{% endif %}
+
+          <p class="mt-5 text-2xl font-extrabold text-eden-navy">{{ plan.base_fee }}</p>
+          {% if plan.per_student %}
+            <p class="mt-1 text-sm font-semibold text-eden-blueInk">{{ plan.per_student }}</p>
+          {% endif %}
+          {% if plan.limits %}
+            <p class="mt-1 text-sm text-eden-slate">{{ plan.limits }}</p>
+          {% endif %}
+
+          {% if plan.includes %}
+            <ul class="mt-5 space-y-2 border-t border-eden-line pt-5">
+              {% for item in plan.includes %}
+                <li class="flex items-start gap-2.5 text-sm text-eden-slate">
+                  <svg class="mt-0.5 h-4 w-4 shrink-0 text-eden-green" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path d="M8.1 13.6 4.5 10l1.1-1.1 2.5 2.5 6-6L15.2 6.5l-7.1 7.1Z"/>
+                  </svg>
+                  {{ item }}
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+
+          {% if plan.excludes %}
+            <ul class="mt-4 space-y-2">
+              {% for item in plan.excludes %}
+                <li class="flex items-start gap-2.5 text-sm text-eden-slate">
+                  <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-eden-slate/50"></span>
+                  {{ item }}
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+
+          <a href="{% url 'website:demo_request' %}" class="btn-primary mt-6 w-full">{{ cta.primary }}</a>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% if pricing.billing_explanation %}
+      <div class="prose-site mt-10 max-w-3xl">
+        <p>{{ pricing.billing_explanation }}</p>
+      </div>
+    {% endif %}
+  </section>
+
+{# ------------------------------------------------- awaiting price list ---- #}
+{% else %}
+  <section class="site-wrap py-14 lg:py-16" aria-labelledby="awaiting-heading">
+    <div class="grid gap-8 lg:grid-cols-12">
+      <div class="lg:col-span-7">
+        <div class="rounded-2xl border border-eden-goldBright/40 bg-eden-goldSoft p-7 lg:p-8">
+          <h2 id="awaiting-heading" class="text-2xl font-bold">{{ pricing.headline }}</h2>
+          <p class="mt-4 text-base leading-relaxed text-eden-goldInk">{{ pricing.body }}</p>
+
+          <div class="mt-6 flex flex-col gap-3 sm:flex-row">
+            <a href="{% url 'website:contact' %}" class="btn-primary">{{ cta.secondary }}</a>
+            <a href="{% url 'website:demo_request' %}" class="btn-secondary">{{ cta.primary }}</a>
+          </div>
+
+          {% if site.phone_href %}
+            <p class="mt-5 text-sm text-eden-goldInk">
+              Or call
+              <a href="{{ site.phone_href }}" class="font-semibold underline decoration-eden-goldInk/40 underline-offset-4">{{ site.phone_display }}</a>.
+            </p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="lg:col-span-5">
+        <div class="card h-full">
+          <h3 class="text-base font-bold">What we will confirm with you</h3>
+          <p class="mt-2 text-sm leading-relaxed text-eden-slate">
+            So that the figure you receive is unambiguous, we agree the following
+            with your school before any charge:
+          </p>
+          <ul class="mt-4 space-y-3">
+            {% for question in pricing.billing_questions %}
+              <li class="flex items-start gap-2.5 text-sm text-eden-slate">
+                <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-eden-blueBright"></span>
+                {{ question }}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endif %}
+
+{# --------------------------------------------------- commercial structure -- #}
+<section class="border-y border-eden-line bg-eden-mist" aria-labelledby="structure-heading">
+  <div class="site-wrap py-14 lg:py-16">
+    <div class="max-w-3xl">
+      <div class="section-rule"></div>
+      <h2 id="structure-heading" class="mt-5 text-2xl font-bold sm:text-3xl">How the cost is put together</h2>
+      <p class="lede mt-4">
+        Every school's charge has the same shape. What differs is the size of
+        your boarding house and the features you use.
+      </p>
+    </div>
+
+    <ul class="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+      {% for item in pricing.structure %}
+        <li class="card">
+          <h3 class="text-base font-bold">{{ item.title }}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ item.body }}</p>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<section class="site-wrap py-14" aria-labelledby="billing-heading">
+  <div class="grid gap-8 lg:grid-cols-12">
+    <div class="lg:col-span-7">
+      <h2 id="billing-heading" class="text-xl font-bold">What is not included in the subscription</h2>
+      <ul class="mt-5 space-y-3">
+        {% for item in pricing.not_included %}
+          <li class="flex items-start gap-2.5 text-sm leading-relaxed text-eden-slate">
+            <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-eden-slate/50"></span>
+            {{ item }}
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="lg:col-span-5">
+      <div class="rounded-xl border border-eden-line bg-white p-6 shadow-card">
+        <h3 class="text-base font-bold">Talk to us about your school</h3>
+        <p class="mt-2 text-sm leading-relaxed text-eden-slate">
+          Tell us how many boarders you have and which workflows matter most, and
+          we will set out exactly what your school would pay.
+        </p>
+        <a href="{% url 'website:contact' %}" class="btn-primary mt-5 w-full">{{ cta.secondary }}</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% include "website/partials/_cta.html" %}
+
+{% endblock %}

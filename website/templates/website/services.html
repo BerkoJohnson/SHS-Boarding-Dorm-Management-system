@@ -1,0 +1,51 @@
+{% extends "website/base_public.html" %}
+
+{% block content %}
+
+<section class="border-b border-eden-line bg-gradient-to-b from-eden-mist to-white">
+  <div class="site-wrap py-14 lg:py-16">
+    <p class="eyebrow">Services</p>
+    <h1 class="mt-4 max-w-4xl text-3xl font-extrabold leading-tight tracking-tight sm:text-4xl">
+      Support before, during and after go-live
+    </h1>
+    <p class="lede mt-5 max-w-3xl">{{ services_intro }}</p>
+
+    <div class="mt-8 flex max-w-3xl items-start gap-3 rounded-xl border border-eden-goldBright/40 bg-eden-goldSoft p-4">
+      <svg class="mt-0.5 h-5 w-5 shrink-0 text-eden-goldInk" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Zm1 11H9v-2h2v2Zm0-4H9V6h2v3Z"/>
+      </svg>
+      <p class="text-sm leading-relaxed text-eden-goldInk">{{ provisional_note }}</p>
+    </div>
+  </div>
+</section>
+
+<section class="site-wrap py-14 lg:py-16" aria-labelledby="services-heading">
+  <h2 id="services-heading" class="sr-only">Areas of assistance</h2>
+
+  <ol class="grid gap-5 lg:grid-cols-2">
+    {% for service in services %}
+      <li class="card flex gap-5">
+        <span class="shrink-0 text-sm font-bold tracking-[0.14em] text-eden-goldInk">{{ service.number }}</span>
+        <div>
+          <h3 class="text-base font-bold">{{ service.title }}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-eden-slate">{{ service.body }}</p>
+        </div>
+      </li>
+    {% endfor %}
+  </ol>
+
+  <div class="mt-10 flex flex-col gap-4 rounded-xl border border-eden-line bg-eden-mist p-6 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h3 class="text-base font-bold">Want to talk through what your school needs?</h3>
+      <p class="mt-1 text-sm text-eden-slate">We will be clear about what we can and cannot do.</p>
+    </div>
+    <div class="flex shrink-0 flex-col gap-3 sm:flex-row">
+      <a href="{% url 'website:demo_request' %}" class="btn-primary">{{ cta.primary }}</a>
+      <a href="{% url 'website:contact' %}" class="btn-secondary">{{ cta.secondary }}</a>
+    </div>
+  </div>
+</section>
+
+{% include "website/partials/_cta.html" %}
+
+{% endblock %}

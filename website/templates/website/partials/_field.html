@@ -1,0 +1,17 @@
+{# Renders one form field with its label, guidance and validation errors.     #}
+{# Expects `field` (a BoundField). Use: {% include ... with field=form.email %} #}
+<div>
+  <label for="{{ field.id_for_label }}" class="field-label">
+    {{ field.label }}{% if not field.field.required %} <span class="font-normal text-eden-slate">(optional)</span>{% endif %}
+  </label>
+
+  {{ field }}
+
+  {% if field.help_text %}
+    <span id="id_{{ field.name }}-help" class="field-help">{{ field.help_text }}</span>
+  {% endif %}
+
+  {% for error in field.errors %}
+    <span id="id_{{ field.name }}-error" class="field-error" role="alert">{{ error }}</span>
+  {% endfor %}
+</div>

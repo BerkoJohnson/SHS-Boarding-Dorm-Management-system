@@ -43,3 +43,19 @@ if settings.MEDIA_STORAGE_BACKEND == "filesystem":
             serve_tenant_school_logo,
         ),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Public marketing website (local preview only)
+# ---------------------------------------------------------------------------
+# In multi-tenant deployments the public website is served from its own host by
+# VerifiedDomainRoutingMiddleware, which points ``request.urlconf`` at
+# ``settings.PUBLIC_WEBSITE_URLCONF`` (see ``schoolsystem/urls_public.py``).
+# When tenancy is disabled there is no host-based routing, so the website is
+# mounted under an explicit prefix for local development and review only. It is
+# never mounted at the site root, because the root URL belongs to the
+# authenticated school dashboard.
+if not settings.TENANCY_ENABLED:
+    urlpatterns += [
+        path("site/", include("website.urls")),
+    ]

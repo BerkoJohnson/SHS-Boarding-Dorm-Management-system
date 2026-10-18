@@ -50,6 +50,10 @@ class VerifiedDomainRoutingMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
+    # Cache of the normalized public-website hosts, keyed on the raw settings
+    # that produced it so ``override_settings`` still takes effect.
+    _public_hosts_cache: tuple[str, frozenset[str]] | None = None
+
     def __call__(self, request):
         activate_public()
         set_urlconf(None)
@@ -85,6 +89,26 @@ class VerifiedDomainRoutingMiddleware:
                 ),
             })
 
+        # Public marketing website host: serve the public URLconf from the
+        # public schema. Marketing pages therefore cannot reach any school's
+        # tables, and tenant hosts are completely unaffected.
+        if host in self._public_website_hosts():
+            # The public schema has no session table, so drop any session
+            # cookie before AuthenticationMiddleware runs. This keeps the
+            # public site stateless, prevents a lookup against a table that
+            # does not exist, and guarantees it can never inherit a staff
+            # session from a shared hostname.
+            request.COOKIES.pop(settings.SESSION_COOKIE_NAME, None)
+            request.is_public_website = True
+            request.urlconf = settings.PUBLIC_WEBSITE_URLCONF
+            set_urlconf(request.urlconf)
+            try:
+                response = self.get_response(request)
+            finally:
+                activate_public()
+                set_urlconf(None)
+            return response
+
         domain = (
             Domain.objects.select_related("tenant")
             .filter(
@@ -112,6 +136,43 @@ class VerifiedDomainRoutingMiddleware:
             activate_public()
             set_urlconf(None)
         return response
+
+    @classmethod
+    def _public_website_hosts(cls):
+        """Return the configured public marketing website hosts.
+
+        Normalized and cached against the raw setting so that
+        ``override_settings`` in tests still takes effect.
+        """
+        raw = " ".join(
+            [
+                getattr(settings, "PUBLIC_WEBSITE_DOMAIN", "") or "",
+                str(getattr(settings, "PUBLIC_WEBSITE_ENABLED", True)),
+            ]
+        )
+        cached = cls._public_hosts_cache
+        if cached is not None and cached[0] == raw:
+            return cached[1]
+
+        hosts: frozenset[str] = frozenset()
+        if getattr(settings, "PUBLIC_WEBSITE_ENABLED", True):
+            configured = getattr(settings, "PUBLIC_WEBSITE_DOMAIN", "") or ""
+            normalized = set()
+            for entry in configured.split(","):
+                candidate = entry.strip()
+                if not candidate:
+                    continue
+                try:
+                    normalized.add(normalize_domain(candidate))
+                except ValidationError:
+                    logger.warning(
+                        "Ignoring invalid PUBLIC_WEBSITE_DOMAIN entry: %r",
+                        candidate,
+                    )
+            hosts = frozenset(normalized)
+
+        cls._public_hosts_cache = (raw, hosts)
+        return hosts
 
     @staticmethod
     def _extract_hostname(request):

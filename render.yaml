@@ -7,6 +7,34 @@
 # Apply via Dashboard -> New -> Blueprint, selecting this repository.
 # Adjust `branch`/`region`/`plan` to taste (defaults chosen to avoid paid
 # resources; `preDeployCommand` requires a paid instance type - see below).
+#
+# Static assets
+# -------------
+# `buildCommand` does NOT run npm. Both stylesheets are committed to the
+# repository (`static/css/output.css` for the application, `static/css/site.css`
+# for the public marketing website) and are collected by `collectstatic`, so a
+# deploy needs no Node toolchain. After editing `tailwind.site.config.js`,
+# `static/src/site.css` or any file under `website/templates/`, rebuild and
+# commit the result:
+#
+#   npm ci && npm run build:site
+#
+# The public marketing website
+# ----------------------------
+# The marketing site is served from `PUBLIC_WEBSITE_DOMAIN`, which is NOT a
+# tenant. Do not add that hostname to the Domain table: the public host bypass
+# in `tenancy.middleware.VerifiedDomainRoutingMiddleware` deliberately runs
+# before tenant resolution, and registering the domain as a tenant would
+# present a school's dashboard at the marketing address.
+#
+# Link hygiene
+# ------------
+# All the public site may link to is the main domain. Canonical links, Open
+# Graph tags, the sitemap and the `Sitemap:` line in robots.txt are built from
+# `SITE_URL` (falling back to `https://EDEN_SYS_DOMAIN`), so set `SITE_URL` to
+# the main domain in production. `EDEN_PORTAL_LOGIN_URL` is published only when
+# it is on that domain; a school's hostname is dropped and reported by the
+# `website.W001` system check, because no page here may link to a tenant.
 
 services:
   - type: web
@@ -15,7 +43,7 @@ services:
     plan: free
     buildCommand: >-
       pip install -r requirements.txt &&
-      python manage.py collectstatic --noinput --settings=schoolsystem.settings.production
+      python manage.py collectstatic --noinput --settings=schoolsystem.settings.build
     startCommand: >-
       gunicorn schoolsystem.wsgi:application
       --bind 0.0.0.0:$PORT --workers 3 --threads 2 --timeout 60
@@ -79,6 +107,31 @@ services:
       # Keep SMS off in staging - prevents real messages.
       - key: SMS_ENABLED
         value: "False"
+      # --- Public marketing website ---------------------------------------
+      # Comma-separated hostnames that serve the marketing site, e.g.
+      # `ecreativesys.com`. Empty disables the bypass. Never list a school's
+      # hostname here.
+      - key: PUBLIC_WEBSITE_DOMAIN
+        sync: false
+      - key: PUBLIC_WEBSITE_ENABLED
+        value: "True"
+      # The site's own absolute origin for canonical URLs, Open Graph tags, the
+      # sitemap and the robots.txt Sitemap line. Production:
+      # https://ecreativesys.com. Empty falls back to https://EDEN_SYS_DOMAIN.
+      - key: SITE_URL
+        sync: false
+      # Where school staff sign in. Published only when it is on SITE_URL's
+      # domain — the site never links to a school's hostname. Empty hides the
+      # "Login" link entirely.
+      - key: EDEN_PORTAL_LOGIN_URL
+        sync: false
+      # Leave False until an approved price list exists.
+      - key: PRICING_PUBLIC_ENABLED
+        value: "False"
+      # Where demonstration requests are emailed. Empty falls back to
+      # DEFAULT_FROM_EMAIL.
+      - key: DEMO_REQUEST_NOTIFY_EMAILS
+        sync: false
       # Staging: avoid pinning HTTPS for a year. Raise to 31536000 for production.
       - key: SECURE_HSTS_SECONDS
         value: "0"
