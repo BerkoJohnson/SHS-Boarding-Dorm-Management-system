@@ -7,10 +7,32 @@ from django.core.mail.backends.base import BaseEmailBackend
 from django.conf import settings
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from unittest import mock
+
+import requests
 
 from website.models import DemoRequest, DemoRequestStatus, PreferredDemoMethod
 
 LOCMEM_EMAIL = "django.core.mail.backends.locmem.EmailBackend"
+
+
+def sms_ok_response():
+    """A minimal stand-in for a successful SMSOnlineGH response."""
+    response = mock.Mock()
+    response.status_code = 200
+    response.json.return_value = {"handshake": {"label": "HSHK_OK"}}
+    return response
+
+
+def sms_rejected_response(label="HSHK_BAD_API_KEY"):
+    """A gateway response that reports the key was refused."""
+    response = mock.Mock()
+    response.json.return_value = {
+        "handshake": {"label": label},
+        "error": "invalid key",
+    }
+    return response
+
 
 
 class ExplodingEmailBackend(BaseEmailBackend):
@@ -41,6 +63,7 @@ def valid_payload(**overrides) -> dict:
     ROOT_URLCONF="schoolsystem.urls_public",
     EMAIL_BACKEND=LOCMEM_EMAIL,
     DEMO_REQUEST_NOTIFY_EMAILS=["enquiries@example.test"],
+    DEMO_REQUEST_SMS_TO=[],
 )
 class DemoRequestFormTests(TestCase):
     def setUp(self):
@@ -208,6 +231,7 @@ class DemoRequestFormTests(TestCase):
     ROOT_URLCONF="schoolsystem.urls_public",
     EMAIL_BACKEND=LOCMEM_EMAIL,
     DEMO_REQUEST_NOTIFY_EMAILS=["enquiries@example.test"],
+    DEMO_REQUEST_SMS_TO=[],
 )
 class DemoRequestPrivacyTests(TestCase):
     def setUp(self):
@@ -246,7 +270,10 @@ class DemoRequestPrivacyTests(TestCase):
         self.assertNotIn("Test Senior High School", body)
 
 
-@override_settings(ROOT_URLCONF="schoolsystem.urls_public")
+@override_settings(
+    ROOT_URLCONF="schoolsystem.urls_public",
+    DEMO_REQUEST_SMS_TO=[],
+)
 class DemoRequestNotificationTests(TestCase):
     def setUp(self):
         cache.clear()
@@ -298,6 +325,7 @@ class DemoRequestNotificationTests(TestCase):
     ROOT_URLCONF="schoolsystem.urls_public",
     EMAIL_BACKEND=LOCMEM_EMAIL,
     DEMO_REQUEST_NOTIFY_EMAILS=["enquiries@example.test"],
+    DEMO_REQUEST_SMS_TO=[],
 )
 class DemoRequestThrottlingTests(TestCase):
     def setUp(self):
@@ -347,3 +375,136 @@ class DemoRequestThrottlingTests(TestCase):
             self.assertEqual(
                 self.client.post(self.url, valid_payload()).status_code, 200
             )
+
+
+@override_settings(
+    ROOT_URLCONF="schoolsystem.urls_public",
+    EMAIL_BACKEND=LOCMEM_EMAIL,
+    DEMO_REQUEST_NOTIFY_EMAILS=["enquiries@example.test"],
+    DEMO_REQUEST_SMS_TO=["024 816 0391"],
+    DEMO_REQUEST_SMS_SENDER="EDENSYS",
+    SMS_ONLINE_GH_API_KEY="test-api-key",
+)
+class DemoRequestSmsAlertTests(TestCase):
+    """The SMS alert is a platform notification, not a school one.
+
+    A demonstration enquiry lives in the public schema, so the alert must not
+    depend on the per-school pipeline: no ``SMSConfiguration``, no
+    ``SMSDelivery`` row, no monthly quota and no Celery worker.
+    """
+
+    def setUp(self):
+        cache.clear()
+
+    @property
+    def url(self) -> str:
+        return reverse("website:demo_request")
+
+    @mock.patch("website.emails.requests.post")
+    def test_alert_is_sent_to_the_configured_number(self, post):
+        post.return_value = sms_ok_response()
+
+        response = self.client.post(self.url, valid_payload())
+
+        self.assertEqual(response.status_code, 200)
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://api.smsonlinegh.com/v5/message/sms/send",
+        )
+        payload = post.call_args.kwargs["data"]
+        self.assertEqual(payload["to"], "+233248160391")
+        self.assertEqual(payload["key"], "test-api-key")
+        self.assertEqual(payload["sender"], "EDENSYS")
+        self.assertEqual(payload["type"], 0)
+        self.assertIn("Test Senior High School", payload["text"])
+        self.assertIn("Ashanti", payload["text"])
+        self.assertTrue(DemoRequest.objects.get().notification_sms_sent)
+
+    @mock.patch("website.emails.requests.post")
+    def test_alert_stays_within_one_sms_segment(self, post):
+        post.return_value = sms_ok_response()
+        self.client.post(
+            self.url,
+            valid_payload(school_name="A" * 200, region="greater_accra"),
+        )
+        payload = post.call_args.kwargs["data"]
+        self.assertLessEqual(len(payload["text"]), 160)
+
+    @mock.patch("website.emails.requests.post")
+    def test_a_rejected_alert_is_recorded_and_does_not_block_the_enquiry(self, post):
+        post.return_value = sms_rejected_response()
+
+        with self.assertLogs("website.emails", level="ERROR"):
+            response = self.client.post(self.url, valid_payload())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Thank you")
+        enquiry = DemoRequest.objects.get()
+        self.assertFalse(enquiry.notification_sms_sent)
+        # An SMS failure must not affect the independent email alert.
+        self.assertTrue(enquiry.notification_sent)
+
+    @mock.patch("website.emails.requests.post")
+    def test_a_network_failure_does_not_lose_the_enquiry(self, post):
+        post.side_effect = requests.ConnectionError("gateway unreachable")
+
+        with self.assertLogs("website.emails", level="ERROR"):
+            response = self.client.post(self.url, valid_payload())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(DemoRequest.objects.count(), 1)
+        self.assertFalse(DemoRequest.objects.get().notification_sms_sent)
+
+    @mock.patch("website.emails.requests.post")
+    def test_a_gateway_timeout_never_blocks_the_request(self, post):
+        post.side_effect = requests.Timeout("gateway slow")
+        with self.assertLogs("website.emails", level="ERROR"):
+            self.client.post(self.url, valid_payload())
+        self.assertEqual(
+            post.call_args.kwargs["timeout"],
+            settings.SMS_HTTP_TIMEOUT,
+        )
+
+    @override_settings(DEMO_REQUEST_SMS_TO=[])
+    @mock.patch("website.emails.requests.post")
+    def test_alert_is_off_when_no_number_is_configured(self, post):
+        response = self.client.post(self.url, valid_payload())
+        self.assertEqual(response.status_code, 200)
+        post.assert_not_called()
+        self.assertFalse(DemoRequest.objects.get().notification_sms_sent)
+
+    @override_settings(SMS_ONLINE_GH_API_KEY="")
+    @mock.patch("website.emails.requests.post")
+    def test_missing_api_key_is_logged_and_not_attempted(self, post):
+        with self.assertLogs("website.emails", level="ERROR"):
+            self.client.post(self.url, valid_payload())
+        post.assert_not_called()
+        self.assertFalse(DemoRequest.objects.get().notification_sms_sent)
+
+    @override_settings(DEMO_REQUEST_SMS_TO=["not-a-number"])
+    @mock.patch("website.emails.requests.post")
+    def test_an_unparseable_number_is_ignored_rather_than_sent(self, post):
+        with self.assertLogs("website.emails", level="WARNING"):
+            self.client.post(self.url, valid_payload())
+        post.assert_not_called()
+
+    @override_settings(DEMO_REQUEST_SMS_SENDER="", SMS_SENDER_ID="SCHOOLID")
+    @mock.patch("website.emails.requests.post")
+    def test_sender_falls_back_to_the_registered_school_sender(self, post):
+        post.return_value = sms_ok_response()
+        self.client.post(self.url, valid_payload())
+        self.assertEqual(post.call_args.kwargs["data"]["sender"], "SCHOOLID")
+
+    @mock.patch("website.emails.requests.post")
+    def test_every_configured_number_receives_the_alert(self, post):
+        post.return_value = sms_ok_response()
+        with override_settings(
+            DEMO_REQUEST_SMS_TO=["024 816 0391", "+233 20 111 2222"]
+        ):
+            self.client.post(self.url, valid_payload())
+        self.assertEqual(
+            post.call_args.kwargs["data"]["to"],
+            "+233248160391,+233201112222",
+        )
+

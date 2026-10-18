@@ -127,6 +127,7 @@ class Command(BaseCommand):
             "status": enquiry.status,
             "internal_notes": enquiry.internal_notes,
             "notification_sent": enquiry.notification_sent,
+            "notification_sms_sent": enquiry.notification_sms_sent,
             "created_at": enquiry.created_at.isoformat(),
         }
 
@@ -233,6 +234,7 @@ class Command(BaseCommand):
             ("Received", "created_at"),
             ("Status", "status"),
             ("Notification sent", "notification_sent"),
+            ("SMS notification sent", "notification_sms_sent"),
             ("Internal notes", "internal_notes"),
         ):
             value = data.get(key)

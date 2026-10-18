@@ -112,6 +112,7 @@ class DemoRequest(models.Model):
     source_ip_hash = models.CharField(max_length=64, blank=True, default="")
     user_agent = models.CharField(max_length=300, blank=True, default="")
     notification_sent = models.BooleanField(default=False)
+    notification_sms_sent = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -308,6 +308,32 @@ DEFAULT_FROM_EMAIL = (
     os.getenv("DEFAULT_FROM_EMAIL", "").strip() or "no-reply@localhost"
 )
 
+# Standard Django SMTP transport settings. Django does not read these from the
+# environment on its own, so they are mapped here: without this an SMTP
+# EMAIL_BACKEND would silently fall back to localhost:25. They are ignored by
+# the console and locmem backends, so leaving them blank is harmless.
+EMAIL_HOST = os.getenv("EMAIL_HOST", "").strip() or "localhost"
+EMAIL_PORT = env_int("EMAIL_PORT", 25)
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "").strip()
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+# TLS and SSL are mutually exclusive: setting both makes Django refuse to start.
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+EMAIL_USE_SSL = os.getenv("EMAIL_USE_SSL", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+# Bound the SMTP conversation so an unreachable mail host cannot hold a web
+# request open indefinitely (Django's default is to wait forever).
+EMAIL_TIMEOUT = env_int("EMAIL_TIMEOUT", 10)
+SERVER_EMAIL = os.getenv("SERVER_EMAIL", "").strip() or DEFAULT_FROM_EMAIL
+
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
@@ -359,7 +385,9 @@ LOGOUT_REDIRECT_URL = "core:login"
 
 # SMS Configuration (SMSOnlineGH)
 SMS_ONLINE_GH_API_KEY = os.getenv("SMS_ONLINE_GH_API_KEY", "")
-SMS_SENDER_ID = os.getenv("SMS_SENDER_ID", "ATSEC")
+# Whitespace around a sender ID is rejected by the gateway, and it is easy to
+# introduce by accident in a dashboard or .env file, so it is trimmed here.
+SMS_SENDER_ID = os.getenv("SMS_SENDER_ID", "ATSEC").strip() or "ATSEC"
 SMS_ENABLED = os.getenv("SMS_ENABLED", "false").strip().lower() in {
     "1",
     "true",
@@ -475,6 +503,24 @@ env_notify = os.getenv("DEMO_REQUEST_NOTIFY_EMAILS", "")
 DEMO_REQUEST_NOTIFY_EMAILS = [
     address.strip() for address in env_notify.split(",") if address.strip()
 ]
+
+# SMS alert for new demonstration requests. This is a platform alert to the
+# business, not a message to a school, so it deliberately does NOT use the
+# per-school SMS pipeline (SMSConfiguration, SMSDelivery, the monthly quota or
+# the Celery worker): demonstration enquiries live in the public schema, which
+# has no school tenant. It shares the SMSOnlineGH credentials above but is
+# independent of SMS_ENABLED, so it can be switched on without enabling
+# messaging to guardians. An empty list disables the alert.
+env_demo_sms = os.getenv("DEMO_REQUEST_SMS_TO", "")
+DEMO_REQUEST_SMS_TO = [
+    number.strip() for number in env_demo_sms.split(",") if number.strip()
+]
+# Sender ID for the alert. Defaults to the already-registered school sender
+# rather than inventing one, because unreviewed sender IDs are rejected by the
+# gateway. Override only with a sender ID approved on your SMSOnlineGH account.
+DEMO_REQUEST_SMS_SENDER = (
+    os.getenv("DEMO_REQUEST_SMS_SENDER", "").strip() or SMS_SENDER_ID
+)
 
 # Demonstration-request throttling: max submissions per client IP per window.
 DEMO_REQUEST_RATE_LIMIT = env_int("DEMO_REQUEST_RATE_LIMIT", 5)

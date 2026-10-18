@@ -23,7 +23,7 @@ from django.views.decorators.http import require_http_methods, require_safe
 
 from core.throttling import client_ip, is_rate_limited
 from website import addressing, content, legal, pricing
-from website.emails import notify_demo_request
+from website.emails import notify_demo_request, notify_demo_request_sms
 from website.forms import DemoRequestForm
 from website.models import DemoRequest
 
@@ -305,7 +305,14 @@ def demo_request(request):
     # Best-effort notification. Recorded on the enquiry, never surfaced as an
     # error to the visitor, because the enquiry itself was stored successfully.
     enquiry.notification_sent = notify_demo_request(enquiry)
-    enquiry.save(update_fields=["notification_sent", "updated_at"])
+    enquiry.notification_sms_sent = notify_demo_request_sms(enquiry)
+    enquiry.save(
+        update_fields=[
+            "notification_sent",
+            "notification_sms_sent",
+            "updated_at",
+        ]
+    )
 
     context["submitted"] = True
     context["enquiry"] = enquiry
