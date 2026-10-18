@@ -477,5 +477,5 @@ DEMO_REQUEST_NOTIFY_EMAILS = [
 ]
 
 # Demonstration-request throttling: max submissions per client IP per window.
-DEMO_REQUEST_RATE_LIMIT = int(os.getenv("DEMO_REQUEST_RATE_LIMIT", "5"))
-DEMO_REQUEST_RATE_WINDOW = int(os.getenv("DEMO_REQUEST_RATE_WINDOW", "3600"))
+DEMO_REQUEST_RATE_LIMIT = env_int("DEMO_REQUEST_RATE_LIMIT", 5)
+DEMO_REQUEST_RATE_WINDOW = env_int("DEMO_REQUEST_RATE_WINDOW", 3600)

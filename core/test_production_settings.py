@@ -445,3 +445,69 @@ class ProductionSettingsTests(SimpleTestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("DATABASE_PROFILE='neon' requires", result.stderr)
+
+
+class BuildSettingsTests(SimpleTestCase):
+    """``collectstatic`` must not depend on runtime secrets.
+
+    The Render build command collects static files with
+    ``schoolsystem.settings.build`` so a deploy cannot fail because the
+    dashboard is missing (or has blanked) the database, object-storage or
+    secret-key variables that only matter at runtime.
+    """
+
+    def run_build_import(self, *, tenancy_enabled, expected_engine):
+        environment = os.environ.copy()
+        for name in (
+            "PGHOST",
+            "PGDATABASE",
+            "PGUSER",
+            "PGPASSWORD",
+            "PGSSLMODE",
+            "DJANGO_SECRET_KEY",
+            "NEON_STORAGE_BUCKET",
+            "AWS_ENDPOINT_URL_S3",
+            "AWS_REGION",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+        ):
+            environment[name] = ""
+        # Deliberately blank, as a hosting dashboard often leaves them.
+        environment["DATABASE_PROFILE"] = ""
+        environment["MEDIA_STORAGE_BACKEND"] = ""
+        environment["TENANCY_ENABLED"] = tenancy_enabled
+        return subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import schoolsystem.settings.build as settings; "
+                "assert settings.SECRET_KEY; "
+                "assert settings.DEBUG is False; "
+                "assert settings.MEDIA_STORAGE_BACKEND == 'filesystem'; "
+                "assert settings.DATABASES['default']['ENGINE'] == "
+                f"{expected_engine!r}; "
+                "assert settings.STORAGES['staticfiles']['BACKEND'] == "
+                "'whitenoise.storage.CompressedManifestStaticFilesStorage'",
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_build_settings_import_without_runtime_secrets(self):
+        result = self.run_build_import(
+            tenancy_enabled="false",
+            expected_engine="django.db.backends.postgresql",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_build_settings_import_with_tenancy_enabled(self):
+        result = self.run_build_import(
+            tenancy_enabled="true",
+            expected_engine="django_pgschemas.postgresql",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
