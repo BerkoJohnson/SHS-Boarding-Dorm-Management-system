@@ -104,6 +104,21 @@ services:
       # Console email in staging (never sends real mail).
       - key: EMAIL_BACKEND
         value: django.core.mail.backends.console.EmailBackend
+      # To send real mail, set EMAIL_BACKEND to
+      # django.core.mail.backends.smtp.EmailBackend and fill in the transport
+      # below. Blank values are ignored by the console and locmem backends.
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
+      - key: EMAIL_HOST
+        sync: false
+      - key: EMAIL_PORT
+        sync: false
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+      - key: EMAIL_USE_TLS
+        sync: false
       # Keep SMS off in staging - prevents real messages.
       - key: SMS_ENABLED
         value: "False"
@@ -131,6 +146,13 @@ services:
       # Where demonstration requests are emailed. Empty falls back to
       # DEFAULT_FROM_EMAIL.
       - key: DEMO_REQUEST_NOTIFY_EMAILS
+        sync: false
+      # Optional SMS alert for new demonstration requests (a platform alert to
+      # the business, not a message to a school). Empty disables it. Needs
+      # SMS_ONLINE_GH_API_KEY and is independent of SMS_ENABLED.
+      - key: DEMO_REQUEST_SMS_TO
+        sync: false
+      - key: DEMO_REQUEST_SMS_SENDER
         sync: false
       # Staging: avoid pinning HTTPS for a year. Raise to 31536000 for production.
       - key: SECURE_HSTS_SECONDS

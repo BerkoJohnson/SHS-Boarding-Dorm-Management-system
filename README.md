@@ -596,6 +596,18 @@ in code and are always served by WhiteNoise; they have no environment variables.
 | :--- | :--- | :--- |
 | `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Mail transport. The default prints mail to the log and **never sends real email**. |
 | `DEFAULT_FROM_EMAIL` | `no-reply@localhost` | `From:` address for outgoing mail. |
+| `EMAIL_HOST` | `localhost` | SMTP host. Only used when `EMAIL_BACKEND` is the SMTP backend. |
+| `EMAIL_PORT` | `25` | SMTP port (587 for STARTTLS, 465 for SSL). |
+| `EMAIL_HOST_USER` | *(empty)* | SMTP username. Empty sends without authentication. |
+| `EMAIL_HOST_PASSWORD` | *(empty)* | SMTP password. **Never commit.** |
+| `EMAIL_USE_TLS` | `false` | Use STARTTLS. Mutually exclusive with `EMAIL_USE_SSL`. |
+| `EMAIL_USE_SSL` | `false` | Use SSL. Mutually exclusive with `EMAIL_USE_TLS`. |
+| `EMAIL_TIMEOUT` | `10` | Seconds before an SMTP conversation is abandoned, so an unreachable mail host cannot hold a request open. |
+| `SERVER_EMAIL` | `DEFAULT_FROM_EMAIL` | `From:` address for error mail (e.g. to `ADMINS`). |
+
+> These SMTP variables are mapped in `schoolsystem/settings/base.py` because Django does **not**
+> read them from the environment on its own. They are ignored by the console and `locmem`
+> backends, so a staging deployment can leave them blank.
 
 ### 6.8 Security hardening (production)
 
@@ -633,6 +645,8 @@ configuration that would break either rule.
 | `EDEN_PORTAL_LOGIN_URL` | *(empty)* | Where the site's "Login" link points. Published only when it is on the site's own domain (`SITE_URL` / `EDEN_SYS_DOMAIN`); anything else is dropped and reported by the `website.W001` check. Empty hides the link. |
 | `PRICING_PUBLIC_ENABLED` | `false` | Publish pricing. Has no effect while `website/pricing.py` `APPROVED_PRICE_LIST` is empty. |
 | `DEMO_REQUEST_NOTIFY_EMAILS` | *(empty)* | Comma-separated recipients for demo enquiries. Empty falls back to `EDEN_SYS_EMAIL`, then `DEFAULT_FROM_EMAIL`. |
+| `DEMO_REQUEST_SMS_TO` | *(empty)* | Comma-separated numbers that receive an SMS alert for each new enquiry. Empty disables the alert. Independent of `SMS_ENABLED`, but needs `SMS_ONLINE_GH_API_KEY`. |
+| `DEMO_REQUEST_SMS_SENDER` | `SMS_SENDER_ID` | Sender ID for that alert. Use only an ID approved on your SMSOnlineGH account. |
 | `DEMO_REQUEST_RATE_LIMIT` / `DEMO_REQUEST_RATE_WINDOW` | `5` / `3600` | Demo-request throttling per client IP per window. A limit of `0` disables throttling. |
 
 ### 6.10 Staging safety
@@ -1215,10 +1229,39 @@ and after running, so one school's schema cannot leak into another's over a long
   when you intend to send. There is no sandbox mode in the code.
 - **Email.** The default `EMAIL_BACKEND` is the **console** backend: messages are printed to the
   log and never sent. This is deliberate and safe for staging. To send real mail, set
-  `EMAIL_BACKEND` to an SMTP backend and also configure the standard Django SMTP settings
-  (`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`) — note
-  that only `EMAIL_BACKEND` and `DEFAULT_FROM_EMAIL` are read directly in this project's settings.
-  Verify with `manage.py sendtestemail you@example.com`.
+  `EMAIL_BACKEND` to `django.core.mail.backends.smtp.EmailBackend` and fill in the transport
+  (`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS` or
+  `EMAIL_USE_SSL`). Those variables **are** read from the environment by this project's settings,
+  so no code change is needed. Verify with `manage.py sendtestemail you@example.com`.
+- **SMS alert for demonstration requests.** `DEMO_REQUEST_SMS_TO` is deliberately separate from
+  `SMS_ENABLED`: it is a platform alert to the business and never touches the school pipeline. A
+  non-empty value sends a **real, chargeable SMS on every submission**, so leave it empty while
+  testing and rely on `website.tests.test_demo_request` (which mocks the gateway) instead.
+
+### 8.8 Where demonstration enquiries go, and how you are notified
+
+Every submission from the public marketing site is stored in the PostgreSQL **`public` schema**,
+table `website_demorequest`. It is never written to a school's tenant schema — the `website` app is
+in `PUBLIC_APPS` — and there is deliberately no Django admin for it, so enquiries are read with the
+`demo_requests` command:
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py demo_requests --list
+.\.venv\Scripts\python.exe .\manage.py demo_requests --show=<id>
+```
+
+Two best-effort notifications are attempted after the record is committed. Each outcome is recorded
+on the row so you can see whether it actually went out:
+
+| Column | Meaning |
+| :--- | :--- |
+| `notification_sent` | The email alert was accepted by the configured `EMAIL_BACKEND`. |
+| `notification_sms_sent` | The SMS alert was accepted by SMSOnlineGH. Only attempted when `DEMO_REQUEST_SMS_TO` is set. |
+
+A failure in either path is logged and never changes the response the visitor sees, because the
+enquiry is already stored. Note that with the default **console** `EMAIL_BACKEND` the email counts
+as accepted without leaving the server, so `notification_sent=True` on its own does not prove a
+message was delivered — confirm the backend is SMTP (or that mail actually arrives) first.
 
 ---
 
@@ -1370,6 +1413,7 @@ SITE_URL=                        # e.g. https://ecreativesys.com
 EDEN_PORTAL_LOGIN_URL=
 PRICING_PUBLIC_ENABLED=False
 DEMO_REQUEST_NOTIFY_EMAILS=
+DEMO_REQUEST_SMS_TO=             # empty while staging; a real SMS costs money
 ```
 
 Notes:
@@ -1379,7 +1423,9 @@ Notes:
   explicit hostnames.
 - `CACHE_BACKEND` defaults to a per-process `LocMemCache`. Point it at the shared Redis backend (as
   above) so rate limits apply across all workers.
-- `EMAIL_BACKEND` defaults to the console backend and never sends real mail.
+- `EMAIL_BACKEND` defaults to the console backend and never sends real mail. To send real mail, set
+  it to `django.core.mail.backends.smtp.EmailBackend` and supply `EMAIL_HOST`, `EMAIL_PORT`,
+  `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` and exactly one of `EMAIL_USE_TLS` / `EMAIL_USE_SSL`.
 - Do not add the public marketing hostname (for example `ecreativesys.com`) to the `Domain` table;
   it is served by the public-host bypass and registering it as a tenant would show a school
   dashboard at the marketing address.
