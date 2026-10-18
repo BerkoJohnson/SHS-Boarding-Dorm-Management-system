@@ -624,12 +624,12 @@ configuration that would break either rule.
 | `PUBLIC_WEBSITE_URLCONF` | `schoolsystem.urls_public` | URLconf used on the public host. Leaving it pointed here keeps school URLs off the marketing host. |
 | `SITE_URL` | *(empty)* | The site's own absolute origin for canonical links, Open Graph tags, the sitemap and the robots.txt `Sitemap:` line. Falls back to `https://EDEN_SYS_DOMAIN`, then to the request hostname (local development only). |
 | `EDEN_SYS_COMPANY` | `Eden Creative Systems` | Company name shown on the site. |
-| `EDEN_SYS_SHORT_NAME` | `Eden Sys` | Short company name. |
+| `EDEN_SYS_SHORT_NAME` | `Edensys` | Short company name. |
 | `EDEN_SYS_PRODUCT_NAME` | `SHS Boarding & Dorm Management System` | Product name. |
 | `EDEN_SYS_PHONE` | `+233 24 816 0391` | Contact phone. |
 | `EDEN_SYS_EMAIL` | `berkojohnson@gmail.com` | Contact email. |
 | `EDEN_SYS_DOMAIN` | `ecreativesys.com` | Company domain. |
-| `EDEN_SYS_ATTRIBUTION` | `Developed by Eden Creative Systems (Eden Sys)` | Site attribution line. |
+| `EDEN_SYS_ATTRIBUTION` | `Developed by Eden Creative Systems (Edensys)` | Site attribution line. |
 | `EDEN_PORTAL_LOGIN_URL` | *(empty)* | Where the site's "Login" link points. Published only when it is on the site's own domain (`SITE_URL` / `EDEN_SYS_DOMAIN`); anything else is dropped and reported by the `website.W001` check. Empty hides the link. |
 | `PRICING_PUBLIC_ENABLED` | `false` | Publish pricing. Has no effect while `website/pricing.py` `APPROVED_PRICE_LIST` is empty. |
 | `DEMO_REQUEST_NOTIFY_EMAILS` | *(empty)* | Comma-separated recipients for demo enquiries. Empty falls back to `EDEN_SYS_EMAIL`, then `DEFAULT_FROM_EMAIL`. |
