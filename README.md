@@ -790,25 +790,78 @@ $env:SYNTHETIC_PILOT_DATABASE = "schoolsystem_staging"
 
 **`demo_requests`** reviews demonstration enquiries from the public site. Because the `website` app
 lives in the `public` schema (not visible on school hosts) there is no admin page for it — this
-command is the intended tool. Enquiries contain confidential contact details.
+command is the intended tool. Run it against the database that holds the enquiries, in the `public`
+schema (the default for management commands): locally against your `DATABASE_PROFILE=local` database,
+or via the Render **Shell** in production. Enquiries contain confidential contact details, so run it
+only on a machine and account authorised to hold them.
+
+**Options**
 
 | Option | Meaning |
 | :--- | :--- |
-| *(no option)* / `--list` | List recent enquiries with a status summary. |
-| `--all` | Include closed/triaged enquiries. |
-| `--limit N` | Maximum rows to list (default 25). |
-| `--show ID` | Show one enquiry in full. |
-| `--mark ID --status S` | Change triage status: `new`, `contacted`, `scheduled`, `onboarding`, `closed`. |
-| `--note "..."` | Append an internal note when marking. |
-| `--export PATH` | Write all enquiries to a CSV file. |
-| `--json` | Machine-readable output. |
+| *(no option)* / `--list` | List recent enquiries with a status summary (the default action). |
+| `--all` | Include closed/triaged enquiries in the list (hidden by default). |
+| `--limit N` | Maximum rows to list (default 25; values below 1 are clamped to 1). |
+| `--show ID` | Show one enquiry in full, including its message and internal notes. |
+| `--mark ID --status S` | Change the triage status of one enquiry. Requires `--status`. |
+| `--status S` | New status to apply with `--mark`. See the accepted values below. |
+| `--note "..."` | Append a timestamped internal note when marking. |
+| `--export PATH` | Write every enquiry (including closed ones) to a CSV file at PATH. |
+| `--json` | Emit machine-readable JSON instead of formatted text. |
+
+**Accepted `--status` values.** `--mark` requires exactly one of the following; any other value is
+rejected. The values and their display labels come from `website.models.DemoRequestStatus`:
+
+| Value | Display label | Meaning |
+| :--- | :--- | :--- |
+| `new` | New | Just received and not yet actioned. The default for a fresh enquiry. |
+| `contacted` | Contacted | Someone has reached out to the school. |
+| `scheduled` | Demo scheduled | A demonstration has been booked. |
+| `onboarding` | Moved to onboarding | The school has progressed to onboarding. |
+| `closed` | Closed / not proceeding | The enquiry is finished. Hidden from the default list until `--all`. |
+
+**Usages**
 
 ```powershell
+# Status summary + the 25 most recent open enquiries
 .\.venv\Scripts\python.exe .\manage.py demo_requests
+
+# Include closed enquiries too, and raise the row cap
+.\.venv\Scripts\python.exe .\manage.py demo_requests --all --limit=100
+
+# Full detail of one enquiry
 .\.venv\Scripts\python.exe .\manage.py demo_requests --show=12
-.\.venv\Scripts\python.exe .\manage.py demo_requests --mark=12 --status=contacted --note="Called 2026-10-18"
+
+# Triage: move status and append a timestamped note
+.\.venv\Scripts\python.exe .\manage.py demo_requests --mark=12 --status=contacted --note="Called 2026-10-18; demo Tuesday"
+
+# Close an enquiry that will not proceed
+.\.venv\Scripts\python.exe .\manage.py demo_requests --mark=12 --status=closed --note="Not proceeding this term."
+
+# Export every enquiry to CSV for a follow-up sheet
 .\.venv\Scripts\python.exe .\manage.py demo_requests --export=.private/demo-requests.csv
+
+# Machine-readable output (whole list, or one enquiry)
+.\.venv\Scripts\python.exe .\manage.py demo_requests --json
+.\.venv\Scripts\python.exe .\manage.py demo_requests --show=12 --json
 ```
+
+The listing looks like this, with the status summary printed first:
+
+```
+Status summary:
+  New                        2
+  Contacted                  1
+  ...
+  TOTAL                      3
+
+  ID  RECEIVED          SCHOOL                        CONTACT                STATUS
+--------------------------------------------------------------------------------------
+  12  2026-10-18 09:14  Some Senior High School       Kojo Mensah (+23324..) New
+```
+
+> **Note:** `--export` writes confidential contact details to disk. Store the file securely
+> (`.private/` is git-ignored) and delete it when it is no longer needed.
 
 **`build_brand_assets`** regenerates the public website's favicons and Open Graph image from
 `static/img/eden-creative-systems-mark.png`. Run it only when the supplied brand mark changes.
@@ -1242,13 +1295,17 @@ and after running, so one school's schema cannot leak into another's over a long
 
 Every submission from the public marketing site is stored in the PostgreSQL **`public` schema**,
 table `website_demorequest`. It is never written to a school's tenant schema — the `website` app is
-in `PUBLIC_APPS` — and there is deliberately no Django admin for it, so enquiries are read with the
-`demo_requests` command:
+in `PUBLIC_APPS` — and there is deliberately no Django admin for it, so enquiries are read and
+triaged with the `demo_requests` management command:
 
 ```powershell
 .\.venv\Scripts\python.exe .\manage.py demo_requests --list
 .\.venv\Scripts\python.exe .\manage.py demo_requests --show=<id>
+.\.venv\Scripts\python.exe .\manage.py demo_requests --mark=<id> --status=contacted --note="Called 2026-10-18"
 ```
+
+See **section 7.5** for the full option list, the accepted `--status` values (`new`, `contacted`,
+`scheduled`, `onboarding`, `closed`) and CSV/JSON export examples.
 
 Two best-effort notifications are attempted after the record is committed. Each outcome is recorded
 on the row so you can see whether it actually went out:
