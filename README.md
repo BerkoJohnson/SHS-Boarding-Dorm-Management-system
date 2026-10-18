@@ -1,485 +1,862 @@
-# SHS Boarding and Dorm Management System
-## System Administrator & Operations Manual
+# SHS Boarding & Dorm Management System
 
-An enterprise school management system designed for Senior High Schools, featuring boarding and dormitory management, staff jurisdictional access, exeat life cycle tracking with automated SMS notifications, roll-call attendance verification, student ID card printing with bearer QR verification, and schema-isolated multi-school tenancy.
+**A complete setup, operations and deployment guide.**
+Written for new developers, system administrators and school administrators.
+
+The SHS Boarding & Dorm Management System is a web application for Ghanaian Senior High
+Schools. It manages student boarding life: houses and dormitories, exeat (leave) permits with
+automatic parent SMS notifications, evening roll-call attendance, disciplinary records, student
+ID cards with QR codes for gate verification, and student roster imports. The same codebase can
+run as a **single school** or as a **multi-school platform** where each school's data is kept in
+its own PostgreSQL schema.
 
 ---
 
 ## Table of Contents
 
-1. [System Overview & Architecture](#1-system-overview--architecture)
-2. [Environment Configuration Reference (`.env`)](#2-environment-configuration-reference-env)
-3. [Local Development Setup (Zero to Running)](#3-local-development-setup-zero-to-running)
-4. [Cloud Production Deployment (Render + Neon)](#4-cloud-production-deployment-render--neon)
-5. [Database Management & Migrations](#5-database-management--migrations)
-6. [Multi-School Tenancy Rollout & Platform CLI Management](#6-multi-school-tenancy-rollout--platform-cli-management)
-   * [6.1 Tenancy Architecture & Directory Isolation](#61-tenancy-architecture--directory-isolation)
-   * [6.2 Multi-School Tenant Provisioning Runbook](#62-multi-school-tenant-provisioning-runbook)
-   * [6.3 Existing-School Cutover (`migrate_legacy_school`)](#63-existing-school-cutover-migrate_legacy_school)
-   * [6.4 Platform CLI Management Suite](#64-platform-cli-management-suite-tenant-administration--billing)
-7. [Background Workers & Scheduled Tasks (Celery & Celery Beat)](#7-background-workers--scheduled-tasks-celery--celery-beat)
-8. [Daily Operations, Shell & Disaster Recovery](#8-daily-operations-shell--disaster-recovery)
-9. [Core System Workflows & Access Control](#9-core-system-workflows--access-control)
-10. [Operational Troubleshooting & FAQs](#10-operational-troubleshooting--faqs)
+1. [What This System Is](#1-what-this-system-is)
+2. [Project Structure and Important Files](#2-project-structure-and-important-files)
+3. [Prerequisites](#3-prerequisites)
+4. [Local Installation](#4-local-installation)
+5. [First Successful Run](#5-first-successful-run)
+6. [Environment Variables Reference](#6-environment-variables-reference)
+7. [Platform Commands and Administrative Operations](#7-platform-commands-and-administrative-operations)
+8. [Background Services and Scheduled Tasks](#8-background-services-and-scheduled-tasks)
+9. [Deploying Online: Render + Neon](#9-deploying-online-render--neon)
+10. [Database Updates, Backups and Maintenance](#10-database-updates-backups-and-maintenance)
+11. [Multi-School Tenancy Rollout](#11-multi-school-tenancy-rollout)
+12. [Core Workflows and Access Control](#12-core-workflows-and-access-control)
+13. [Troubleshooting](#13-troubleshooting)
+14. [What Was Verified in This Audit](#14-what-was-verified-in-this-audit)
 
 ---
 
-## 1. System Overview & Architecture
+## 1. What This System Is
 
-### 1.1 Technical Stack
+### 1.1 What it does
 
-* **Framework**: Django 6.x (Python 3.12+)
-* **Database**: PostgreSQL 14+ (Local PostgreSQL or Serverless Neon PostgreSQL)
-* **Multi-Tenancy**: `django-pgschemas` (Schema-per-tenant isolation)
-* **Message Broker & Cache**: Redis 6.0+
-* **Asynchronous Workers**: Celery 5.x & Celery Beat (Database-backed periodic scheduler)
-* **Frontend**: Django Templates + Tailwind CSS + HTMX
-* **Static Assets**: WhiteNoise (`CompressedManifestStaticFilesStorage`)
-* **Media & File Storage**: Local Protected Filesystem or Neon Object Storage (AWS S3-compatible, SigV4)
-* **External Integrations**: SMSOnlineGH (REST API for Ghana Telecom SMS dispatch)
+| Area | What the system does |
+| :--- | :--- |
+| **Houses & dormitories** | Records houses, dormitory blocks (male/female), rooms and capacities. |
+| **Student records** | Admission number, index number, programme, class group, house, dormitory, room, guardian, photo. Imports from Excel/CSV. |
+| **Exeat life cycle** | Staff request leave for a student, a housemaster approves or rejects it, the main gate records departure and return, and guardians receive SMS updates at each stage. |
+| **Roll call** | Housemasters start an attendance session, mark students present/absent/on-exeat, and follow up absences. Unfinished sessions expire automatically. |
+| **Discipline** | Records disciplinary incidents against students. |
+| **Student ID cards** | Generates printable CR80 ID cards with a portrait and a QR code. Scanning the QR code opens a privacy-safe public page that shows only whether the student is currently out and whether a gate departure was logged. |
+| **Reports** | Boarding KPIs, demographics, SMS usage and configuration audit reports (screen and print). |
+| **Public website** | A separate marketing/enquiry site for Eden Creative Systems (the vendor), plus a demonstration-request form. It is isolated from school data. |
+| **Multi-school platform** | Optional: one deployment serving many schools, each isolated in its own database schema, with subscription plans, feature flags, quotas, billing invoices and backups. |
 
-### 1.2 Dual-Mode Architecture
+### 1.2 Who uses it
 
-The platform operates in one of two architectural modes controlled by the `TENANCY_ENABLED` flag:
+- **School administrators** configure terms, houses, staff roles, SMS and student records.
+- **Senior housemasters** oversee all houses; **housemasters** and **house tutors** work within their assigned house.
+- **Gate officers** use the gate scanner to verify exeats and log departures/returns.
+- **Platform operators** (the vendor) provision schools, manage plans and quotas, take backups, and use support tokens.
 
-```
-                            ┌────────────────────────────────────────┐
-                            │           Incoming HTTP Request        │
-                            └────────────────────┬───────────────────┘
-                                                 │
-                                       [ TENANCY_ENABLED? ]
-                                        /                \
-                                  (False)                (True)
-                                    /                        \
-                    ┌──────────────────────┐    ┌─────────────────────────────────┐
-                    │  Single-School Mode  │    │  VerifiedDomainRoutingMiddleware │
-                    │                      │    └────────────────┬────────────────┘
-                    │  All tables reside   │                     │ (Resolves Host to Domain)
-                    │  in public schema    │            ┌────────┴────────┐
-                    └──────────────────────┘            │                 │
-                                                   (Matched)         (Unmatched)
-                                                       │                 │
-                                              ┌────────┴───────┐     [ 404 Not Found ]
-                                              │ Activate Schema│     (Fail-Closed)
-                                              │ 'tenant_name'  │
-                                              └────────┬───────┘
-                                                       │
-                                              ┌────────┴────────┐
-                                              │ Execute View in │
-                                              │ Tenant Context  │
-                                              └────────┬────────┘
-                                                       │
-                                              ┌────────┴────────┐
-                                              │ activate_public │
-                                              │ in finally block│
-                                              └─────────────────┘
-```
+### 1.3 Technology stack (verified in this repository)
 
-1. **Single-School Legacy Mode (`TENANCY_ENABLED=false`)**:
-   * All models and operational tables live directly in the PostgreSQL `public` schema.
-   * Host routing uses standard Django `ALLOWED_HOSTS`.
-   * Ideal for standalone single-school installations or local feature development.
+| Component | What is used | Version |
+| :--- | :--- | :--- |
+| Language | Python | 3.12 (`.python-version` = `3.12`; `pyproject.toml` requires `>=3.12`) |
+| Web framework | Django | 6.0.9 |
+| Database | PostgreSQL only (no SQLite) | 14+ (CI runs PostgreSQL 16) |
+| Database driver | `psycopg` (binary) | 3.3.6 |
+| Multi-tenancy | `django-pgschemas` (schema per school) | 1.3.2 |
+| Task queue | Celery + `django-celery-beat` | 5.6.3 / 2.9.0 |
+| Broker / cache | Redis | 6.0+ (`redis` client 6.4.0) |
+| Frontend | Django templates + Tailwind CSS + HTMX (`django-htmx` 1.29.0) | Tailwind 3.4.19 |
+| Static files | WhiteNoise (`CompressedManifestStaticFilesStorage`) | 6.12.0 |
+| Uploaded media | Local filesystem **or** S3-compatible storage (`django-storages` + `boto3`) | 1.14.6 |
+| Spreadsheets | `pandas` + `openpyxl` | 3.0.6 / 3.1.5 |
+| Images / QR / PDF | `pillow`, `qrcode`, `reportlab` | 12.3.0 / 8.2 / 4.x |
+| SMS gateway | SMSOnlineGH (REST API, Ghana) | via `requests` |
+| WSGI server | Gunicorn | 23.0.0 |
+| Package manager | `uv` (with `uv.lock`) **or** `pip` (`requirements.txt`) | — |
 
-2. **Multi-School Tenancy Mode (`TENANCY_ENABLED=true`)**:
-   * **Public Schema**: Contains global platform tables (`tenancy_tenant`, `tenancy_domain`, `django_celery_beat`) and the public `django_content_type` registry.
-   * **Tenant Schemas**: Each school receives a dedicated PostgreSQL schema (`achimota_shs`, `atebubu_shs`) containing school operational data (`auth_user`, `core_*`, and `django_session`).
-   * **Shared Content Types**: Keep `django.contrib.contenttypes` in `PUBLIC_APPS` only; `django-pgschemas` emits a warning if it is also assigned to tenant schemas.
-   * **Connection Hygiene**: Requests and Celery tasks reset the search path to `public` in `finally` blocks, preventing schema contamination across persistent connections (`CONN_MAX_AGE`).
-   * **Dynamic CSRF**: Inspects `Origin` headers against verified tenant domains with signal-based cache invalidation and protocol downgrade protection.
-   * **Platform operations**: `PLATFORM_ADMIN_DOMAIN` exposes a status-only JSON endpoint; it is not a browser-based admin interface. Manage tenants with the documented Django management commands.
+> **Important:** The database backend is PostgreSQL in every mode. The default Django
+> `sqlite3` backend is not configured anywhere, and `django-pgschemas` schema isolation
+> cannot work on SQLite. Do not try to run this project on SQLite.
+
+### 1.4 Two operating modes
+
+The system is controlled by the `TENANCY_ENABLED` setting.
+
+1. **Single-school mode (`TENANCY_ENABLED=false`, default).**
+   All tables live in the PostgreSQL `public` schema. Standard Django host handling applies.
+   This is the normal choice for local development and for a single standalone school.
+
+2. **Multi-school mode (`TENANCY_ENABLED=true`).**
+   The `public` schema holds platform tables (`tenancy_tenant`, `tenancy_domain`,
+   `django_celery_beat`, `website_*`, shared `django_content_type`). Each school gets its own
+   PostgreSQL schema (for example `achimota_shs`) containing that school's users, students,
+   exeats, dormitories and sessions. Requests are routed to a school by hostname, which must
+   exist as a **verified domain row** in the database.
+
+The two modes use different Django database engines:
+`django.db.backends.postgresql` (single-school) and `django_pgschemas.postgresql` (multi-school).
 
 ---
 
-## 2. Environment Configuration Reference (`.env`)
+## 2. Project Structure and Important Files
 
-Create a `.env` file in the project root (`c:\RebuildEden\project 1\.env`).
+The project root used throughout this guide is:
 
-### 2.1 Complete Environment Variable Catalog
+```
+C:\RebuildEden\project 1
+```
 
-| Variable | Description | Default | Recommended Value |
+Substitute your own path if you cloned the project somewhere else.
+
+```
+project 1/
+├── manage.py                     Django's command-line entry point (auto-selects settings)
+├── pyproject.toml                Python project metadata + dependency list (uv)
+├── uv.lock                       Locked dependency versions (uv)
+├── requirements.txt              Pip-installable dependency list (used by Render)
+├── package.json                  npm scripts for building Tailwind CSS
+├── Procfile                      Optional process definitions (web / worker / beat)
+├── render.yaml                   Render Blueprint (staging web service + env var names)
+├── .env.example                  Template for your local .env (safe placeholders only)
+├── .env                          YOUR local secrets — created by you, git-ignored, never commit
+├── .python-version               Pins Python 3.12
+│
+├── schoolsystem/                 The Django project package (settings + entry points)
+│   ├── __init__.py               Loads the Celery app on Django start-up
+│   ├── settings/
+│   │   ├── base.py               Shared settings: database, apps, SMS, Celery, tenancy
+│   │   ├── development.py        Local development (DEBUG, relaxed hosts)
+│   │   ├── production.py         Production (forces DEBUG=False, Neon, security headers)
+│   │   ├── test.py               Tests with tenancy OFF  (DB name test_schoolsystem_core)
+│   │   └── tenancy_test.py       Tests with tenancy ON   (DB name test_schoolsystem_tenancy)
+│   ├── urls.py                   School application URLconf (admin + core), mounts /site/ locally
+│   ├── urls_public.py            Public marketing website URLconf (public host only)
+│   ├── celery.py                 Celery app named "schoolsystem" + worker cleanup signals
+│   ├── security.py               Report-only Content-Security-Policy middleware
+│   ├── wsgi.py / asgi.py         Server entry points
+│
+├── core/                         The school application (models, views, tasks, services)
+│   ├── models.py                 Students, houses, dormitories, exeats, roll call, SMS, etc.
+│   ├── urls.py                   School routes (see section 12)
+│   ├── views.py                  School views
+│   ├── tasks.py                  Celery tasks (SMS dispatch, roll-call expiry, ID exports)
+│   ├── admin.py / admin_site.py  Django admin registrations and site class
+│   ├── services/                 Business logic (SMS, imports, ID card images)
+│   ├── management/commands/      Custom commands: import_roster, seed_synthetic_pilot
+│   ├── migrations/               Database migrations for the school app
+│   └── templates/core/           School application templates
+│
+├── tenancy/                      Multi-school platform app
+│   ├── models.py                 Tenant and Domain models
+│   ├── middleware.py             Host routing + dynamic CSRF middleware
+│   ├── entitlements.py           Plan feature flags and quota checks
+│   ├── management/commands/      The 8 platform CLI commands + provisioning commands
+│   └── migrations/               Platform migrations (public schema)
+│
+├── website/                      Public Eden Creative Systems marketing site (public schema)
+│   ├── urls.py / views.py        Home, features, pricing, contact, request-a-demo
+│   ├── models.py                 DemoRequest (enquiry) model
+│   ├── pricing.py                APPROVED_PRICE_LIST (empty until prices are approved)
+│   ├── management/commands/      demo_requests, build_brand_assets
+│   └── tests/                    Public website tests
+│
+├── templates/                    Project-level templates (403/404/500 pages, base layout)
+├── static/                       Source static assets (CSS, JS, images)
+│   ├── src/input.css             Tailwind source for the school application
+│   ├── src/site.css              Tailwind source for the public website
+│   └── css/output.css, css/site.css   Built CSS (committed — see note below)
+├── staticfiles/                  collectstatic output (generated, git-ignored)
+├── media/                        Uploaded files in filesystem mode (git-ignored)
+├── .private/                     Private student photos, ID exports, backups (git-ignored)
+├── .github/workflows/            CI: tenant PostgreSQL integration test
+└── *.md                          Additional design/audit notes (see "Other documents")
+```
+
+### 2.1 Files a beginner usually edits
+
+- **`.env`** — the only file most people edit. Copy `.env.example` to `.env` and fill it in.
+- School content such as houses, students, terms and SMS settings are changed **through the web
+  interface or the Django admin**, not by editing code.
+
+### 2.2 Files you should not edit without understanding them
+
+| File | Why |
+| :--- | :--- |
+| `schoolsystem/settings/*.py` | Changing these affects database, security and deployment behaviour for every environment. |
+| `schoolsystem/settings/production.py` | Enforces production safety (DEBUG off, Neon required, HTTPS cookies). Changing it can make a deployment insecure or fail. |
+| `tenancy/middleware.py` | This is the host router. A wrong change can send a request to the wrong school or expose school data. |
+| `core/models.py` and `*/migrations/*` | Changing models requires new migrations. Never delete migration files. |
+| `static/css/output.css` and `static/css/site.css` | These are **built artefacts**. They are committed on purpose so deployments need no Node toolchain. Rebuild them with npm (section 7.5), do not hand-edit. |
+
+### 2.3 Other documents in the repository
+
+These planning and audit notes exist alongside this README and remain useful reference material:
+`AI_REGENERATION_WORKFLOW.md`, `multi-tenancy-audit.md`, `platform-cli-commands-plan.md`,
+`ux-ui fixes.md`, and the `report_gen_*.md` files. This README is the single entry point; where
+any note disagrees with the code, the code is authoritative.
+
+---
+
+## 3. Prerequisites
+
+Install these before you begin. Nothing here is optional except where marked.
+
+| Requirement | Version | Why it is needed | Notes |
 | :--- | :--- | :--- | :--- |
-| `DJANGO_SECRET_KEY` | Cryptographic signing key (min. 50 characters, 5+ unique characters) | *None (Required)* | 64+ random characters |
-| `DEBUG` | Enable Django debug mode. Defaults to `True` only under `schoolsystem.settings.development`; `schoolsystem.settings.production` forces `False` | `True` (development only) | `False` (Production) / `True` (Dev) |
-| `DJANGO_SETTINGS_MODULE` | Settings module to load. `manage.py` auto-selects `schoolsystem.settings.production` when `RENDER=true` or `PORT` is set, otherwise `schoolsystem.settings.development` | *Auto-detected* | Set explicitly only to override |
-| `ALLOWED_HOSTS` | Comma-separated accepted hostnames. Development defaults to `127.0.0.1,localhost`. **In multi-tenant production (`TENANCY_ENABLED=true`) this is ignored and forced to `*`** — tenant hostnames are validated against the `Domain` table by the routing middleware. In single-tenant production it is required and must be an explicit list | `127.0.0.1,localhost` (development) | Single-tenant: production domain list. Multi-tenant: leave empty |
-| `CSRF_TRUSTED_ORIGINS` | Comma-separated HTTPS origins trusted for form submissions | *Empty* | `https://your-domain.onrender.com` |
-| `DATABASE_PROFILE` | Database connection backend profile: `local` or `neon` | `local` | `local` (Dev) / `neon` (Prod) |
-| `TENANCY_ENABLED` | Toggle multi-school schema isolation (`true`/`false`) | `false` | `true` (Multi-tenant) |
-| `PLATFORM_ADMIN_DOMAIN` | Optional host that returns platform status without activating a school | *None* | `admin.yoursystem.com` |
-| **Local PostgreSQL** | | | |
-| `DB_NAME` | Local database name | `schoolsystem_db` | `schoolsystem_db` |
-| `DB_USER` | Local database user | `postgres` | `postgres` |
-| `DB_PASSWORD` | Local database password | `postgres` | Your PostgreSQL password |
-| `DB_HOST` | Local database host | `localhost` | `localhost` / `127.0.0.1` |
-| `DB_PORT` | Local database port | `5432` | `5432` |
-| `DB_SSLMODE` | Local database SSL requirement | *Empty* | Leave empty for local dev |
-| **Neon PostgreSQL** | | | |
-| `PGHOST` | Neon compute endpoint host | *None* | `ep-xxxx.region.aws.neon.tech` |
-| `PGDATABASE` | Neon database name | *None* | `neondb` / your database name |
-| `PGUSER` | Neon database username | *None* | `neondb_owner` |
-| `PGPASSWORD` | Neon database password | *None* | Provisioned Neon password |
-| `PGPORT` | Neon database port | `5432` | `5432` |
-| `PGSSLMODE` | Neon TLS mode (`require`, `verify-ca`, `verify-full`) | `require` | `require` |
-| **Celery & Redis** | | | |
-| `REDIS_URL` | Redis broker connection URL (Requires Redis 6.0+) | `redis://127.0.0.1:6379/0` | `redis://...` / `rediss://...` |
-| **SMS Gateway** | | | |
-| `SMS_ENABLED` | Global master toggle for SMS notifications | `false` | `true` (if live notifications desired) |
-| `SMS_ONLINE_GH_API_KEY` | API key from SMSOnlineGH portal | *Empty* | Provisioned 64-char API key |
-| `SMS_SENDER_ID` | Fallback SMS sender ID if school configuration is unset | `ATSEC` | Alphanumeric (max 11 chars) |
-| `SMS_TIME_ZONE` | Time zone used for dispatch windows | `UTC` | `Africa/Accra` or `UTC` |
-| `SMS_HTTP_TIMEOUT` | Gateway HTTP request timeout in seconds | `10.0` | `10.0` |
-| `SMS_MAX_ATTEMPTS` | Maximum retry attempts for failed deliveries | `5` | `5` |
-| **Media & S3 Storage** | | | |
-| `MEDIA_STORAGE_BACKEND` | Media backend: `filesystem` or `neon_s3` | `filesystem` | `filesystem` (Dev) / `neon_s3` (Prod) |
-| `MEDIA_ROOT` | Local directory for uploaded files | `BASE_DIR / media` | Resolved absolute path |
-| `NEON_STORAGE_BUCKET` | Neon S3 bucket name | *Empty* | Bucket name (e.g. `uploads`) |
-| `AWS_ENDPOINT_URL_S3` | Neon S3 endpoint URL | *Empty* | `https://<bucket>.storage.<region>.neon.tech` |
-| `AWS_ACCESS_KEY_ID` | Neon S3 Access Key ID | *Empty* | Provisioned access key |
-| `AWS_SECRET_ACCESS_KEY` | Neon S3 Secret Key | *Empty* | Provisioned secret key |
-| `AWS_REGION` | Neon S3 Region | *Empty* | E.g. `us-east-2` |
-| **Email** | | | |
-| `EMAIL_BACKEND` | Django mail transport. Defaults to the console backend, which prints messages to the logs and never sends real mail | `django.core.mail.backends.console.EmailBackend` | A real SMTP/API backend for production |
-| `DEFAULT_FROM_EMAIL` | `From:` address for outgoing mail | `no-reply@localhost` | `no-reply@your-domain` |
-| **Rate Limiting & Cache** | | | |
-| `CACHE_BACKEND` | Cache backend used for rate-limit counters. `LocMemCache` is per-process, so multiple workers each keep their own counters | `django.core.cache.backends.locmem.LocMemCache` | Shared backend (e.g. `django.core.cache.backends.redis.RedisCache`) |
-| `CACHE_LOCATION` | Cache location/URL consumed by `CACHE_BACKEND` | `schoolsystem-cache` | Redis URL when a shared cache is used |
-| `TRUSTED_PROXY_COUNT` | Trusted reverse-proxy hops used to pick the client IP from `X-Forwarded-For` for rate limiting. Render adds one hop, so `1` is correct | `1` | `1` |
-| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW` | Max login attempts per client IP per window (seconds) | `10` / `300` | As required |
-| `PUBLIC_REPORT_RATE_LIMIT` / `PUBLIC_REPORT_RATE_WINDOW` | Max public "report a concern" submissions per IP per window (seconds) | `5` / `3600` | As required |
-| `STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS` | Lifetime of public student-ID QR links in days (`0` = never expire) | `0` | As required |
-| **Security Hardening** | | | |
-| `CSP_REPORT_URI` | Endpoint appended as `report-uri` to the CSP report-only header. No collector is built in; point it at your own endpoint | *Empty* | Safe relative path or HTTPS collector URL |
-| `SECURE_HSTS_SECONDS` | HTTP Strict Transport Security duration (seconds). Production defaults to one year; use `0` (or a short value) for a staging host you may still need to reach over plain HTTP | `31536000` (production settings) | `0` (staging) / `31536000` (production) |
-| `SECURE_HSTS_INCLUDE_SUBDOMAINS` | Enforce HSTS on all subdomains | `false` | `true` (when all domains use HTTPS) |
-| `SECURE_HSTS_PRELOAD` | Submit domain to browser HSTS preload list | `false` | `true` (only for verified HTTPS apex) |
-| **Staging Safety** | | | |
-| `SYNTHETIC_PILOT_DATABASE` | Guard variable for `seed_synthetic_pilot` seeder | *Empty* | Exact staging DB name |
+| **Python** | 3.12 (3.12.12 verified) | Runs the application. `pyproject.toml` requires `>=3.12`. | Windows installer from python.org; tick "Add Python to PATH". |
+| **PostgreSQL** | 14 or newer (16 tested in CI) | The only supported database. | Must include the command-line client tools `psql`, `pg_dump`, `pg_restore` (needed by backup/restore commands). |
+| **Git** | Any recent version | To clone/update the repository. | Skip if you received a zip archive. |
+| **Node.js + npm** | Node 18+ | Only to rebuild Tailwind CSS when you change styles. | **Not** needed to run or deploy the app, because the built CSS is committed. |
+| **Redis** | 6.0 or newer | Message broker for Celery. Required for SMS dispatch and scheduled tasks. | Optional if you never run Celery (see section 8). Redis 5.x will **not** work. |
+| **`uv`** (optional) | Latest | Fast, locked dependency install using `uv.lock`. | Optional; plain `pip` works too. |
+| **A Neon account** (optional) | — | Needed only for the online deployment described in section 9. | Free tier is available. |
+
+> **Windows note:** For Redis, common choices are Docker Desktop, Memurai Developer, or WSL2.
+> Redis 5.0.14 (commonly bundled on Windows) does not support the `HELLO` handshake that modern
+> Celery clients send, and will fail with `unknown command 'HELLO'`.
 
 ---
 
-## 3. Local Development Setup (Zero to Running)
+## 4. Local Installation
 
-Run all commands from the repository root (`C:\RebuildEden\project 1`).
+This section installs and runs the application on your own computer. Section 9 covers deploying
+it online. Follow **A (Windows)** **or** **B (Linux/macOS)**, then read section 5.
 
-### 3.1 Prerequisites
+### A. Windows (PowerShell) — the primary example
 
-1. **Python 3.12+**: Ensure Python is in your system PATH (`py --version` or `python --version`).
-2. **PostgreSQL 14+**: Installed and running locally on port 5432.
-3. **Redis 6.0+**: Installed and running on `localhost:6379`.
-   > [!IMPORTANT]
-   > Redis 5.0.14 is obsolete and incompatible with modern Celery Redis clients because it does not support the `HELLO` handshake. You must run Redis 6.0 or newer (via Docker, Memurai Developer, or WSL2).
-4. **Node.js 18+ & npm**: For compiling Tailwind CSS.
-5. **`uv` Package Manager**: For fast, deterministic Python environment syncing.
+Open **PowerShell** and change into the project folder:
 
-### 3.2 Step-by-Step Installation (Windows PowerShell)
+```powershell
+cd "C:\RebuildEden\project 1"
+```
 
-#### Step 1: Create Virtual Environment and Install Dependencies
+#### Step 1 — Check Python
+
+```powershell
+py -3.12 --version
+```
+
+You should see `Python 3.12.x`. If `py` is not recognised, install Python 3.12 and tick
+"Add Python to PATH", then reopen PowerShell.
+
+#### Step 2 — Create and activate a virtual environment
+
+A virtual environment ("venv") keeps this project's packages separate from everything else.
+
 ```powershell
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install uv
-.\.venv\Scripts\uv.exe sync --locked
+.\.venv\Scripts\Activate.ps1
 ```
 
-#### Step 2: Install Frontend Dependencies
+Your prompt now starts with `(.venv)`. If activation is blocked by execution policy, run this
+once in the same window and retry:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+> Every command below assumes the virtual environment is active **and** the working directory is
+> the project root (`C:\RebuildEden\project 1`). You can also call the interpreter directly as
+> `.\.venv\Scripts\python.exe` without activating, which is what this repository's brief
+> commands do.
+
+#### Step 3 — Install dependencies
+
+Choose **one** of these two options.
+
+**Option 1 — pip (simplest, no extra tools):**
+
+```powershell
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+**Option 2 — uv (faster, uses the lock file):**
+
+```powershell
+python -m pip install uv
+uv sync --locked
+```
+
+Both install the same packages (Django, Celery, `psycopg`, Gunicorn, Pillow, pandas, qrcode,
+reportlab, and so on).
+
+#### Step 4 — Create your `.env` file
+
+The repository ships a safe template. Copy it:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` in a text editor and fill in at least the values shown in section 6. At minimum you
+must set a `DJANGO_SECRET_KEY`, choose a `DATABASE_PROFILE`, and provide that profile's database
+details.
+
+> **Local PostgreSQL example** — set `DATABASE_PROFILE=local` and use the `DB_*` block
+> (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`) with your own PostgreSQL password.
+
+#### Step 5 — Create the local database
+
+If you are using local PostgreSQL, create an empty database. Using `psql`:
+
+```powershell
+psql -U postgres -c "CREATE DATABASE schoolsystem_db;"
+```
+
+You will be prompted for the `postgres` password you set when installing PostgreSQL.
+
+#### Step 6 — Run database migrations
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.development
+```
+
+Migrations create all database tables. You should see a long list of `Applying ... OK` lines.
+
+#### Step 7 — Create the first administrator
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py createsuperuser --settings=schoolsystem.settings.development
+```
+
+You will be asked for a username, email (optional) and password. **Choose your own credentials;
+this project ships no default username or password.** This account is the Django superuser and is
+also the first school administrator.
+
+#### Step 8 — Run Django's system checks
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py check --settings=schoolsystem.settings.development
+```
+
+Expected output: `System check identified no issues (0 silenced).`
+
+#### Step 9 — (Optional) Install frontend tooling
+
+Only if you intend to change styling or the public website:
+
 ```powershell
 npm ci
 ```
 
-#### Step 3: Configure `.env`
-Create `.env` in the project root:
-```env
-DJANGO_SECRET_KEY="local-development-secret-key-replace-with-random-chars-in-prod"
-DEBUG=True
-DATABASE_PROFILE=local
-DB_NAME=schoolsystem_db
-DB_USER=postgres
-DB_PASSWORD=your_postgres_password
-DB_HOST=localhost
-DB_PORT=5432
-REDIS_URL=redis://127.0.0.1:6379/0
-TENANCY_ENABLED=false
-```
+#### Step 10 — Start the development server
 
-> A complete, commented template covering every supported variable is provided in `.env.example` — copy it to `.env` and fill in the values.
-
-#### Step 4: Create the Local PostgreSQL Database
-Open PostgreSQL CLI (`psql`) or pgAdmin and run:
-```sql
-CREATE DATABASE schoolsystem_db;
-```
-
-#### Step 5: Apply Migrations & Create Superuser
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.development
-.\.venv\Scripts\python.exe .\manage.py createsuperuser --settings=schoolsystem.settings.development
+.\.venv\Scripts\python.exe .\manage.py runserver 127.0.0.1:8000 --settings=schoolsystem.settings.development
 ```
 
-### 3.3 Running the Development Environment
+Leave this window open. The application is now at <http://127.0.0.1:8000/>.
 
-Keep four separate PowerShell terminals open:
+#### Step 11 — Start background services (separate windows)
 
-* **Terminal 1 (Web Server)**:
-  ```powershell
-  .\.venv\Scripts\python.exe .\manage.py runserver 127.0.0.1:8000 --settings=schoolsystem.settings.development
-  ```
-* **Terminal 2 (Celery Worker)**:
-  ```powershell
-  .\.venv\Scripts\celery.exe -A schoolsystem worker --pool=solo --concurrency=1 --loglevel=INFO
-  ```
-  > [!TIP]
-  > On Windows, always use `--pool=solo --concurrency=1`. The default Celery prefork pool raises `PermissionError: [WinError 5]` on Windows systems.
-* **Terminal 3 (Celery Beat Scheduler)**:
-  ```powershell
-  .\.venv\Scripts\celery.exe -A schoolsystem beat --loglevel=INFO
-  ```
-* **Terminal 4 (Tailwind CSS Watcher - Optional)**:
-  ```powershell
-  npm run dev
-  ```
+SMS dispatch and scheduled tasks need Redis and Celery. Open a **new** PowerShell window, activate
+the venv in it, then:
 
-Access the application in your browser at `http://127.0.0.1:8000/`.
+**Celery worker** (Windows must use the `solo` pool):
 
-### 3.4 Running the Test Suite
+```powershell
+.\.venv\Scripts\celery.exe -A schoolsystem worker --pool=solo --concurrency=1 --loglevel=INFO
+```
 
-Tests run against PostgreSQL (SQLite cannot exercise schema isolation).
+**Celery Beat scheduler** (a third window):
 
-* **Core / single-tenant suites** (default test settings, tenancy forced off):
-  ```powershell
-  .\.venv\Scripts\python.exe .\manage.py test --settings=schoolsystem.settings.test
-  ```
-* **Multi-tenant / platform suites** (tenancy enabled; these are skipped under the settings above):
-  ```powershell
-  .\.venv\Scripts\python.exe .\manage.py test tenancy --settings=schoolsystem.settings.tenancy_test
-  ```
+```powershell
+.\.venv\Scripts\celery.exe -A schoolsystem beat --loglevel=INFO
+```
 
-`schoolsystem.settings.test` uses the `test_schoolsystem_core` database and `schoolsystem.settings.tenancy_test` uses `test_schoolsystem_tenancy`, so the two runs do not collide. The schema-isolation integration test and the SQL-backed platform/billing tests only execute under the tenancy-enabled settings.
+See section 8 for details and for how to check they are working. If you are not testing SMS or
+scheduled jobs yet, you can skip these.
 
 ---
 
-## 4. Cloud Production Deployment (Render + Neon)
+### B. Linux and macOS
 
-### 4.1 Neon Serverless PostgreSQL Setup
+These instructions use a POSIX shell (bash/zsh). Replace the project path with wherever you
+cloned the repository.
 
-1. **Create a Neon Project**:
-   * Sign in to [Neon Console](https://console.neon.tech/).
-   * Create a new project (e.g., `schoolsystem-prod`) and select your nearest AWS region (e.g., `us-east-2`).
-2. **Collect Connection Details**:
-   * Under **Dashboard → Connection Details**, select **Parameters Only**:
-     * Host (`PGHOST`)
-     * Database (`PGDATABASE`)
-     * Username (`PGUSER`)
-     * Password (`PGPASSWORD`)
-     * Port (`5432`)
+#### Step 1 — Check Python
 
-> **Use the direct (non-pooler) `PGHOST`.** Multi-tenancy keeps each school in its own PostgreSQL schema and depends on a session-level `search_path`. Neon's pooled host (the one containing `-pooler`) runs PgBouncer in transaction mode and does **not** preserve that session state between statements, so a request could resolve against another school's schema. Never point `PGHOST` at a `-pooler` host — not for the web service, and not for migrations.
-
-3. **Configure S3 Object Storage (Neon Storage)**:
-   * Navigate to **Storage** in your Neon project dashboard.
-   * Create a private bucket (e.g., `uploads`).
-   * Generate S3 credentials with `storage:read` and `storage:write` scopes.
-   * Note the endpoint URL, region, Access Key ID, and Secret Key.
-
-### 4.2 Render Services Architecture
-
-A complete deployment consists of three Render services and one Redis instance:
-
-> The repository ships a `render.yaml` Blueprint that encodes the web service, its build and start commands, the health-check path and the environment-variable names (secrets are marked `sync: false`). Apply it via **Dashboard → New → Blueprint**, or configure the services manually as described below.
-
-```
-┌────────────────────────────────────────────────────────┐
-│                      Render Cloud                      │
-│                                                        │
-│   ┌────────────────────┐      ┌────────────────────┐   │
-│   │ Render Web Service │      │ Render Redis       │   │
-│   │ (Gunicorn + Django)│◄────►│ (Broker & Cache)   │   │
-│   └─────────┬──────────┘      └─────────▲──────────┘   │
-│             │                           │              │
-│             │                 ┌─────────┴──────────┐   │
-│             │                 │ Celery Worker      │   │
-│             │                 │ (Background Tasks) │   │
-│             │                 └────────────────────┘   │
-│             │                           ▲              │
-│             │                 ┌─────────┴──────────┐   │
-│             │                 │ Celery Beat        │   │
-│             │                 │ (Periodic Cron)    │   │
-│             │                 └────────────────────┘   │
-└─────────────┼──────────────────────────────────────────┘
-              ▼
-   ┌──────────────────────┐
-   │ Neon PostgreSQL & S3 │
-   └──────────────────────┘
+```bash
+python3.12 --version
 ```
 
-#### Service 1: Render Web Service
-* **Type**: Web Service (Python)
-* **Environment**: Python 3.12+
-* **Build Command**:
-  ```bash
-  pip install -r requirements.txt && python manage.py collectstatic --noinput --settings=schoolsystem.settings.production
-  ```
-* **Start Command**:
-  ```bash
-  gunicorn schoolsystem.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --threads 2 --timeout 60
-  ```
-* **Health Check Path**: `/healthz`
+If `python3.12` is missing, install it (for example `sudo apt install python3.12 python3.12-venv`
+on Debian/Ubuntu, or `brew install python@3.12` on macOS).
 
-#### Service 2: Render Background Worker
-* **Type**: Background Worker
-* **Build Command**:
-  ```bash
-  pip install -r requirements.txt
-  ```
-* **Start Command**:
-  ```bash
-  celery -A schoolsystem worker --loglevel=INFO --concurrency=4
-  ```
+#### Step 2 — Create and activate a virtual environment
 
-#### Service 3: Render Celery Beat Worker
-* **Type**: Background Worker
-* **Build Command**:
-  ```bash
-  pip install -r requirements.txt
-  ```
-* **Start Command**:
-  ```bash
-  celery -A schoolsystem beat --loglevel=INFO
-  ```
-
-#### Service 4: Redis Instance
-* Provision a **Render Managed Redis** instance or an external Redis 6+ instance.
-* Copy the Internal Redis URL into the `REDIS_URL` environment variable for all three services.
-
-### 4.3 Required Production Environment Variables (Render Dashboard)
-
-Apply these variables across the Web Service, Worker, and Beat services:
-
-```env
-DJANGO_SETTINGS_MODULE=schoolsystem.settings.production
-DATABASE_PROFILE=neon
-PGHOST=ep-xxxx.us-east-2.aws.neon.tech
-PGDATABASE=neondb
-PGUSER=neondb_owner
-PGPASSWORD=npg_xxxxxxxxxxxx
-PGPORT=5432
-PGSSLMODE=require
-REDIS_URL=redis://red-xxxxxxxx:6379
-DJANGO_SECRET_KEY=at-least-50-random-characters-kept-strictly-secret
-# ALLOWED_HOSTS is ignored while TENANCY_ENABLED=True; tenant hosts come from the Domain table
-CSRF_TRUSTED_ORIGINS=https://your-app.onrender.com,https://portal.yourschool.com
-MEDIA_STORAGE_BACKEND=neon_s3
-NEON_STORAGE_BUCKET=uploads
-AWS_ENDPOINT_URL_S3=https://br-xxxx.storage.us-east-2.aws.neon.tech
-AWS_REGION=us-east-2
-AWS_ACCESS_KEY_ID=nak_live_xxxxxxxx
-AWS_SECRET_ACCESS_KEY=nsk_live_xxxxxxxx
-SMS_ENABLED=True
-SMS_ONLINE_GH_API_KEY=your_smsonlinegh_key
-SMS_SENDER_ID=ATSEC
-TENANCY_ENABLED=True
-EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
-CACHE_BACKEND=django.core.cache.backends.redis.RedisCache
-CACHE_LOCATION=redis://red-xxxxxxxx:6379/1
-TRUSTED_PROXY_COUNT=1
-# Optional security hardening (see section 2.1)
-SECURE_HSTS_SECONDS=31536000
-SECURE_HSTS_INCLUDE_SUBDOMAINS=true
-SECURE_HSTS_PRELOAD=true
-CSP_REPORT_URI=https://your-csp-collector.example/report
+```bash
+cd /path/to/project-1
+python3.12 -m venv .venv
+source .venv/bin/activate
 ```
 
-> **Staging note:** a staging host may still need plain-HTTP access, so set `SECURE_HSTS_SECONDS=0` (leaving `SECURE_HSTS_INCLUDE_SUBDOMAINS` and `SECURE_HSTS_PRELOAD` at their `false` defaults) until HTTPS is confirmed, then raise it for production. `EMAIL_BACKEND` defaults to the console backend, which never sends real mail; set a real transport only when outgoing mail is required. `CACHE_BACKEND` defaults to a per-process `LocMemCache`; point it at a shared backend (as above) so rate limits apply across all workers.
+#### Step 3 — Install dependencies
 
-> **Tenant hostnames are not configured here.** Under `TENANCY_ENABLED=True`, `ALLOWED_HOSTS` is ignored (forced to `*`) and each school's hostname is attached to the `Domain` table with `add_school_domain` (see section 6.2, Step 4). See section 2.1 for the `ALLOWED_HOSTS` reference row.
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+# or, with uv:
+# pip install uv && uv sync --locked
+```
+
+#### Step 4 — Create your `.env` file
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in the values from section 6. For local PostgreSQL set
+`DATABASE_PROFILE=local`.
+
+#### Step 5 — Create the local database
+
+```bash
+sudo -u postgres psql -c "CREATE DATABASE schoolsystem_db;"
+```
+
+On macOS with Homebrew PostgreSQL, `psql -U $(whoami) -c "CREATE DATABASE schoolsystem_db;"` is
+usually enough.
+
+#### Step 6 — Run migrations and create the administrator
+
+```bash
+python manage.py migrate --settings=schoolsystem.settings.development
+python manage.py createsuperuser --settings=schoolsystem.settings.development
+```
+
+#### Step 7 — Run the checks and start the server
+
+```bash
+python manage.py check --settings=schoolsystem.settings.development
+python manage.py runserver 127.0.0.1:8000 --settings=schoolsystem.settings.development
+```
+
+#### Step 8 — Background services (separate terminals)
+
+On Linux and macOS the default prefork pool works, so no `--pool=solo` is needed:
+
+```bash
+celery -A schoolsystem worker --loglevel=INFO
+celery -A schoolsystem beat   --loglevel=INFO
+```
+
+#### Platform-specific limitations
+
+- **Redis version.** Linux/macOS distributions ship Redis 6+ in current releases; verify with
+  `redis-server --version`. On older systems you may need a newer package or Docker.
+- **PostgreSQL client tools.** `pg_dump` and `pg_restore` must be on `PATH` for the
+  `tenant_backup`/`tenant_restore` commands. Install `postgresql-client` if `pg_dump` is missing.
+- **Windows-only Celery pool.** `--pool=solo --concurrency=1` is required on Windows only.
 
 ---
 
-## 5. Database Management & Migrations
+## 5. First Successful Run
 
-### 5.1 Single-Tenant Mode Migrations (`TENANCY_ENABLED=false`)
+When installation works, this is what you should see.
 
-When multi-tenancy is disabled, migrations operate against the `public` schema using Django's standard migration commands:
+1. **The server starts.** `runserver` prints something like:
+   `Starting development server at http://127.0.0.1:8000/` and `Quit the server with CTRL-BREAK`.
+
+2. **Confirm the database is connected.** The server prints no connection errors, and opening the
+   site works. To confirm from the command line:
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py showmigrations --settings=schoolsystem.settings.development
+   ```
+   Every migration should show `[X]` (applied). If any show `[ ]`, run `migrate` again.
+
+3. **Open the application.**
+   - School application (and the login page): <http://127.0.0.1:8000/>
+   - You are redirected to the login page at <http://127.0.0.1:8000/login/>.
+   - Django admin, if you need it: <http://127.0.0.1:8000/admin/>
+   - The public marketing website (only when tenancy is off locally): <http://127.0.0.1:8000/site/>
+
+4. **Log in.** Use the superuser you created in step 7. You should land on the dashboard at `/`.
+
+5. **Initial configuration after first login.**
+   - Confirm the school name/short name on the configuration page
+     (`/configuration/`). On a newly provisioned tenant the school name is seeded automatically;
+     in single-school mode you set it here.
+   - Create houses, dormitories, rooms, programmes and class groups.
+   - Add an academic term and mark it active (`/configuration/`).
+   - Set up SMS only when you are ready (keep `SMS_ENABLED=false` until then).
+   - Create staff accounts and assign each a role (see section 12.1). Roles are assigned through
+     the Django admin (User profiles).
+
+> The system deliberately ships **no default administrator account**. The first user is always the
+> one you create with `createsuperuser`. Never create a production superuser with a weak or shared
+> password.
+
+---
+
+## 6. Environment Variables Reference
+
+All settings come from a single `.env` file in the project root, loaded by `python-dotenv` in
+`schoolsystem/settings/base.py`. A safe, commented template is `.env.example`. The real `.env` is
+listed in `.gitignore` and must never be committed.
+
+Rules of thumb:
+
+- **Development** values are convenient; **production** values must be secret and strict.
+- Empty values fall back to the defaults shown below.
+- Two settings are **validated**: `DATABASE_PROFILE` must be `local` or `neon`; and in production
+  `PGSSLMODE` must be `require`, `verify-ca` or `verify-full`.
+
+### 6.1 Django core
+
+| Variable | Required? | Controls | Safe example | If missing |
+| :--- | :--- | :--- | :--- | :--- |
+| `DJANGO_SECRET_KEY` | **Required in production** (dev has an insecure fallback) | Cryptographic signing. Production requires ≥ 50 characters and ≥ 5 unique characters, or start-up fails. | `replace-with-50-plus-random-characters` | Dev: insecure default used. Prod: `ImproperlyConfigured`, app will not start. |
+| `DEBUG` | No | Debug mode. Only honoured by `development.py`; `production.py` always forces `False`. | `True` (dev) | Defaults to `True` in development. |
+| `DJANGO_SETTINGS_MODULE` | No | Which settings module to load. Usually auto-detected (see below). | `schoolsystem.settings.development` | Auto-selected: `production` when `RENDER=true` or `PORT` is set, otherwise `development`. |
+| `ALLOWED_HOSTS` | **Required in single-school production** | Comma-separated hostnames. In tenancy mode it is forced to `*` and ignored (the `Domain` table is the real gate). | `127.0.0.1,localhost` | Dev default `127.0.0.1,localhost`. Prod (single-school): `ImproperlyConfigured`. |
+| `CSRF_TRUSTED_ORIGINS` | **Required in production** | Full HTTPS origins allowed to submit forms. | `https://your-app.onrender.com` | Empty; browsers may reject form posts with a 403 CSRF error. |
+
+### 6.2 Database — choose one profile
+
+`DATABASE_PROFILE` decides which block is read. It must be `local` or `neon`.
+
+| Variable | Required? | Controls | Safe example |
+| :--- | :--- | :--- | :--- |
+| `DATABASE_PROFILE` | Yes (defaults to `local`) | `local` = use the `DB_*` block; `neon` = use the `PG*` block. | `local` (dev) / `neon` (prod) |
+
+**Local profile (`DATABASE_PROFILE=local`):**
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `DB_NAME` | `schoolsystem_db` | Database name |
+| `DB_USER` | `postgres` | Database user |
+| `DB_PASSWORD` | `postgres` | Database password |
+| `DB_HOST` | `localhost` | Database host |
+| `DB_PORT` | `5432` | Database port |
+| `DB_SSLMODE` | *(empty)* | Optional `sslmode` for the connection |
+
+**Neon profile (`DATABASE_PROFILE=neon`):** all four of `PGHOST`, `PGDATABASE`, `PGUSER`,
+`PGPASSWORD` are **required**; the app refuses to start without them.
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `PGHOST` | *(required)* | Neon **direct** host (do **not** use a `-pooler` host — see section 9.2) |
+| `PGDATABASE` | *(required)* | Neon database name |
+| `PGUSER` | *(required)* | Neon username |
+| `PGPASSWORD` | *(required)* | Neon password |
+| `PGPORT` | `5432` | Neon port |
+| `PGSSLMODE` | `require` | TLS mode: `require`, `verify-ca`, `verify-full` |
+
+### 6.3 Multi-tenancy
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `TENANCY_ENABLED` | `false` | Turn schema-per-school isolation on/off. Accepts `true/1/yes/on`. |
+| `PLATFORM_ADMIN_DOMAIN` | *(empty)* | Optional hostname that returns a small JSON status payload instead of activating a school. It is **not** a browser admin interface. |
+
+### 6.4 Static files and media
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `MEDIA_ROOT` | `<project>/media` | Local folder for uploads (filesystem mode only). |
+| `MEDIA_STORAGE_BACKEND` | `filesystem` | `filesystem` or `neon_s3`. Any other value aborts start-up. |
+| `NEON_STORAGE_BUCKET` | *(empty)* | S3 bucket name (required when `neon_s3`). |
+| `AWS_ENDPOINT_URL_S3` | *(empty)* | S3 endpoint (required when `neon_s3`). |
+| `AWS_REGION` | *(empty)* | S3 region (required when `neon_s3`). |
+| `AWS_ACCESS_KEY_ID` | *(empty)* | S3 access key (required when `neon_s3`). |
+| `AWS_SECRET_ACCESS_KEY` | *(empty)* | S3 secret key (required when `neon_s3`). |
+
+When `MEDIA_STORAGE_BACKEND=neon_s3`, **all five** `NEON_STORAGE_BUCKET`/`AWS_*` variables are
+required or the app will not start. Static files (`STATIC_ROOT`, `STATICFILES_DIRS`) are configured
+in code and are always served by WhiteNoise; they have no environment variables.
+
+### 6.5 Celery, Redis, cache and rate limiting
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Celery broker connection. |
+| `CACHE_BACKEND` | `django.core.cache.backends.locmem.LocMemCache` | Cache used for rate limits. LocMem is per-process. |
+| `CACHE_LOCATION` | `schoolsystem-cache` | Cache location/URL for the chosen backend. |
+| `TRUSTED_PROXY_COUNT` | `1` | Number of proxy hops used to read the client IP from `X-Forwarded-For`. Render adds one hop, so `1` is correct. |
+| `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW` | `10` / `300` | Max login attempts per IP per window (seconds). |
+| `PUBLIC_REPORT_RATE_LIMIT` / `PUBLIC_REPORT_RATE_WINDOW` | `5` / `3600` | Max public "report a concern" submissions per IP per window. |
+| `STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS` | `0` | Lifetime of public student-ID QR links in days (`0` = never expire). |
+
+### 6.6 SMS (SMSOnlineGH)
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `SMS_ENABLED` | `false` | Master switch for sending SMS. Keep `false` while testing. |
+| `SMS_ONLINE_GH_API_KEY` | *(empty)* | Your SMSOnlineGH API key. |
+| `SMS_SENDER_ID` | `ATSEC` | Fallback sender ID when a school has not configured its own. |
+| `SMS_TIME_ZONE` | `UTC` | Time zone for dispatch windows (also used as Celery time zone). |
+| `SMS_HTTP_TIMEOUT` | `10` | Gateway HTTP timeout in seconds. |
+| `SMS_MAX_ATTEMPTS` | `5` | Maximum delivery attempts before a message is marked failed. |
+
+### 6.7 Email
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Mail transport. The default prints mail to the log and **never sends real email**. |
+| `DEFAULT_FROM_EMAIL` | `no-reply@localhost` | `From:` address for outgoing mail. |
+
+### 6.8 Security hardening (production)
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `SECURE_HSTS_SECONDS` | `31536000` in production | HSTS duration. Set `0` for a staging host you may need over plain HTTP. |
+| `SECURE_HSTS_INCLUDE_SUBDOMAINS` | `false` | Apply HSTS to subdomains. Requires HSTS > 0. |
+| `SECURE_HSTS_PRELOAD` | `false` | HSTS preload. Requires ≥ 1 year of HSTS and include-subdomains. |
+| `CSP_REPORT_URI` | *(empty)* | A safe relative path or HTTPS URL appended as `report-uri` to the report-only CSP header. No collector is built in. |
+
+### 6.9 Public marketing website (Eden Creative Systems)
+
+These settings power the separate marketing site and demonstration requests. They do not affect
+school routing.
+
+The site is published at the main domain and links only to itself: canonical URLs, Open Graph tags,
+the sitemap and robots.txt all name that domain, and nothing on the site points at a school's own
+hostname. Staff sign in at the address their school provided, not from this site. `website/addressing.py`
+is the single place that decides the site's own origin, and `website/checks.py` reports a
+configuration that would break either rule.
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `PUBLIC_WEBSITE_DOMAIN` | *(empty)* | Comma-separated **hostnames** that serve the marketing site (no scheme, no port). Empty disables the bypass. |
+| `PUBLIC_WEBSITE_ENABLED` | `true` | Master switch for the public-host bypass. |
+| `PUBLIC_WEBSITE_URLCONF` | `schoolsystem.urls_public` | URLconf used on the public host. Leaving it pointed here keeps school URLs off the marketing host. |
+| `SITE_URL` | *(empty)* | The site's own absolute origin for canonical links, Open Graph tags, the sitemap and the robots.txt `Sitemap:` line. Falls back to `https://EDEN_SYS_DOMAIN`, then to the request hostname (local development only). |
+| `EDEN_SYS_COMPANY` | `Eden Creative Systems` | Company name shown on the site. |
+| `EDEN_SYS_SHORT_NAME` | `Eden Sys` | Short company name. |
+| `EDEN_SYS_PRODUCT_NAME` | `SHS Boarding & Dorm Management System` | Product name. |
+| `EDEN_SYS_PHONE` | `+233 24 816 0391` | Contact phone. |
+| `EDEN_SYS_EMAIL` | `berkojohnson@gmail.com` | Contact email. |
+| `EDEN_SYS_DOMAIN` | `ecreativesys.com` | Company domain. |
+| `EDEN_SYS_ATTRIBUTION` | `Developed by Eden Creative Systems (Eden Sys)` | Site attribution line. |
+| `EDEN_PORTAL_LOGIN_URL` | *(empty)* | Where the site's "Login" link points. Published only when it is on the site's own domain (`SITE_URL` / `EDEN_SYS_DOMAIN`); anything else is dropped and reported by the `website.W001` check. Empty hides the link. |
+| `PRICING_PUBLIC_ENABLED` | `false` | Publish pricing. Has no effect while `website/pricing.py` `APPROVED_PRICE_LIST` is empty. |
+| `DEMO_REQUEST_NOTIFY_EMAILS` | *(empty)* | Comma-separated recipients for demo enquiries. Empty falls back to `EDEN_SYS_EMAIL`, then `DEFAULT_FROM_EMAIL`. |
+| `DEMO_REQUEST_RATE_LIMIT` / `DEMO_REQUEST_RATE_WINDOW` | `5` / `3600` | Demo-request throttling per client IP per window. A limit of `0` disables throttling. |
+
+### 6.10 Staging safety
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `SYNTHETIC_PILOT_DATABASE` | *(empty)* | Guard for `seed_synthetic_pilot`. Must exactly equal the database name you are seeding. |
+
+> **Never** commit a populated `.env`. Never paste real API keys, passwords or connection strings
+> into this README, tickets or chat.
+
+---
+
+## 7. Platform Commands and Administrative Operations
+
+All commands are run from the project root with the virtual environment active. On Windows the
+examples use `.\.venv\Scripts\python.exe .\manage.py`; on Linux/macOS use `python manage.py`.
+
+### 7.1 Discovering commands
 
 ```powershell
-# Check migration status
+.\.venv\Scripts\python.exe .\manage.py help
+```
+
+This lists every registered management command, grouped by app (`core`, `tenancy`, `website`,
+`django_pgschemas`, and Django's built-ins). It tells you **what exists**, but not how a custom
+command is meant to be used — the per-command sections below do that. For a single command:
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py help provision_school
+```
+
+The commands in this repository, as reported by `manage.py help`, are:
+
+- **core:** `import_roster`, `seed_synthetic_pilot`
+- **tenancy:** `add_school_domain`, `migrate_legacy_school`, `provision_school`,
+  `set_school_status`, `support_access`, `tenant_backup`, `tenant_features`, `tenant_invoice`,
+  `tenant_list`, `tenant_restore`, `tenant_subscription`, `tenant_usage`
+- **website:** `build_brand_assets`, `demo_requests`
+- **django_pgschemas** (third-party): `runschema`, `migrate` (extended), `migrateschema`,
+  `whowill`, `cloneschema`, `createrefschema`
+
+### 7.2 Standard Django commands
+
+These are Django's own commands. They are always available.
+
+| Command | Purpose | When to use | Changes data? |
+| :--- | :--- | :--- | :--- |
+| `manage.py check` | Run Django's system checks. | After installation and after pulling new code. | No |
+| `manage.py check --deploy` | Extra checks for production safety. | Before deploying. **Warnings are expected for a non-HTTPS staging host.** | No |
+| `manage.py migrate` | Apply pending migrations to the database. | Every install and every update. | **Yes** |
+| `manage.py makemigrations` | Create new migration files from model changes. | Only when you have edited models. | No (writes files) |
+| `manage.py showmigrations` | List migrations and whether they are applied. | To check for pending migrations. | No |
+| `manage.py sqlmigrate <app> <migration>` | Print the SQL a migration will run. | To review a migration before applying it. | No |
+| `manage.py createsuperuser` | Create an administrator account. | Once per install / per school schema. | **Yes** |
+| `manage.py changepassword <user>` | Change a user's password. | When a password must be reset. | **Yes** |
+| `manage.py collectstatic --noinput` | Copy static files into `STATIC_ROOT`. | Before/at production deploy. | Writes files |
+| `manage.py runserver` | Start the development web server. | Local development only. | No |
+| `manage.py shell` | Interactive Python shell with Django loaded. | Debugging, one-off queries. In multi-school mode use `runschema shell` (see 7.6). | Possible |
+| `manage.py test` | Run the test suite. | Before merging/deploying. Needs PostgreSQL. | Temporarily |
+| `manage.py sendtestemail` | Send a test email via the configured backend. | To verify email configuration. | Sends mail |
+| `manage.py dbshell` | Open a database shell. | Advanced database inspection. | Possible |
+| `manage.py dumpdata` / `loaddata` | Export/import model data as JSON. | Small data moves only. | `loaddata` writes |
+
+**Examples:**
+
+```powershell
+# Health checks
+.\.venv\Scripts\python.exe .\manage.py check --settings=schoolsystem.settings.development
+.\.venv\Scripts\python.exe .\manage.py check --deploy --settings=schoolsystem.settings.production
+
+# Migrations
 .\.venv\Scripts\python.exe .\manage.py showmigrations --settings=schoolsystem.settings.development
-
-# Apply all pending migrations
 .\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.development
+
+# Accounts
+.\.venv\Scripts\python.exe .\manage.py createsuperuser --settings=schoolsystem.settings.development
+.\.venv\Scripts\python.exe .\manage.py changepassword admin --settings=schoolsystem.settings.development
+
+# Static files (production)
+.\.venv\Scripts\python.exe .\manage.py collectstatic --noinput --settings=schoolsystem.settings.build
 ```
 
-> [!NOTE]
-> `schoolsystem.settings.production` requires `DATABASE_PROFILE=neon` plus the full Neon connection set, so local single-tenant work should use `schoolsystem.settings.development` (or omit `--settings` entirely, which auto-selects development on a workstation).
+> **`makemigrations` vs `migrate`:** `makemigrations` writes new migration *files* from your model
+> changes; `migrate` applies migration files to the *database*. On a server you normally run only
+> `migrate`. Never delete migration files or reset a production database as routine troubleshooting.
 
-### 5.2 Multi-Tenant Mode Migrations (`TENANCY_ENABLED=true`)
+### 7.3 Custom command: `import_roster` (core)
 
-In multi-tenant mode, migrations are divided into two categories:
+Imports a student roster from `.csv` or `.xlsx` with the same validation as the web importer.
+**Changes the database.**
 
-#### 1. Public Schema Migrations (Shared Platform Tables)
-Applies migrations for `tenancy`, `django_celery_beat`, and the public `django_content_type` registry:
+| Argument | Required | Meaning |
+| :--- | :--- | :--- |
+| `file_path` (positional) | Yes | Path to the roster file. |
+| `--schema` | Only when `TENANCY_ENABLED=True` | Target school schema. Rejected when tenancy is off. |
+
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
+# Single-school
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx
+# Multi-school
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx --schema achimota_shs
 ```
 
-#### 2. Tenant Schemas Migrations (School Operational Data)
-Applies migrations for `auth`, `core`, and `sessions` across all active tenant schemas:
+Success prints `Roster import completed successfully: N student record(s) imported.` Validation
+errors abort the **entire** batch and print the reasons (duplicate admission/index numbers, invalid
+gender, boarder without a valid house, room capacity exceeded). The importer never silently
+overwrites existing students. See section 12.2 for the expected columns.
+
+### 7.4 Custom command: `seed_synthetic_pilot` (core)
+
+Creates a fictional dataset (100 students, 4 houses, 8 dormitories, 16 rooms, 3 programmes, 6 class
+groups, and disabled test staff accounts) for rehearsing workflows. **Writes to the database and is
+strictly guarded.**
+
+Safety guards (all enforced by the code):
+
+1. Without `--apply` it only prints a plan (dry run).
+2. Requires `--confirm-empty-staging`.
+3. Requires the environment variable `SYNTHETIC_PILOT_DATABASE` to exactly equal the configured
+   database name.
+4. Refuses to run if school tables already contain records.
+5. Refuses to run if SMS is enabled.
+6. Requires an active superuser to exist first.
+
 ```powershell
-# Migrate all tenant schemas at once
-.\.venv\Scripts\python.exe .\manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
+# 1) Dry run (safe, no arguments beyond defaults)
+.\.venv\Scripts\python.exe .\manage.py seed_synthetic_pilot
 
-# Or migrate a single specific tenant schema
-.\.venv\Scripts\python.exe .\manage.py migrate --schema achimota_shs --settings=schoolsystem.settings.production
+# 2) Apply to a dedicated, empty staging database only
+$env:SYNTHETIC_PILOT_DATABASE = "schoolsystem_staging"
+.\.venv\Scripts\python.exe .\manage.py seed_synthetic_pilot `
+  --schema achimota_shs --apply --confirm-empty-staging
 ```
 
-> [!NOTE]
-> When provisioning a new school via `manage.py provision_school`, tenant migrations run automatically for that schema.
+> **Warning:** never run this against a database that holds real school data. It is designed to
+> refuse, but the guard variable is a safety net, not a licence. Test accounts it creates are
+> inactive with unusable passwords.
 
----
+### 7.5 Custom commands: `demo_requests` and `build_brand_assets` (website)
 
-## 6. Multi-School Tenancy Rollout & Platform CLI Management
+**`demo_requests`** reviews demonstration enquiries from the public site. Because the `website` app
+lives in the `public` schema (not visible on school hosts) there is no admin page for it — this
+command is the intended tool. Enquiries contain confidential contact details.
 
-### 6.1 Architecture & Isolation Guarantees
+| Option | Meaning |
+| :--- | :--- |
+| *(no option)* / `--list` | List recent enquiries with a status summary. |
+| `--all` | Include closed/triaged enquiries. |
+| `--limit N` | Maximum rows to list (default 25). |
+| `--show ID` | Show one enquiry in full. |
+| `--mark ID --status S` | Change triage status: `new`, `contacted`, `scheduled`, `onboarding`, `closed`. |
+| `--note "..."` | Append an internal note when marking. |
+| `--export PATH` | Write all enquiries to a CSV file. |
+| `--json` | Machine-readable output. |
 
-* **PostgreSQL Schema Isolation**: Each school's data is physically separated inside its own PostgreSQL schema. Queries within a school cannot see or join data from another school.
-* **Validated Schema Identifiers**: Schema names are limited to 63 characters, must be PostgreSQL-safe identifiers (`^[_a-zA-Z][_a-zA-Z0-9]{,62}$`), and cannot collide with a reserved schema name. `provision_school` lower-cases the value you supply, so operational schemas follow `^[a-z][a-z0-9_]*$` in practice.
-* **Unique Primary Domain**: A database-level `UniqueConstraint` ensures that at most one primary domain exists per school.
-* **Fail-Closed Host Routing**: Requests to unverified, inactive, or unknown domains receive an immediate `404 Not Found`.
-
-### 6.2 Step-by-Step Pilot Onboarding Runbook
-
-Follow this runbook to onboard and verify a new school:
-
-```
-[ Step 1: Set TENANCY_ENABLED=true ]
-                  │
-[ Step 2: Migrate Public Schema ] ──> python manage.py migrate --schema public
-                  │
-[ Step 3: Provision School Tenant ] ──> python manage.py provision_school
-                  │                     (Creates schema, migrates apps, seeds config)
-[ Step 4: Attach Domain Aliases ] ──> python manage.py add_school_domain (Optional)
-                  │
-[ Step 5: Seed Synthetic Rehearsal ] ──> python manage.py seed_synthetic_pilot (Optional)
-                  │
-[ Step 6: Create School Admin ] ──> python manage.py runschema createsuperuser --schema=<name>
-                  │
-[ Step 7: Verify & Activate ] ──> python manage.py set_school_status --activate
-                  │
-        [ School is Live! ]
-```
-
-#### Step 1: Ensure Environment Configuration
-Verify in `.env` or environment secrets:
-```env
-TENANCY_ENABLED=true
-DATABASE_PROFILE=neon  # or local
-```
-
-#### Step 2: Ensure Public Platform Tables Are Migrated
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py demo_requests
+.\.venv\Scripts\python.exe .\manage.py demo_requests --show=12
+.\.venv\Scripts\python.exe .\manage.py demo_requests --mark=12 --status=contacted --note="Called 2026-10-18"
+.\.venv\Scripts\python.exe .\manage.py demo_requests --export=.private/demo-requests.csv
 ```
 
-#### Step 3: Provision the School Tenant
-Creates the PostgreSQL schema, runs tenant migrations, seeds the default `SchoolConfiguration` singleton (`name` and `short_name` — the short name is used as the GSM-safe SMS sender identity), and leaves the school **inactive**:
+**`build_brand_assets`** regenerates the public website's favicons and Open Graph image from
+`static/img/eden-creative-systems-mark.png`. Run it only when the supplied brand mark changes.
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py build_brand_assets           # write assets
+.\.venv\Scripts\python.exe .\manage.py build_brand_assets --check   # report targets only
+```
+
+Use `--check` first. The website's stylesheet is built separately:
+
+```powershell
+npm ci
+npm run build        # school application CSS  -> static/css/output.css
+npm run build:site   # public website CSS      -> static/css/site.css
+```
+
+Both built CSS files are committed; rebuild and commit them after any style change.
+
+### 7.6 Third-party wrapper commands (`django_pgschemas`)
+
+In multi-school mode, `django-pgschemas` adds schema-aware versions of some commands:
+
+```powershell
+# Run any command inside one or more school schemas
+.\.venv\Scripts\python.exe .\manage.py runschema shell --schema achimota_shs
+.\.venv\Scripts\python.exe .\manage.py runschema createsuperuser --schema achimota_shs
+
+# Migrations (schema-aware)
+.\.venv\Scripts\python.exe .\manage.py migrate --schema public
+.\.venv\Scripts\python.exe .\manage.py migrate --include-dynamic-schemas
+
+# Show which schemas a set of schema selectors resolves to, without acting
+.\.venv\Scripts\python.exe .\manage.py whowill --include-dynamic-schemas
+
+# Apply migrations across every schema
+.\.venv\Scripts\python.exe .\manage.py migrateschema --include-all-schemas
+
+# Clone an existing schema into a new one (advanced)
+.\.venv\Scripts\python.exe .\manage.py cloneschema <source> <destination>
+```
+
+`--schema` accepts more than one name. `runschema` is the recommended way to query a school's data
+from the shell in multi-school mode.
+
+### 7.7 Custom commands: school provisioning and status (tenancy)
+
+These four commands create and manage schools. All require `TENANCY_ENABLED=True` (they raise a
+`CommandError` otherwise). They **change the database and create PostgreSQL schemas.**
+
+#### `provision_school` — create a brand-new school
+
+Creates the tenant record, attaches a verified hostname, creates the PostgreSQL schema, runs tenant
+migrations, seeds the school's `SchoolConfiguration`, and leaves the school **inactive**.
+
+| Argument | Required | Meaning |
+| :--- | :--- | :--- |
+| `--name` | Yes | School display name. |
+| `--schema` | Yes | Schema name (lower-cased; validated against PostgreSQL rules and reserved names). |
+| `--domain` | Yes | Primary hostname. |
+| `--confirm-domain-verified` | Yes | Confirms you control the hostname. Without it the command refuses. |
+
 ```powershell
 .\.venv\Scripts\python.exe .\manage.py provision_school `
   --name "Achimota Senior High" `
@@ -489,749 +866,944 @@ Creates the PostgreSQL schema, runs tenant migrations, seeds the default `School
   --settings=schoolsystem.settings.production
 ```
 
-#### Step 4: Attach Secondary Domains or Aliases (Optional)
-Attach additional hostnames to an already-provisioned school. `add_school_domain` registers each hostname on the `Domain` table as verified; under tenancy that table is the **only** host gate (Django's `ALLOWED_HOSTS` is forced to `*`), so a hostname resolves only if it has its own verified row here. There are **no wildcards** — every hostname needs its own entry.
+If migrations fail after the schema is created, the command tells you to retry with
+`migrate --schema=<schema>`.
+
+#### `add_school_domain` — attach extra hostnames
+
+Adds another verified hostname/alias to an existing school. There are **no wildcards**: every
+hostname needs its own row.
+
+| Argument | Required | Meaning |
+| :--- | :--- | :--- |
+| `--schema` | Yes | Target school schema. |
+| `--domain` | Yes | Hostname to add. |
+| `--primary` | No | Make this the single primary domain (demotes the previous one). |
+| `--confirm-domain-verified` | Yes | Confirms you control the hostname. |
 
 ```powershell
-# Attach a second domain to an existing school
 .\.venv\Scripts\python.exe .\manage.py add_school_domain `
-  --schema "achimota_shs" `
-  --domain "portal.achimota.edu.gh" `
-  --confirm-domain-verified `
-  --settings=schoolsystem.settings.production
-
-# Attach several schools' domains across multiple apex domains
-.\.venv\Scripts\python.exe .\manage.py add_school_domain --schema atebubu_shs  --domain atebubushs.ecreativesys.com  --confirm-domain-verified
-.\.venv\Scripts\python.exe .\manage.py add_school_domain --schema amanten_shs  --domain amantenshs.ecreativesys.com  --confirm-domain-verified
-.\.venv\Scripts\python.exe .\manage.py add_school_domain --schema achimota_shs --domain dorm.achimotashs.com          --confirm-domain-verified
-# ecreativesys.com -> whichever tenant owns the apex (or leave it out)
-```
-*(Add `--primary` if switching this domain to be the canonical primary address.)*
-
-> **Host routing reminder:** while `TENANCY_ENABLED=true`, `ALLOWED_HOSTS` is ignored (always `*`) — see section 4.3. Routing is decided solely by the `Domain` table, so an apex like `ecreativesys.com` and each subdomain like `atebubushs.ecreativesys.com` must each have their own verified row. A hostname with no row returns `404 "No active school is configured for this hostname."`
-
-#### Step 5: Seed Synthetic Pilot Rehearsal Data (Optional)
-To test workflows without real student records, populate 100 fictional learners, houses, dormitories, and test staff accounts:
-```powershell
-$env:SYNTHETIC_PILOT_DATABASE = "<exact database name>"
-.\.venv\Scripts\python.exe .\manage.py seed_synthetic_pilot `
-  --schema "achimota_shs" `
-  --apply `
-  --confirm-empty-staging `
-  --settings=schoolsystem.settings.production
+  --schema achimota_shs --domain portal.achimota.edu.gh --confirm-domain-verified
 ```
 
-#### Step 6: Create the Institutional Superuser
-Provision the school's head administrator account inside its tenant schema:
+#### `set_school_status` — activate or suspend a school
+
+Refuses to activate unless a verified domain exists, the PostgreSQL schema exists, the
+`core_schoolconfiguration` table exists and no tenant migrations are pending.
+
+| Argument | Required | Meaning |
+| :--- | :--- | :--- |
+| `--schema` | Yes | Target school schema. |
+| `--activate` **or** `--deactivate` | Yes (mutually exclusive) | Action to perform. |
+
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py runschema createsuperuser `
-  --schema achimota_shs `
-  --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py set_school_status --schema achimota_shs --activate
+.\.venv\Scripts\python.exe .\manage.py set_school_status --schema achimota_shs --deactivate
 ```
 
-#### Step 7: Validate and Activate the School
-The `set_school_status` command confirms a verified domain, the tenant schema and configuration table exist, and all tenant-app migrations are applied before activating:
+#### `migrate_legacy_school` — adopt an existing single-school database
+
+Copies an existing `public`-schema school's rows and uploaded files into a **new, inactive** tenant
+schema without destroying the source. It applies tenant migrations to the new schema first, then
+copies tables in foreign-key-safe order (topological sort) and renames referenced uploads to
+`tenants/<schema>/...`. It does **not** require superuser privileges, so it works on Neon, RDS and
+Supabase. Arguments are the same as `provision_school` (`--name`, `--schema`, `--domain`,
+`--confirm-domain-verified`).
+
+> **Before running:** stop the web server and Celery workers, take a backup, and (in `neon_s3`
+> mode) upload the existing `media/` tree to the S3 bucket first, because the copy reads source
+> objects from the configured storage backend. The source `public` data is left untouched.
+
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py set_school_status `
-  --schema "achimota_shs" `
-  --activate `
+.\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py migrate_legacy_school `
+  --name "Atebubu Senior High" --schema "atebubu_shs" `
+  --domain "atebubu.yoursystem.com" --confirm-domain-verified `
   --settings=schoolsystem.settings.production
 ```
 
-The school is now live at `https://achimota.yoursystem.com/`.
+### 7.8 The platform CLI suite (tenancy) — administration, quotas, billing, backups
 
-To suspend access during term breaks or maintenance:
-```powershell
-.\.venv\Scripts\python.exe .\manage.py set_school_status `
-  --schema "achimota_shs" `
-  --deactivate `
-  --settings=schoolsystem.settings.production
-```
+Eight commands provide day-to-day platform operations. All **require `TENANCY_ENABLED=True`**,
+print human-friendly tables (with `--json` for automation), and record every change in an immutable
+platform audit log. Unless stated otherwise, they affect only the database (not school data files).
 
-### 6.3 Existing-School Cutover (`migrate_legacy_school`)
-
-To migrate an existing single-school installation from the `public` schema into a new tenant schema without data loss:
-
-1. Pause web traffic and stop Celery worker and Beat processes.
-2. Back up the PostgreSQL database and storage directory.
-3. Execute the adoption migration command:
-   ```powershell
-   $env:TENANCY_ENABLED = "true"
-   .\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
-   .\.venv\Scripts\python.exe .\manage.py migrate_legacy_school `
-     --name "Atebubu Senior High" `
-     --schema "atebubu_shs" `
-     --domain "atebubu.yoursystem.com" `
-     --confirm-domain-verified `
-     --settings=schoolsystem.settings.production
-   ```
-4. **How It Works**:
-   * **Self-Migrating**: Creates the new schema and applies the tenant app migrations to it before copying any rows, so a fresh cutover does not require a separate `migrate --schema <name>` step first.
-   * Uses Kahn's topological sort algorithm to copy tables in foreign-key dependency order.
-   * **Superuser-Free**: Does not execute `DISABLE TRIGGER ALL`, ensuring full compatibility with cloud databases like Neon, AWS RDS, and Supabase.
-   * Namespaces referenced uploads from `students/photos/...` to `tenants/atebubu_shs/students/photos/...`.
-   * Copies uploads through the configured media backend. When `MEDIA_STORAGE_BACKEND=neon_s3`, upload the legacy `media/` and `.private/` trees to the shared S3 bucket **before** running the command, because the copy reads the source objects from the configured backend (the same rule that already applies to school crests).
-   * Leaves the source `public` data completely untouched for a safe fallback.
-5. Validate data inside `atebubu_shs`, then activate the school and restart services.
-
-### 6.4 Platform CLI Management Suite (Tenant Administration & Billing)
-
-The Eden Platform provides 8 centralized management commands for day-to-day operations across schools, resource capacity auditing, termly billing calculation, feature flag control, backup/restore, and emergency support token generation.
-
-All eight commands support human-friendly terminal tables (with ANSI color codes and Windows-safe ASCII indicators) and a `--json` flag for automated pipelines. Every administrative change is permanently recorded in the immutable `PlatformAuditLog` table.
+Quick reference:
 
 ```powershell
-# Quick Reference of All 8 Platform Management Commands
 .\.venv\Scripts\python.exe .\manage.py tenant_list --all
-.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=<schema_name> --verify
-.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=<schema_name>
-.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=<schema_name> --generate-pdf
-.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema_name> --list
-.\.venv\Scripts\python.exe .\manage.py support_access --schema=<schema_name> --status
-.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema_name> --show
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<schema_name> --dry-run
+.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=<schema> --verify
+.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=<schema>
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=<schema> --generate-pdf
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema> --list
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=<schema> --status
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema> --show
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<schema> --dry-run
 ```
 
----
+#### 1. `tenant_list` — school inventory
 
-#### 1. `tenant_list` — School Inventory & Routing Inspection
+Lists schools with status, plan, student counts and primary domain.
 
-Inspect all schools registered on the platform, view their active status, assigned subscription plan tier, enrolled student headcounts, and primary domain routing addresses.
+| Option | Meaning |
+| :--- | :--- |
+| `--all` / `--active` / `--inactive` | Filter by status (default `--all`). |
+| `--plan {free,starter,standard,premium,pilot,enterprise}` | Filter by plan tier. |
+| `--json` | Raw JSON output. |
+| `--operator NAME` | Identifier recorded in the audit log (default `cli`). |
 
-**Command Syntax**:
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py tenant_list [OPTIONS]
-```
-
-**Options & Plain Explanations**:
-
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--all` | Flag | `True` | Lists every school registered on the platform, whether active or inactive. |
-| `--active` | Flag | — | Filters the list to display **only active** schools currently serving web traffic. |
-| `--inactive` | Flag | — | Filters the list to display **only inactive** schools (e.g. newly provisioned schools not yet launched, or schools suspended for vacation). |
-| `--plan` | String | — | Filters schools by subscription tier. Choices: `free`, `starter`, `standard`, `premium`, `pilot`, `enterprise`. |
-| `--json` | Flag | — | Suppresses terminal tables and outputs raw, machine-readable JSON data with student totals and tenant details. |
-| `--operator` | String | `"cli"` | Sets the administrator username or identifier recorded in the permanent audit trail. |
-
-**Practical Examples**:
-```powershell
-# View all registered schools in a formatted terminal table
-.\.venv\Scripts\python.exe .\manage.py tenant_list --all
-
-# View only currently active schools
 .\.venv\Scripts\python.exe .\manage.py tenant_list --active
-
-# Export active schools and student counts as JSON
 .\.venv\Scripts\python.exe .\manage.py tenant_list --active --json
 ```
 
----
+#### 2. `tenant_backup` — schema-isolated backup
 
-#### 2. `tenant_backup` — Schema-Isolated Database & Media Backup
+Exports one schema (or all active schools) with `pg_dump`, writes a SHA-256 checksum, can archive
+media, and can verify the dump. **Reads the database; writes backup files to disk.**
+`pg_dump` must be on `PATH`.
 
-Exports an isolated school database schema using PostgreSQL's native `pg_dump`, calculates a cryptographic SHA-256 integrity hash, optionally compresses all media uploads (photos and crests), and tests the dump file header.
+| Option | Meaning |
+| :--- | :--- |
+| `--schema NAME` **or** `--all` | Target one schema or every active school (required, mutually exclusive). |
+| `--output-dir PATH` | Destination (default `.private/backups/tenants/`). |
+| `--format {custom,sql}` | `custom` (default, recommended) or plain SQL. |
+| `--include-media` | Also archive tenant media (photos, crests, ID exports) as `.tar.gz`. |
+| `--allow-empty-media` | Permit an empty media archive (only with `--include-media`). |
+| `--verify` | Run `pg_restore -l` to prove the dump is readable. |
+| `--json` | Machine-readable summary. |
+| `--operator NAME` | Audit identifier. |
 
-**Command Syntax**:
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py tenant_backup (--schema=<name> | --all) [OPTIONS]
-```
-
-**Options & Plain Explanations**:
-
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--schema` | String | *Required unless `--all`* | The exact schema name of the school to back up (e.g. `atebubu_test`). |
-| `--all` | Flag | — | Automatically loops through and backs up every active school schema on the platform sequentially. |
-| `--output-dir` | Path | `.private/backups/tenants/` | Custom folder on disk where backup `.dump` and `.sha256` files will be stored. |
-| `--format` | String | `custom` | Dump format: `custom` (compressed binary archive for `pg_restore`, recommended) or `sql` (plain SQL text). |
-| `--include-media` | Flag | — | Packages **every** tenant media root into a compressed `.tar.gz` companion file: public uploads (`MEDIA_ROOT/tenants/<schema>`), private student photos (`PRIVATE_STUDENT_PHOTO_ROOT/tenants/<schema>`), and generated student-ID exports (`.private/student_id_exports/<schema>`). Works against the local filesystem or the configured S3 backend. Fails if no files are found unless `--allow-empty-media` is also passed. |
-| `--allow-empty-media` | Flag | — | Explicitly allow `--include-media` to produce an empty archive when the tenant is expected to have no files. |
-| `--verify` | Flag | — | Immediately executes `pg_restore -l` against the generated dump file to prove the file is uncorrupted and readable. |
-| `--json` | Flag | — | Outputs the backup metadata (file paths, sizes, SHA-256 hashes, timestamps) as JSON. |
-| `--operator` | String | `"cli"` | Records who triggered the backup in the audit log. |
-
-**Practical Examples**:
-```powershell
-# Create an isolated backup of Atebubu SHS with header verification
-.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=atebubu_test --verify
-
-# Create a complete backup of Atebubu SHS including student photos and crest uploads
-.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=atebubu_test --include-media --verify
-
-# Sequentially back up all active schools across the entire platform
+.\.venv\Scripts\python.exe .\manage.py tenant_backup --schema=atebubu_shs --include-media --verify
 .\.venv\Scripts\python.exe .\manage.py tenant_backup --all
 ```
 
----
+#### 3. `tenant_usage` — capacity and consumption
 
-#### 3. `tenant_usage` — Resource Consumption & Capacity Tracking
+Aggregates students, staff, dormitories, SMS sent/failed, exeats and ID exports, and compares them
+to plan quotas. Status badges: `[OK]` (<80%), `[WARNING]` (80–99%), `[EXCEEDED]` (≥100%).
 
-Aggregates operational activity inside a school's schema (enrolled learners, staff user accounts, dormitories, sent/failed SMS notifications, exeat permits, and ID card exports) and checks them against plan quotas.
+| Option | Meaning |
+| :--- | :--- |
+| `--schema NAME` **or** `--all` | Target one school or all active schools. |
+| `--start-date YYYY-MM-DD` / `--end-date YYYY-MM-DD` | Usage window (defaults: 30 days ago → today). |
+| `--json`, `--operator NAME` | As above. |
 
-**Command Syntax**:
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py tenant_usage (--schema=<name> | --all) [OPTIONS]
-```
-
-**Options & Plain Explanations**:
-
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--schema` | String | *Required unless `--all`* | Target school schema name to inspect. |
-| `--all` | Flag | — | Generates a high-level capacity summary table across all active schools. |
-| `--start-date` | String (`YYYY-MM-DD`) | 30 days ago | Beginning of the usage window for counting SMS dispatches, exeat requests, and roll calls. |
-| `--end-date` | String (`YYYY-MM-DD`) | Today | End of the usage window for counting operational events. |
-| `--json` | Flag | — | Outputs all capacity metrics, progress percentages, and cost calculations as JSON. |
-| `--operator` | String | `"cli"` | Administrator identifier recorded in the audit log. |
-
-**Capacity Status Badges**:
-* `[OK]`: Usage is healthy (under 80% of quota).
-* `[WARNING]`: Approaching limit (between 80% and 99% of quota).
-* `[EXCEEDED]`: Quota exceeded (100% or above); school should upgrade plan tier.
-
-**Practical Examples**:
-```powershell
-# View 30-day operational usage and capacity for Atebubu SHS
-.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=atebubu_test
-
-# Inspect usage over a specific academic term window
-.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=atebubu_test --start-date=2026-09-01 --end-date=2026-12-15
-
-# View platform-wide capacity across all active schools
+.\.venv\Scripts\python.exe .\manage.py tenant_usage --schema=atebubu_shs
 .\.venv\Scripts\python.exe .\manage.py tenant_usage --all
 ```
 
----
+#### 4. `tenant_invoice` — termly billing and PDF
 
-#### 4. `tenant_invoice` — 3-Pillar Termly Billing & PDF Generation
+Calculates the three-pillar invoice (software subscription + cloud infrastructure + SMS
+deliverability) and manages invoice records. `--generate-pdf` uses ReportLab and writes to
+`.private/invoices/`.
 
-Calculates and manages commercial billing invoices according to the Eden 3-pillar formula:
-1. **Software Subscription**: Base platform fee + (Students × Monthly rate × 3 months), or flat pilot agreement fee.
-2. **Cloud Infrastructure**: Render compute/workers/Redis + Neon database hosting allocation with service markup margin.
-3. **SMS Deliverability**: Actual delivered parent/guardian SMS messages charged at SMSOnlineGH cost basis with service markup margin.
+| Option | Meaning |
+| :--- | :--- |
+| `--schema NAME` | Required. |
+| `--billing-start` / `--billing-end YYYY-MM-DD` | Billing window. |
+| `--generate-pdf` | Render a PDF invoice. |
+| `--output PATH` | PDF output directory (default `.private/invoices/`). |
+| `--list` | List invoices for the school. |
+| `--show INVOICE_NO` | Print one invoice's line items. |
+| `--mark-paid INVOICE_NO` | Mark an invoice paid. `--payment-ref "..."` records the reference. |
+| `--cancel INVOICE_NO` | Cancel an unpaid invoice. |
+| `--json`, `--operator NAME` | As above. |
 
-**Command Syntax**:
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=<name> [OPTIONS]
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_shs --generate-pdf
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_shs --list
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_shs --mark-paid=INV-ATEBUBU_SHS-202610-001 --payment-ref="MTN-MOMO-9482019"
 ```
 
-**Options & Plain Explanations**:
+#### 5. `tenant_features` — feature flags and quotas
 
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--schema` | String | *Required* | Target school schema name to invoice or manage. |
-| `--billing-start` | String (`YYYY-MM-DD`) | 1st of current month | Start date of the invoiced term or billing cycle. |
-| `--billing-end` | String (`YYYY-MM-DD`) | End of current month | End date of the invoiced term or billing cycle. |
-| `--generate-pdf` | Flag | — | Renders a formal, printable PDF invoice file saved to `.private/invoices/`. |
-| `--output` | Path | `.private/invoices/` | Custom folder on disk where PDF invoices will be written. |
-| `--list` | Flag | — | Lists all historical invoices generated for this school, showing payment status and outstanding balances. |
-| `--show` | String | — | Displays the full itemized breakdown of a specific invoice number (e.g. `--show=INV-ATEBUBU_TEST-202610-001`). |
-| `--mark-paid` | String | — | Marks a specific invoice as paid (e.g. `--mark-paid=INV-ATEBUBU_TEST-202610-001`). |
-| `--payment-ref` | String | `""` | Payment transaction ID (e.g. Mobile Money reference code, bank transfer slip) recorded when marking as paid. |
-| `--cancel` | String | — | Cancels an unpaid draft or issued invoice. |
-| `--json` | Flag | — | Outputs invoice data and itemized calculations as JSON. |
-| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
+**Changes the database.** Enforced by tenant views and services.
 
-**Practical Examples**:
+| Option | Meaning |
+| :--- | :--- |
+| `--schema NAME` | Required. |
+| `--list` | Show features and limits (default action). |
+| `--enable NAME` / `--disable NAME` | Toggle a feature: `roll_call`, `exeat_gate`, `student_id_cards`, `sms_dispatch`, `roster_import`, `advanced_reports`, `priority_support`. |
+| `--set-limit key=value` | Set a quota: `max_students`, `max_staff`, `max_dormitories`, `max_sms_monthly`. |
+| `--reset-to-plan` | Restore the plan tier's defaults. |
+| `--json`, `--operator NAME` | As above. |
+
 ```powershell
-# Generate a new termly invoice and create a PDF file
-.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --generate-pdf
-
-# List all invoices and payment balances for a school
-.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --list
-
-# View line items for a specific invoice
-.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --show=INV-ATEBUBU_TEST-202610-001
-
-# Mark an invoice as paid with a Mobile Money transaction reference
-.\.venv\Scripts\python.exe .\manage.py tenant_invoice --schema=atebubu_test --mark-paid=INV-ATEBUBU_TEST-202610-001 --payment-ref="MTN-MOMO-9482019"
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_shs --enable=exeat_gate
+.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_shs --set-limit=max_students=2000
 ```
 
----
+SMS requires **both** the platform `sms_dispatch` entitlement and the school's own SMS switch.
+Monthly SMS quotas count sent messages plus outstanding queued/processing deliveries.
 
-#### 5. `tenant_features` — Subsystem Feature Flags & Capacity Quotas
+#### 6. `support_access` — time-bound support tokens
 
-Inspects, enables, disables, and adjusts resource boundaries on individual school subscriptions.
+Generates/verifies/revokes 256-bit support tokens (hashed with bcrypt, cost 12) so an engineer can
+troubleshoot one school. The plaintext is shown once and never stored. **Writes audit records.**
 
-**Command Syntax**:
+| Option | Meaning |
+| :--- | :--- |
+| `--schema NAME` | Required. |
+| `--generate` | Create a token. |
+| `--ttl-hours N` | Validity in hours (1–168, default 4). |
+| `--verify TOKEN` | Check a candidate token. |
+| `--revoke` | Invalidate the active token. |
+| `--status` | Show token state and history (default action). |
+| `--reason "..."` | Compliance note (logged). |
+| `--json`, `--operator NAME` | As above. |
+
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<name> [OPTIONS]
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_shs --generate --ttl-hours=4 --reason="Investigating SMS sync"
+.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_shs --revoke --reason="Completed"
 ```
 
-**Options & Plain Explanations**:
+#### 7. `tenant_subscription` — contract and pricing
 
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--schema` | String | *Required* | Target school schema name. |
-| `--list` | Flag | *Default action* | Displays a table of all boolean features and numeric capacity limits with current states. |
-| `--enable` | String | — | Turns ON a feature by name (`roll_call`, `exeat_gate`, `student_id_cards`, `sms_dispatch`, `roster_import`, `advanced_reports`, `priority_support`). |
-| `--disable` | String | — | Turns OFF a feature by name. |
-| `--set-limit` | String (`key=value`) | — | Adjusts a numeric quota boundary. Keys: `max_students`, `max_staff`, `max_dormitories`, `max_sms_monthly`. |
-| `--reset-to-plan` | Flag | — | Resets all features and limits back to the standard defaults of the school's assigned plan tier. |
-| `--json` | Flag | — | Outputs features and limits as JSON. |
-| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
+Configures plan tier, base fee, per-student rate, infrastructure cost/margin, SMS packages and
+currency. **Changes the database.**
 
-**Practical Examples**:
+| Option | Meaning |
+| :--- | :--- |
+| `--schema NAME` | Required. |
+| `--show` | Current contract terms (default action). |
+| `--set-plan {free,starter,standard,premium,pilot,enterprise}` | Set plan tier. |
+| `--set-base-fee`, `--set-rate-per-student` | Termly base fee / monthly per-student rate. |
+| `--set-infra-cost`, `--set-infra-margin` | Cloud cost basis / markup %. |
+| `--include-hosting` / `--exclude-hosting` | Itemise or omit hosting on invoices. |
+| `--set-sms-package {10,20,50,100,200,500,1000,2000,3000,5000}` | SMS package preset. |
+| `--set-sms-cost-basis`, `--set-sms-margin`, `--set-rate-per-sms` | SMS pricing controls. |
+| `--set-currency CODE` | ISO 4217 code (default `GHS`). |
+| `--apply-plan-defaults` | Also reset features/quotas to the new tier's defaults. |
+| `--json`, `--operator NAME` | As above. |
+
 ```powershell
-# View all feature entitlements and limits for Atebubu SHS
-.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --list
-
-# Enable SMS dispatch and student ID card printing
-.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --enable=sms_dispatch
-.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --enable=student_id_cards
-
-# Increase learner capacity limit to 2,000 students
-.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --set-limit=max_students=2000
-
-# Reset all features back to plan tier defaults
-.\.venv\Scripts\python.exe .\manage.py tenant_features --schema=atebubu_test --reset-to-plan
-```
-
-Feature flags are enforced by tenant application views and service entry points.
-SMS requires both the platform `sms_dispatch` entitlement and the school's local
-SMS configuration switch to be enabled; monthly SMS quotas include sent messages
-and outstanding queued/processing deliveries. Student, staff, and dormitory
-quotas are checked when records are created. `priority_support` records the
-contractual support tier and does not change school application permissions.
-
----
-
-#### 6. `support_access` — Cryptographic Time-Bound Support Tokens
-
-Generates, verifies, and revokes temporary access tokens when platform engineers need to troubleshoot a school's schema. Tokens are 256-bit URL-safe random secrets, hashed with `bcrypt` (cost=12), and automatically expire.
-
-**Command Syntax**:
-```powershell
-.\.venv\Scripts\python.exe .\manage.py support_access --schema=<name> [OPTIONS]
-```
-
-**Options & Plain Explanations**:
-
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--schema` | String | *Required* | Target school schema name requiring support access. |
-| `--generate` | Flag | — | Generates a new 256-bit temporary token and prints it once. The plaintext is never stored in the database. |
-| `--ttl-hours` | Integer | `4` | How many hours the token will remain valid before automatically expiring (valid range: 1 to 168 hours / 7 days). |
-| `--verify` | String | — | Verifies whether a candidate plaintext token is currently valid and active for this school schema. |
-| `--revoke` | Flag | — | Immediately revokes and invalidates the active support token, blocking any further use. |
-| `--status` | Flag | *Default action* | Shows whether an active token exists, its expiration time, remaining minutes, and recent support audit history. |
-| `--reason` | String | `""` | Compliance description explaining why access was granted or revoked (permanently logged). |
-| `--json` | Flag | — | Outputs token status and audit trail as JSON. |
-| `--operator` | String | `"cli"` | Administrator username recorded in the audit log. |
-
-**Practical Examples**:
-```powershell
-# Check if an active support token exists for Atebubu SHS
-.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --status
-
-# Generate a 4-hour support token for troubleshooting
-.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --generate --ttl-hours=4 --reason="Investigating SMS sync failures"
-
-# Verify a token provided by an operator
-.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --verify="TOKEN_STRING_HERE"
-
-# Immediately revoke active support access
-.\.venv\Scripts\python.exe .\manage.py support_access --schema=atebubu_test --revoke --reason="Troubleshooting completed"
-```
-
----
-
-#### 7. `tenant_subscription` — Contract Pricing, Plan Tiers & Margins
-
-Configures commercial contract parameters for each school, including plan tier, termly base fees, per-student monthly rates, SMSOnlineGH packaging presets, and Render/Neon cloud infrastructure cost-recovery margins.
-
-**Command Syntax**:
-```powershell
-.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<name> [OPTIONS]
-```
-
-**Options & Plain Explanations**:
-
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--schema` | String | *Required* | Target school schema name. |
-| `--show` | Flag | *Default action* | Displays current contract terms, plan tier, pricing rates, cloud hosting allocation, and SMS packages. |
-| `--set-plan` | String | — | Sets the commercial tier: `free`, `starter`, `standard`, `premium`, `pilot`, `enterprise`. |
-| `--set-base-fee` | Decimal | — | Sets the base platform fee in Ghana Cedis charged at the beginning of each academic term (e.g. `1000.00`). |
-| `--set-rate-per-student` | Decimal | — | Sets the monthly rate charged per enrolled student (e.g. `0.65`). |
-| `--set-infra-cost` | Decimal | — | Sets the monthly cloud hosting cost basis in GHS (default: `150.00`, representing the school's share of Render + Neon). |
-| `--set-infra-margin` | Decimal | — | Sets the service markup percentage applied to hosting costs (default: `15.0` for a 15% margin). |
-| `--include-hosting` | Flag | — | Ensures the cloud hosting fee is itemized as a separate charge line on termly invoices. |
-| `--exclude-hosting` | Flag | — | Omit cloud hosting fees from invoices (useful if hosting is absorbed into the base subscription). |
-| `--set-sms-package` | Integer | — | Selects a standard SMSOnlineGH package preset: `10`, `20`, `50`, `100`, `200`, `500`, `1000`, `2000`, `3000`, `5000`. Auto-calculates unit cost basis. |
-| `--set-sms-cost-basis` | Decimal | — | Sets a custom unit cost basis per SMS message (e.g. `0.02620`). |
-| `--set-sms-margin` | Decimal | — | Sets the service markup percentage applied to SMS messages (default: `15.0` for 15% margin). |
-| `--set-rate-per-sms` | Decimal | — | Directly overrides the final rate charged to the school per SMS message (e.g. `0.0301`). |
-| `--set-currency` | String | — | Sets the 3-letter ISO 4217 currency code (default: `GHS`). |
-| `--apply-plan-defaults` | Flag | — | When changing `--set-plan`, also resets feature flags and quotas to match the new tier's defaults. |
-| `--json` | Flag | — | Outputs contract settings as JSON. |
-| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
-
-**Standard Plan Tiers & Termly Rates**:
-* **Free / Trial**: GH₵0 base fee, GH₵0/student (up to 50 students).
-* **Starter (Essential)**: GH₵500 base/term, GH₵0.50/student/mo (up to 500 students, 10 staff, 10 dorms).
-* **Standard (Recommended)**: GH₵1,000 base/term, GH₵0.65/student/mo (up to 1,500 students, 40 staff, 40 dorms).
-* **Premium (Advanced)**: GH₵2,000 base/term, GH₵0.80/student/mo (up to 2,500 students, 75 staff, 60 dorms).
-* **Pilot (Atebubu SHS)**: Flat GH₵2,500/term agreement (includes up to 2,000 students, full exeat & QR IDs).
-* **Enterprise (Custom)**: GH₵3,000 base/term, GH₵0.60/student/mo (unlimited students, staff, and dormitories; full feature set).
-
-**Practical Examples**:
-```powershell
-# View contract and billing rates for Atebubu SHS
-.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=atebubu_test --show
-
-# Configure Atebubu SHS under the official Pilot agreement
-.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=atebubu_test --set-plan=pilot --apply-plan-defaults
-
-# Configure a school on the Standard tier with plan feature defaults
-.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=amanten_shs --set-plan=standard --apply-plan-defaults
-
-# Apply the GH₵500 SMS package preset (19,083 credits @ GH₵0.02620) with a 15% service markup
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=atebubu_shs --set-plan=pilot --apply-plan-defaults
 .\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=amanten_shs --set-sms-package=500 --set-sms-margin=15.0
-
-# Adjust Render & Neon cloud hosting allocation to GH₵150/mo with 15% markup
-.\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=amanten_shs --set-infra-cost=150.00 --set-infra-margin=15.0
 ```
 
----
+Standard tiers referenced in the code: Free/Trial (GH₵0), Starter (GH₵500/term, GH₵0.50/student/mo),
+Standard (GH₵1,000/term, GH₵0.65/student/mo), Premium (GH₵2,000/term, GH₵0.80/student/mo),
+Pilot (flat GH₵2,500/term), Enterprise (custom). Confirm current pricing with the vendor.
 
-#### 8. `tenant_restore` — Verified Tenant Schema Restore
+#### 8. `tenant_restore` — verified, non-destructive restore
 
-Restores a tenant PostgreSQL schema from a `tenant_backup` archive. The restore is strictly non-destructive: it verifies the dump's SHA-256 checksum and its `pg_restore` table of contents before touching the database, refuses reserved schemas, schemas already registered to a tenant, and schemas that already exist in PostgreSQL, rejects dumps whose embedded schema name does not match the target, and never issues `DROP`, `--clean`, or `--if-exists`.
+Restores a schema from a `tenant_backup` archive. It verifies the SHA-256 checksum and the dump's
+table of contents, refuses reserved/registered/existing schemas and schema-name mismatches, and
+never issues `DROP`, `--clean` or `--if-exists`.
 
-**Command Syntax**:
+| Option | Meaning |
+| :--- | :--- |
+| `--schema NAME` | Required target schema. |
+| `--dump PATH` | Archive to restore (default: newest under the backup dir). |
+| `--checksum PATH` | `.sha256` file (default `<dump>.sha256`). |
+| `--media-archive PATH` | Companion media `.tar.gz` from `tenant_backup --include-media`. |
+| `--backup-dir PATH` | Approved backup directory. |
+| `--dry-run` | Run all checks without restoring. |
+| `--json`, `--operator NAME` | As above. |
+
 ```powershell
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<name> [OPTIONS]
-```
-
-**Options & Plain Explanations**:
-
-| Option | Type | Default | Plain Explanation |
-| :--- | :--- | :--- | :--- |
-| `--schema` | String | *Required* | Target tenant schema name to restore into. |
-| `--dump` | Path | Newest archive under the backup directory | Path to the `pg_dump` custom-format archive to restore. |
-| `--checksum` | Path | `<dump>.sha256` | Path to the `.sha256` checksum file produced by `tenant_backup`. |
-| `--media-archive` | Path | — | Optional companion `.tar.gz` from `tenant_backup --include-media` with the same timestamp as the database dump; validates every entry, refuses path traversal and existing-file overwrites, and restores into the configured file or S3 storages. |
-| `--backup-dir` | Path | `.private/backups/tenants/` | Approved backup directory searched when `--dump` is omitted. |
-| `--operator` | String | `"cli"` | Administrator recorded in the audit log. |
-| `--dry-run` | Flag | — | Runs every integrity and safety check but does not restore anything. |
-| `--json` | Flag | — | Outputs the restore summary as JSON. |
-
-**Practical Examples**:
-```powershell
-# Validate a backup without restoring it (recommended first step)
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs --dump=.private/backups/tenants/atebubu_shs/atebubu_shs.dump --dry-run
-
-# Restore from the newest archive in the approved backup directory
+# Always validate first
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs --dry-run
+# Then restore from the newest archive
 .\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs
-
-# Restore the database and companion media archive from a complete backup
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs `
-  --dump=.private/backups/tenants/atebubu_shs/atebubu_shs_20261017_091800.dump `
-  --media-archive=.private/backups/tenants/atebubu_shs/atebubu_shs_media_20261017_091800.tar.gz
 ```
 
-Media archives are fully validated before database restoration and are restored
-through the configured storage backends. Existing media files are never
-overwritten. If storage fails while restoring media, the command reports the
-failure and removes files already written by that media restore where possible;
-the database schema may already have been restored.
+> **Warning:** restoring overwrites/installs data. Validating with `--dry-run` first is strongly
+> recommended, and restoring into a live school requires authorisation. Existing media files are
+> never overwritten.
+
+### 7.9 Which commands to run when
+
+| Situation | Commands |
+| :--- | :--- |
+| **First local install** | `migrate`, `createsuperuser`, `check` |
+| **Every code update** | `pip install -r requirements.txt` (or `uv sync`), `migrate`, `collectstatic` (production only), restart services |
+| **New school (multi-school)** | `provision_school`, `add_school_domain` (optional), `runschema createsuperuser`, `set_school_status --activate` |
+| **Recurring operations** | `tenant_list`, `tenant_usage`, `tenant_invoice`, `tenant_backup` |
+| **Suspicious/emergency** | `support_access --generate`, then `--revoke` |
 
 ---
 
-## 7. Background Workers & Scheduled Tasks (Celery & Celery Beat)
+## 8. Background Services and Scheduled Tasks
 
-### 7.1 Multi-Tenant Task Execution Model
+### 8.1 What actually needs Celery
 
-Celery workers process asynchronous jobs across all schools while enforcing connection hygiene:
+The application uses **Celery** with **Celery Beat** and **Redis** for:
 
-1. **Socket Isolation (`worker_process_init`)**: Pre-fork worker child processes close all inherited parent database sockets upon spawning, preventing socket-descriptor sharing.
-2. **Schema & Connection Recycling (`task_prerun` / `task_postrun`)**:
-   * Stale/idle database connections are closed.
-   * PostgreSQL search path is reset to `public` before and after every task execution.
-3. **Tenant Context Decoration (`@_with_tenant_schema`)**: Direct tasks (such as `send_sms_delivery_task` and `generate_student_id_export`) accept `tenant_schema` and switch the connection schema context before executing.
+- **SMS delivery** to guardians (`send_sms_delivery_task`).
+- **Scheduled jobs** defined in `CELERY_BEAT_SCHEDULE` (see the table below).
+- **Student ID card export generation** (`generate_student_id_export`).
 
-### 7.2 Scheduled Periodic Tasks Catalog (Celery Beat)
+Redis is the **broker** (`REDIS_URL`). Celery Beat uses the **database scheduler**
+(`django-celery-beat`), so periodic schedules are stored in the `django_celery_beat` tables in the
+`public` schema.
 
-All scheduled periodic tasks are defined in `CELERY_BEAT_SCHEDULE` and automatically fan out across active tenants using `_run_for_each_tenant`:
+**Is Celery mandatory?** For a basic local look at the application, no — you can start only the web
+server. But **SMS will not be sent** and the scheduled tasks below will not run. To use SMS or any
+scheduled job, you must run both a worker and Beat, plus Redis.
 
-| Scheduler Key | Task Path | Interval | Multi-Tenant Behavior | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `dispatch-queued-sms-deliveries` | `core.tasks.dispatch_queued_sms_deliveries` | 60 sec | Fans out to each active tenant | Recovers stale processing deliveries and dispatches up to 100 queued SMS notifications via SMSOnlineGH. |
-| `check-overdue-exeats-for-sms` | `core.tasks.enqueue_overdue_exeat_reminders` | 15 min | Fans out to each active tenant | Identifies approved exeats where the student is currently out and expected return has passed; queues overdue SMS reminders. |
-| `expire-unfinished-roll-calls` | `core.tasks.expire_unfinished_roll_calls` | 60 sec | Fans out to each active tenant | Automatically deletes roll-call sessions that have remained in progress for longer than 1 hour and notifies the session creator. |
-| `cleanup-expired-student-id-exports` | `core.tasks.cleanup_expired_student_id_exports` | 24 hours | Fans out to each active tenant | Deletes generated student ID ZIP archives that have exceeded their expiration date and unlinks the export records. |
+### 8.2 The Celery app
+
+The Celery app is defined in `schoolsystem/celery.py` and named **`schoolsystem`**, and it is loaded
+automatically from `schoolsystem/__init__.py`. That is why every command uses `-A schoolsystem`.
+
+### 8.3 Scheduled periodic tasks
+
+Defined in `schoolsystem/settings/base.py` (`CELERY_BEAT_SCHEDULE`). In multi-school mode each task
+fans out to every active tenant.
+
+| Scheduler key | Task | Interval | What it does |
+| :--- | :--- | :--- | :--- |
+| `dispatch-queued-sms-deliveries` | `core.tasks.dispatch_queued_sms_deliveries` | 60 s | Recovers stale deliveries and sends up to 100 queued SMS. |
+| `check-overdue-exeats-for-sms` | `core.tasks.enqueue_overdue_exeat_reminders` | 15 min | Queues daily overdue-return reminders for students still out. |
+| `expire-unfinished-roll-calls` | `core.tasks.expire_unfinished_roll_calls` | 60 s | Deletes roll-call sessions left in progress more than 1 hour and notifies the creator. |
+| `cleanup-expired-student-id-exports` | `core.tasks.cleanup_expired_student_id_exports` | 24 h | Deletes expired student ID export archives. |
+
+### 8.4 How to run them
+
+**Local (Windows, separate windows, venv active):**
+
+```powershell
+# worker (Windows requires the solo pool)
+.\.venv\Scripts\celery.exe -A schoolsystem worker --pool=solo --concurrency=1 --loglevel=INFO
+# scheduler
+.\.venv\Scripts\celery.exe -A schoolsystem beat --loglevel=INFO
+```
+
+**Local (Linux/macOS):**
+
+```bash
+celery -A schoolsystem worker --loglevel=INFO --concurrency=4
+celery -A schoolsystem beat   --loglevel=INFO
+```
+
+**Production (Render):** run the same commands as Background Workers (`render.yaml` documents the
+optional worker and Beat services — see section 9.4).
+
+Worker connection hygiene (already implemented in `celery.py`): child processes close inherited
+database sockets on start, and every task resets the PostgreSQL `search_path` to `public` before
+and after running, so one school's schema cannot leak into another's over a long-lived connection.
+
+### 8.5 How to check they are working
+
+- The worker log prints `celery@<host> ready` and lists discovered tasks including
+  `core.tasks.dispatch_queued_sms_deliveries`.
+- Beat logs print `Scheduler: Sending due task ...` at the intervals above.
+- To verify SMS end-to-end **without sending real messages**: keep `SMS_ENABLED=false`. Queued
+  deliveries will remain in `SMSDelivery` and the dispatch task logs
+  `remains queued because SMS is disabled`. This proves the plumbing without cost.
+
+### 8.6 Common failure symptoms
+
+| Symptom | Likely cause |
+| :--- | :--- |
+| Worker exits immediately with `unknown command 'HELLO'` | Redis older than 6.0. Upgrade Redis. |
+| Worker crashes with `PermissionError [WinError 5]` on Windows | Missing `--pool=solo --concurrency=1`. |
+| Worker starts but tasks never run | Beat not running, or `REDIS_URL` mismatch between services. |
+| SMS stays `QUEUED` forever | SMS disabled, no worker/Beat, or quota reached. |
+| `Connection refused` to Redis | Redis not running, or wrong `REDIS_URL`. |
+
+### 8.7 SMS and email — safe testing
+
+- **SMS (SMSOnlineGH).** Configure `SMS_ENABLED`, `SMS_ONLINE_GH_API_KEY` and `SMS_SENDER_ID`.
+  **Keep `SMS_ENABLED=false` during every test** to avoid real messages and charges. To test the
+  pipeline safely, leave SMS off and confirm deliveries queue but do not dispatch. Only enable SMS
+  when you intend to send. There is no sandbox mode in the code.
+- **Email.** The default `EMAIL_BACKEND` is the **console** backend: messages are printed to the
+  log and never sent. This is deliberate and safe for staging. To send real mail, set
+  `EMAIL_BACKEND` to an SMTP backend and also configure the standard Django SMTP settings
+  (`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`) — note
+  that only `EMAIL_BACKEND` and `DEFAULT_FROM_EMAIL` are read directly in this project's settings.
+  Verify with `manage.py sendtestemail you@example.com`.
 
 ---
 
-## 8. Daily Operations, Shell & Disaster Recovery
+## 9. Deploying Online: Render + Neon
 
-### 8.1 Tenant-Aware Django Shell
+This section describes the architecture the repository is actually built for: a **Render Web
+Service** running Gunicorn, an external **Neon PostgreSQL** database, optional **Render Background
+Workers** for Celery, and optional **Neon object storage** for media. The repository ships a
+`render.yaml` Blueprint and a `Procfile` for this setup.
 
-In multi-tenant mode, querying the database in a standard shell defaults to `public`, where `auth_user` and `core_*` tables do not exist. Use one of two tenant-aware patterns:
+### 9.1 Prepare the codebase
 
-#### Method 1: Run the Shell in a Tenant Schema (Recommended)
-```powershell
-.\.venv\Scripts\python.exe .\manage.py runschema shell --schema achimota_shs --settings=schoolsystem.settings.production
+1. **Check your working tree.** Preserve any uncommitted work before deploying.
+   ```powershell
+   git status
+   git add -A
+   git commit -m "Prepare production deploy"
+   ```
+2. **Confirm dependencies are complete.** `requirements.txt` is the file Render installs. If you
+   changed `pyproject.toml`, regenerate it:
+   ```powershell
+   uv export --format requirements.txt --no-hashes --locked --output-file requirements.txt
+   ```
+3. **Verify the production settings** load (this also validates `DATABASE_PROFILE=neon`,
+   `PGSSLMODE`, `DJANGO_SECRET_KEY`, and the S3 variables if used):
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py check --deploy --settings=schoolsystem.settings.production
+   ```
+   > A `security.W004` (HSTS) warning is expected if `SECURE_HSTS_SECONDS=0`. That is normal for a
+   > staging host you may still reach over HTTP. Do **not** disable security checks to silence it.
+4. **Confirm migrations are committed** (`core/migrations`, `tenancy/migrations`,
+   `website/migrations`).
+5. **Never commit** `.env`, `media/`, `.private/`, `staticfiles/` or `.dump` files — all are
+   git-ignored already.
+
+### 9.2 Configure Neon PostgreSQL
+
+1. Sign in at <https://console.neon.tech/> and create (or select) a project, choosing the region
+   nearest your users.
+2. Open **Dashboard → Connection Details** and copy the **direct** connection parameters
+   (host, database, user, password, port).
+   > **Use the direct host, not the `-pooler` host.** Multi-school isolation depends on a
+   > session-level `search_path`. Neon's pooled endpoint runs PgBouncer in transaction mode, which
+   > does not preserve that state between statements, so a request could resolve against the wrong
+   > school's schema. Never point `PGHOST` at a host containing `-pooler` — not for the web
+   > service, and not for migrations.
+3. Map the values to `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGPORT`, `PGSSLMODE`. Use
+   `PGSSLMODE=require` (or `verify-full` for stricter validation).
+4. Store the connection details as **secret environment variables in Render** (section 9.5). Never
+   commit them.
+5. **Verify connectivity without exposing the secret** by running a migration from your machine
+   once the variables are available in your environment:
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
+   ```
+6. **Do not copy a local SQLite database into Neon** — this project does not use SQLite. To move
+   data between PostgreSQL databases, use `pg_dump`/`pg_restore` or the `tenant_backup`/
+   `tenant_restore` commands.
+
+### 9.3 Configure Neon object storage for media (only if needed)
+
+If `MEDIA_STORAGE_BACKEND=neon_s3`:
+
+1. In the Neon dashboard open **Storage**, create a private bucket (for example `uploads`).
+2. Generate S3 credentials with read and write scopes.
+3. Record the endpoint URL, region, Access Key ID and Secret Key and map them to
+   `NEON_STORAGE_BUCKET`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`,
+   `AWS_SECRET_ACCESS_KEY`.
+
+All five are required together; the app refuses to start if any is missing. For a filesystem-only
+staging deploy, leave `MEDIA_STORAGE_BACKEND=filesystem` — but note that on Render the local disk is
+ephemeral, so uploaded files (student photos, crests) are **lost on every redeploy**. Use S3 for
+anything you care about.
+
+### 9.4 Configure Render
+
+You can apply the included Blueprint or configure services by hand.
+
+**Option A — Blueprint (`render.yaml`).** In the Render dashboard choose **New → Blueprint**, select
+this repository, and apply. The Blueprint defines one web service (`shs-boarding-staging`) with the
+build command, start command, health-check path, and environment-variable **names** (secrets are
+`sync: false` and must be entered by you). It deliberately does **not** declare a Render database,
+because Neon is external.
+
+**Option B — Manual configuration.**
+
+Web Service:
+
+| Setting | Value |
+| :--- | :--- |
+| Type | Web Service (Python) |
+| Root directory | repository root (contains `manage.py`) |
+| Build command | `pip install -r requirements.txt && python manage.py collectstatic --noinput --settings=schoolsystem.settings.build` |
+| Start command | `gunicorn schoolsystem.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --threads 2 --timeout 60` |
+| Health check path | `/healthz` |
+| Python version | `3.12` (set `PYTHON_VERSION=3.12`) |
+
+The health path `/healthz` (and `/live`) is served directly by the tenant-routing middleware and
+bypasses tenant resolution, so it works before any school is configured.
+
+Optional Background Workers (required for SMS and scheduled jobs):
+
+| Service | Start command |
+| :--- | :--- |
+| Worker | `celery -A schoolsystem worker --loglevel=INFO` |
+| Beat | `celery -A schoolsystem beat --loglevel=INFO` |
+
+Give both the same environment variables as the web service, plus `REDIS_URL`. Provision a Render
+Key Value (Redis) instance, or an external Redis 6+ instance, and put its URL in `REDIS_URL` for all
+three services. The `Procfile` in the repository defines equivalent `web`, `worker` and `beat`
+processes if your platform uses it.
+
+### 9.5 Production environment variables (Render dashboard)
+
+Set these on **every** service that needs them (web, and worker/beat if used). All are secrets or
+host-specific; use the exact names.
+
+```env
+DJANGO_SETTINGS_MODULE=schoolsystem.settings.production
+PYTHON_VERSION=3.12
+DATABASE_PROFILE=neon
+TENANCY_ENABLED=True
+PGHOST=ep-xxxx.<region>.aws.neon.tech          # DIRECT host, never a -pooler host
+PGDATABASE=your_database_name
+PGUSER=your_neon_user
+PGPASSWORD=your_neon_password
+PGPORT=5432
+PGSSLMODE=require
+DJANGO_SECRET_KEY=at-least-50-random-characters-kept-secret
+CSRF_TRUSTED_ORIGINS=https://your-app.onrender.com,https://school.example.com
+REDIS_URL=redis://<host>:6379
+MEDIA_STORAGE_BACKEND=neon_s3
+NEON_STORAGE_BUCKET=uploads
+AWS_ENDPOINT_URL_S3=https://<bucket>.storage.<region>.neon.tech
+AWS_REGION=<region>
+AWS_ACCESS_KEY_ID=<access-key>
+AWS_SECRET_ACCESS_KEY=<secret-key>
+SMS_ENABLED=False                # keep False until you are ready to send real SMS
+SMS_ONLINE_GH_API_KEY=<key>
+SMS_SENDER_ID=<sender id>
+EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+CACHE_BACKEND=django.core.cache.backends.redis.RedisCache
+CACHE_LOCATION=redis://<host>:6379/1
+TRUSTED_PROXY_COUNT=1
+SECURE_HSTS_SECONDS=0            # raise to 31536000 once HTTPS is confirmed
+PUBLIC_WEBSITE_DOMAIN=           # e.g. ecreativesys.com,www.ecreativesys.com
+PUBLIC_WEBSITE_ENABLED=True
+SITE_URL=                        # e.g. https://ecreativesys.com
+EDEN_PORTAL_LOGIN_URL=
+PRICING_PUBLIC_ENABLED=False
+DEMO_REQUEST_NOTIFY_EMAILS=
 ```
 
-#### Method 2: Dynamic Schema Switching Inside the Shell
-```python
-from tenancy.models import Tenant
-from django_pgschemas.schema import activate, activate_public
+Notes:
 
-# Look up and activate the target school
-tenant = Tenant.objects.get(schema_name="achimota_shs")
-activate(tenant)
+- **`ALLOWED_HOSTS` is ignored while `TENANCY_ENABLED=True`** (forced to `*`); tenant hostnames
+  come from the `Domain` table. In single-school production you must set `ALLOWED_HOSTS` to your
+  explicit hostnames.
+- `CACHE_BACKEND` defaults to a per-process `LocMemCache`. Point it at the shared Redis backend (as
+  above) so rate limits apply across all workers.
+- `EMAIL_BACKEND` defaults to the console backend and never sends real mail.
+- Do not add the public marketing hostname (for example `ecreativesys.com`) to the `Domain` table;
+  it is served by the public-host bypass and registering it as a tenant would show a school
+  dashboard at the marketing address.
 
-# All ORM queries now operate strictly inside 'achimota_shs'
-from core.models import Student, SchoolConfiguration, Exeat
-print("School Name:", SchoolConfiguration.get_solo().name)
-print("Enrolled Students:", Student.objects.filter(status=Student.EnrollmentStatus.ENROLLED).count())
+### 9.6 Production security (what the code already enforces)
 
-# Return to public schema when finished
-activate_public()
+`schoolsystem/settings/production.py` and `base.py` already:
+
+- Force `DEBUG=False`.
+- Require `DATABASE_PROFILE=neon`, a valid `PGSSLMODE`, and a strong `DJANGO_SECRET_KEY`.
+- Set `SECURE_SSL_REDIRECT=True`, secure session/CSRF cookies, `SECURE_PROXY_SSL_HEADER`, secure
+  referrer policy, `SECURE_CONTENT_TYPE_NOSNIFF`, and `SECURE_BROWSER_XSS_FILTER`.
+- Set HSTS (default one year) and enforce that preload/subdomain options require HSTS first.
+- Add a **report-only** Content-Security-Policy with a per-request nonce.
+- Replace Django's CSRF middleware with `DynamicCsrfMiddleware`, which trusts verified tenant
+  domains and rejects protocol-downgrade origins.
+
+You generally should **not** change these. Do not disable them to make a deployment succeed.
+
+### 9.7 First deployment: migrations and the first administrator
+
+Migrations must run once against the new database. On a **paid** Render instance you can enable the
+`preDeployCommand` in `render.yaml` (it is commented out because it requires a paid instance type)
+so migrations run automatically before traffic is accepted. On the **free** tier, run them once from
+the Render Shell after the first deploy:
+
+```bash
+python manage.py migrate --schema public --settings=schoolsystem.settings.production
+python manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
 ```
 
-### 8.2 Static Assets Collection (`collectstatic`)
+Create the first administrator:
 
-Static assets (JavaScript, CSS, fonts, admin assets, and HTMX libraries) are compiled once globally and served via WhiteNoise:
-
-```powershell
-.\.venv\Scripts\python.exe .\manage.py collectstatic --noinput --settings=schoolsystem.settings.production
-```
-
-* **Static Files (`/static/`)**: Shared, immutable frontend code bundles.
-* **Media Uploads (`/media/` or S3)**: Tenant-specific dynamic files (school crests, student portraits). These are stored under `tenants/<schema_name>/...` and never mixed with static code.
-
-### 8.3 Tenant Database Backup & Restoration
-
-For routine platform operations, prefer the managed `tenant_backup` and `tenant_restore` commands (see §6.4), which add SHA-256 integrity verification and refuse to drop or overwrite existing objects. The raw `pg_dump`/`pg_restore` recipes below are for manual or offline recovery.
-
-To back up an individual school tenant without dumping the entire PostgreSQL database:
-
-#### 1. Dump a Tenant Schema
-```powershell
-# Binary archive format (recommended for pg_restore):
-pg_dump -h <host> -U <user> -d <db_name> -n achimota_shs -F c -f "backup_achimota_shs_$(Get-Date -Format 'yyyyMMdd_HHmmss').dump"
-
-# Or plain SQL format:
-pg_dump -h <host> -U <user> -d <db_name> --schema=achimota_shs -f "backup_achimota_shs.sql"
-```
-
-#### 2. Dump the Platform Directory (Public Schema)
-Preserves tenant registry, verified domains, and Celery beat schedules:
-```powershell
-pg_dump -h <host> -U <user> -d <db_name> -n public -F c -f "backup_public_$(Get-Date -Format 'yyyyMMdd_HHmmss').dump"
-```
-
-#### 3. Back Up Tenant Files
-* **Local Filesystem**: Back up `media/tenants/<schema_name>/`, `.private/student_photos/tenants/<schema_name>/`, and `.private/student_id_exports/<schema_name>/`.
-* **Neon S3 Object Storage**: Copy the tenant prefix:
-  ```powershell
-  aws s3 sync s3://<bucket_name>/tenants/achimota_shs/ ./backup_files_achimota/ --endpoint-url <endpoint>
+- **Single-school production:** `python manage.py createsuperuser --settings=schoolsystem.settings.production`
+- **Multi-school production:** provision a school, then create its administrator inside its schema:
+  ```bash
+  python manage.py provision_school --name "School Name" --schema school_schema \
+    --domain school.example.com --confirm-domain-verified --settings=schoolsystem.settings.production
+  python manage.py runschema createsuperuser --schema school_schema --settings=schoolsystem.settings.production
+  python manage.py set_school_status --schema school_schema --activate --settings=schoolsystem.settings.production
   ```
 
-#### 4. Restore a Tenant Schema
-```powershell
-pg_restore -h <host> -U <user> -d <db_name> -n achimota_shs "backup_achimota_shs.dump"
-```
+Never create a production superuser with a default, guessable password.
 
-### 8.4 Resetting or Decommissioning a Tenant Schema
+### 9.8 Post-deployment verification checklist
 
-#### Scenario A: Resetting School Data (Truncating Without Dropping Schema)
-To wipe all student, attendance, exeat, and staff records for a fresh cycle while keeping migrations, schema structure, and domain configurations intact:
+Test with **synthetic or appropriately protected data only.**
 
-```sql
--- Connect to the database and run within the target schema:
-DO $$
-DECLARE
-    r RECORD;
-BEGIN
-    FOR r IN (
-        SELECT tablename 
-        FROM pg_tables 
-        WHERE schemaname = 'achimota_shs' 
-          AND tablename NOT IN ('django_migrations')
-    ) LOOP
-        EXECUTE 'TRUNCATE TABLE achimota_shs.' || quote_ident(r.tablename) || ' CASCADE';
-    END LOOP;
-END $$;
-```
+| Check | How |
+| :--- | :--- |
+| Web service healthy | Render shows the service live; `https://your-app.onrender.com/healthz` returns `{"status": "ok"}`. |
+| Home page and login | Open a school hostname; you are redirected to `/login/`. |
+| Database connectivity | Log in; make a small change (e.g. save configuration) and reload. Check deploy logs for database errors. |
+| Authentication and roles | Log in as each role and confirm accessible pages. |
+| School/tenant isolation | With tenancy on, confirm host A shows only school A's data; an unregistered host returns 404. |
+| Static files | Pages load with styling (WhiteNoise serving `output.css`). |
+| Uploaded media | Upload a school crest/student photo; confirm it appears (and persists after a redeploy if using S3). |
+| Student records and dormitories | Create a house, dormitory, room and student. |
+| Roll call, exeats, gate | Start a roll call; request and approve an exeat; record gate departure/return. |
+| QR ID cards | Export ID cards; scan a card's QR and confirm the public page loads (requires `student_id_cards`). |
+| SMS | Keep `SMS_ENABLED=false`. Confirm deliveries queue without sending. |
+| Email | `manage.py sendtestemail` with a real backend. |
+| Background tasks | Worker/Beat logs show tasks being received and sent. |
+| Error logs | Review Render logs for tracebacks. |
 
-After truncating, re-seed the required `SchoolConfiguration` singleton:
-```powershell
-.\.venv\Scripts\python.exe .\manage.py runschema shell --schema achimota_shs -c "from core.models import SchoolConfiguration; SchoolConfiguration.objects.get_or_create(id=1, defaults={'name': 'Achimota Senior High', 'short_name': 'ACHIMOTA'})"
-```
+**Diagnosing which layer failed:**
 
-#### Scenario B: Complete Decommissioning (Dropping a Tenant Schema)
-To permanently delete a school:
-
-1. **Deactivate the school**:
-   ```powershell
-   .\.venv\Scripts\python.exe .\manage.py set_school_status --schema "achimota_shs" --deactivate --settings=schoolsystem.settings.production
-   ```
-2. **Drop the PostgreSQL schema**:
-   ```sql
-   DROP SCHEMA IF EXISTS achimota_shs CASCADE;
-   ```
-3. **Delete the Tenant record** (cascades and deletes registered `Domain` records in `public`):
-   ```powershell
-   .\.venv\Scripts\python.exe .\manage.py shell -c "from tenancy.models import Tenant; Tenant.objects.filter(schema_name='achimota_shs').delete()"
-   ```
-4. **Remove isolated tenant files**:
-   ```powershell
-   Remove-Item -Recurse -Force "media/tenants/achimota_shs"
-   ```
+- **Code** → a Python traceback in the logs, reproducible locally.
+- **Database** → `OperationalError`, timeouts, `relation "..." does not exist` (often pending
+  migrations or wrong schema).
+- **Environment variables** → `ImproperlyConfigured` at start-up naming the missing setting.
+- **Network** → connection refused/timeouts to Redis or Neon.
+- **External service** → SMS/gateway errors logged against `SMSDelivery.last_error`.
 
 ---
 
-## 9. Core System Workflows & Access Control
+## 10. Database Updates, Backups and Maintenance
 
-### 9.1 Staff Roles & Jurisdictional Matrix
+### 10.1 Updating an installed application
 
-| Role | System Scope | Permissions |
+1. **Back up first** (section 10.2).
+2. **Pull the new code:**
+   ```powershell
+   git pull
+   ```
+3. **Install any new dependencies:**
+   ```powershell
+   pip install -r requirements.txt      # or: uv sync --locked
+   ```
+4. **Look for new migrations** before applying them:
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py showmigrations --settings=schoolsystem.settings.development
+   ```
+5. **Apply migrations** (you normally do **not** run `makemigrations` on a server):
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py migrate --settings=schoolsystem.settings.development
+   ```
+   In multi-school mode also apply to tenant schemas:
+   ```powershell
+   .\.venv\Scripts\python.exe .\manage.py migrate --include-dynamic-schemas --settings=schoolsystem.settings.production
+   ```
+6. **Rebuild static assets if CSS changed:**
+   ```powershell
+   npm run build
+   npm run build:site
+   .\.venv\Scripts\python.exe .\manage.py collectstatic --noinput --settings=schoolsystem.settings.build
+   ```
+7. **Restart / redeploy** (Render redeploys automatically on push).
+8. **Verify:** run `manage.py check`, open the site, log in, load a school page.
+9. **If it fails:** Render keeps the previous deploy — use **Rollback**. Reverting code does not
+   undo applied migrations, so review the migration before rolling back.
+
+`makemigrations` **creates** migration files; `migrate` **applies** them. Never delete migrations,
+drop production tables, or reset the production database as routine troubleshooting.
+
+### 10.2 Backing up
+
+**Preferred (per-school):** `tenant_backup` (section 7.8) with `--include-media --verify`.
+
+**Manual, whole database (PostgreSQL):**
+
+```powershell
+# Full database
+pg_dump -h <host> -U <user> -d <db_name> -F c -f "backup_full.dump"
+# One tenant schema
+pg_dump -h <host> -U <user> -d <db_name> -n <schema> -F c -f "backup_<schema>.dump"
+# Platform/public schema (tenant registry, domains, beat schedules)
+pg_dump -h <host> -U <user> -d <db_name> -n public -F c -f "backup_public.dump"
+```
+
+Type your password at the prompt, or set `PGPASSWORD` in the environment for the command only.
+Never paste the password into a script that is committed.
+
+**Media files:**
+
+- **Filesystem mode:** back up `media/`, `.private/student_photos/`, `.private/student_id_exports/`
+  (and, per school, the `tenants/<schema>/` subfolders).
+- **S3 mode:** sync the bucket prefix, e.g.
+  ```powershell
+  aws s3 sync s3://<bucket>/tenants/<schema>/ ./backup_<schema>_files/ --endpoint-url <endpoint>
+  ```
+
+### 10.3 Restoring
+
+- **Per-school:** `tenant_restore --schema <name> --dry-run` first, then without `--dry-run`.
+- **Whole database / public schema:** use `pg_restore` into a database. For the public schema in
+  multi-school mode this is dangerous — the schema registry (`tenancy_tenant`, `tenancy_domain`) is
+  what prevents a hostname resolving to the wrong school.
+  > **Warning:** restoring can overwrite newer data and, for the public schema, change which school
+  > a hostname points to. Production restores need careful verification and authorisation. Prefer
+  > restoring into a fresh database first, verifying it, and only then switching.
+
+### 10.4 Resetting or decommissioning a school (multi-school)
+
+- **Reset school data while keeping the schema:** truncate the school's tables except
+  `django_migrations` (advanced SQL; back up first), then re-seed `SchoolConfiguration`.
+- **Decommission a school:** `set_school_status --deactivate`, drop the schema
+  (`DROP SCHEMA <name> CASCADE`), delete the `Tenant` record (this also removes its `Domain` rows),
+  and remove that school's media folder or S3 prefix. **This is irreversible — back up first.**
+
+---
+
+## 11. Multi-School Tenancy Rollout
+
+Follow this runbook to onboard and verify a school. Each step is also documented with its command
+options in section 7.
+
+```
+Step 1  Set TENANCY_ENABLED=true
+Step 2  migrate --schema public
+Step 3  provision_school            (creates schema, migrates apps, seeds config; still inactive)
+Step 4  add_school_domain           (optional: extra hostnames/aliases)
+Step 5  seed_synthetic_pilot        (optional: rehearsal data on a dedicated staging DB)
+Step 6  runschema createsuperuser --schema <name>
+Step 7  set_school_status --activate
+        -> School is live at https://<its-hostname>/
+```
+
+```powershell
+# 2) public/schema migrations
+.\.venv\Scripts\python.exe .\manage.py migrate --schema public --settings=schoolsystem.settings.production
+# 3) provision
+.\.venv\Scripts\python.exe .\manage.py provision_school --name "Achimota Senior High" `
+  --schema achimota_shs --domain achimota.yoursystem.com --confirm-domain-verified `
+  --settings=schoolsystem.settings.production
+# 6) administrator inside the schema
+.\.venv\Scripts\python.exe .\manage.py runschema createsuperuser --schema achimota_shs `
+  --settings=schoolsystem.settings.production
+# 7) activate
+.\.venv\Scripts\python.exe .\manage.py set_school_status --schema achimota_shs --activate `
+  --settings=schoolsystem.settings.production
+```
+
+**Isolation guarantees:** every school's data lives in its own PostgreSQL schema; schema names are
+validated and cannot collide with reserved names; at most one primary domain per school; and any
+request to an unknown, unverified or inactive hostname receives a **404**. Remember there are no
+wildcards — every hostname (including each subdomain) needs its own verified `Domain` row.
+
+To convert an existing single-school install, use `migrate_legacy_school` (section 7.7).
+
+---
+
+## 12. Core Workflows and Access Control
+
+### 12.1 Staff roles
+
+| Role | Scope | Typical abilities |
 | :--- | :--- | :--- |
-| **Administrator (`ADMIN`)** | Entire School | Full system configuration, academic terms, SMS configuration, staff role assignment, student registry, housemaster assignments, audit logs. |
-| **Senior Housemaster (`SENIOR_HOUSEMASTER`)** | All Houses & Dorms | School-wide student registry viewing, exeat approval across all houses, roll-call reconciliation, disciplinary records, ID card generation. |
-| **Housemaster (`HOUSEMASTER`)** | Assigned House Only | Scoped to assigned house. Approve exeats for house students, conduct evening roll calls, follow up on absences, view house student records. |
-| **House Tutor (`HOUSE_TUTOR`)** | Assigned House Only | Create and view exeat requests, record disciplinary incidents, and view house student records within the assigned house. Cannot approve exeats, run roll call, or access gate operations. |
-| **Gate Officer (`GATE_OFFICER`)** | Main Gate | Dedicated gate scanner interface. Record actual departure and arrival times for students on approved exeat. Read-only exeat verification. |
+| **Administrator (`ADMIN`)** | Whole school | Full configuration, terms, SMS, staff and student registry, audit logs. |
+| **Senior Housemaster (`SENIOR_HOUSEMASTER`)** | All houses | School-wide student views, exeat approval across houses, roll-call reconciliation, discipline, ID cards. |
+| **Housemaster (`HOUSEMASTER`)** | Assigned house | Approve house exeats, run roll calls, follow up absences, view house students. |
+| **House Tutor (`HOUSE_TUTOR`)** | Assigned house | Create/view exeat requests, record incidents, view house students. Cannot approve exeats, run roll call or use gate. |
+| **Gate Officer (`GATE_OFFICER`)** | Main gate | Gate scanner, record departures/returns, read-only exeat verification. |
 
-### 9.2 Student Roster Import Specifications
+Roles are assigned via user profiles (Django admin). Some pages are also gated by the school's
+**subscription features** (`exeat_gate`, `roll_call`, `student_id_cards`, `roster_import`,
+`advanced_reports`). A school with no subscription falls back to Free-plan defaults, which disable
+`exeat_gate`, `student_id_cards` and `sms_dispatch` — see section 13.7.
 
-Administrators can import student rosters via modern Excel (`.xlsx`) or UTF-8 CSV up to 10 MB and 2,000 rows.
+### 12.2 Student roster import
 
-Header names are matched case-insensitively and accept common aliases (for example `AdmissionNumber`, `IndexNo`, `Name`, `Form`, `Dorm`, `ParentPhone`).
+Via the web (`/students/import/`) or `import_roster`. Excel `.xlsx` or UTF-8 CSV, up to 10 MB and
+2,000 rows. Header names are matched case-insensitively with common aliases.
 
-* **Required Columns**: `Admission No`, `Index No`, `Full Name`, `Gender` (`Male`/`Female`), `Programme`.
-* **Optional Columns**: `Date of Birth` (`YYYY-MM-DD` or `DD/MM/YYYY`), `Class`, `Residency` (`Boarder`/`Day`), `House`, `Dormitory`, `Room`, `Status` (enrollment), `Guardian Name`, `Guardian Phone`, `Guardian Alt Phone`.
-* **Validation Rules**:
-  * Duplicate admission or index numbers reject the entire import batch.
-  * Boarding students must resolve to a valid house and gender-compatible dormitory block.
-  * If room capacity is exceeded, the upload is rejected.
-  * Importer never silently updates or overwrites existing students.
+- **Required:** Admission No, Index No, Full Name, Gender (`Male`/`Female`), Programme.
+- **Optional:** Date of Birth (`YYYY-MM-DD` or `DD/MM/YYYY`), Class, Residency (`Boarder`/`Day`),
+  House, Dormitory, Room, Status, Guardian Name, Guardian Phone, Guardian Alt Phone.
+- **Rules:** duplicate admission/index numbers reject the whole batch; boarders need a valid,
+  gender-compatible house/dormitory; room capacity is enforced; existing students are never
+  silently overwritten.
 
-**Headless Import (CLI)**: `python manage.py import_roster <path/to/roster.csv|.xlsx>` performs the same validation and import without the web UI. In multi-tenant mode, select the target school with `--schema`:
-```powershell
-.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx --schema achimota_shs
-```
-
-### 9.3 Exeat Life Cycle & SMS Notifications
+### 12.3 Exeat life cycle and SMS
 
 ```
-[ Student Exeat Request ] ──> [ Housemaster Review ] ──> (Approved)
-                                        │                      │
-                                   (Rejected)                  ▼
-                                        │             [ SMS: Approved ]
-                                        ▼                      │
-                                 [ SMS: Rejected ]             ▼
-                                                      [ Main Gate Departure ]
-                                                               │
-                                                               ▼
-                                                      [ SMS: Left Campus ]
-                                                               │
-                                                               ▼
-                                                      [ Main Gate Return ]
-                                                               │
-                                                               ▼
-                                                      [ SMS: Safe Return ]
+Request -> Housemaster review -> (Approved) -> SMS: Approved -> Gate departure -> SMS: Left campus
+                              -> (Rejected) -> SMS: Rejected                    -> Gate return -> SMS: Safe return
 ```
+Submitting a request queues an "awaiting approval" SMS. If an approved student is not back by the
+expected time, the overdue task queues daily reminders until they return.
 
-* **Request Acknowledgement**: Submitting an exeat request queues an "awaiting approval" SMS to the guardian (`SMSDelivery.EventType.REQUESTED`).
-* **Overdue Alerts**: If an approved student fails to return by their `expected_return` timestamp, Celery Beat detects the overdue state and dispatches daily SMS alerts to guardians until the student is recorded returned.
+### 12.4 Roll call
 
-### 9.4 Roll-Call Attendance Verification
+Sessions start with students Unmarked; active gate departures set a student to On Exeat; sessions
+left in progress expire after one hour; unexcused absences enter the follow-up queue.
 
-* Sessions begin with students marked **Unmarked**.
-* Active gate departures automatically set the student to **On Exeat**.
-* In-progress roll calls expire automatically after 1 hour if left unfinished to prevent stale roster locks.
-* Unexcused absences enter the Authorized Follow-Up queue for investigation.
+### 12.5 Student ID cards and public QR checks
 
-### 9.5 Student ID Cards & Public QR Bearer Checks
+Print CR80 cards with a portrait and a QR code pointing to `/verify/student/<token>/`. Scanning
+shows only whether an active approved movement is recorded and whether a departure was logged — it
+**never** shows the student's name, photo, admission number or exeat details. The public page also
+accepts a movement concern, stored for admin review. Administrators can invalidate and reissue a
+token if a card is lost. The public verification page requires the `student_id_cards` feature.
 
-* Print CR80-sized dual-sided student ID cards with high-resolution portraits.
-* Back side features a unique QR code pointing to `/verify/student/<public_token>/`.
-* **Privacy Controls**: Scanning the QR code shows whether an active approved movement is recorded and whether gate departure was logged. It does not display the student's name, photo, admission number, or exeat details.
-* **Movement concerns**: The public scan page lets a person submit a concern for staff review. Reports are saved as open records in Django Admin under **Public Movement Concern Reports** (`/admin/core/movementconcernreport/`).
-* Administrators can invalidate and reissue public tokens instantly if an ID card is lost.
+### 12.6 Key URL routes
+
+| Path | Purpose |
+| :--- | :--- |
+| `/login/`, `/logout/`, `/` | Staff login, logout, dashboard |
+| `/students/`, `/students/new/`, `/students/import/` | Student registry, registration, import |
+| `/students/<uuid>/id-card/` | Student ID card |
+| `/verify/student/<uuid>/` | Public QR verification |
+| `/exeats/`, `/exeats/new/`, approvals, review | Exeat workflow |
+| `/operations/roll-call/`, `/operations/gate/` | Roll call, gate |
+| `/conduct/`, `/reports/`, `/configuration/` | Discipline, reports, configuration |
+| `/admin/` | Django admin |
+| `/site/` | Public marketing site (local preview when tenancy is off) |
+| `/healthz` | Health probe (served by middleware) |
 
 ---
 
-## 10. Operational Troubleshooting & FAQs
+## 13. Troubleshooting
 
-### 10.1 Celery Multiprocessing Error on Windows
-* **Symptom**: `PermissionError: [WinError 5] Access is denied` when starting Celery worker.
-* **Cause**: Python's `billiard` multiprocessing library cannot fork on Windows.
-* **Fix**: Always start workers on Windows with `--pool=solo --concurrency=1`:
+> Diagnoses below distinguish **confirmed** behaviour (verified in the code) from **likely** causes.
+> Sources of truth: `schoolsystem/settings/*`, `tenancy/middleware.py`, `schoolsystem/celery.py`,
+> and the management-command sources.
+
+### 13.1 Virtual environment / Python errors
+
+- **Observed:** `python: command not found`, or `Couldn't import Django`.
+- **Cause:** Python not on PATH, or the virtual environment is not activated.
+- **Check/fix:** run `py -3.12 --version` (Windows) or `python3.12 --version`; activate the venv;
+  or call `.\.venv\Scripts\python.exe` directly. Confirm Django with
+  `.\.venv\Scripts\python.exe -c "import django; print(django.get_version())"` (expect `6.0.9`).
+
+### 13.2 Dependency installation failures
+
+- **Observed:** `pip install` errors building `psycopg`, `pillow`, `pandas` or `numpy`.
+- **Cause:** missing build tools or a wrong Python version.
+- **Fix:** ensure Python 3.12; prefer the pinned `psycopg[binary]` (already in `pyproject.toml`); on
+  Windows install "Desktop development with C++" if a wheel is unavailable. `uv sync --locked` is
+  the most reproducible option.
+
+### 13.3 Missing environment variables / settings will not load
+
+- **Observed:** `ImproperlyConfigured` such as "Production requires DATABASE_PROFILE=neon ..." or
+  "requires these environment variables: PGHOST, ...".
+- **Cause:** a required variable is unset.
+- **Check/fix:** confirm `.env` exists and is complete (section 6). Production checks the secret
+  key length/entropy, `PGSSLMODE`, and (for S3) all five storage variables.
+
+### 13.4 Database connection failures
+
+- **Observed:** `connection refused` / `password authentication failed` / `could not connect`.
+- **Cause:** wrong credentials/host in `.env`, PostgreSQL not running, or wrong `DATABASE_PROFILE`.
+- **Check/fix:** confirm the profile matches the block you filled in; verify the server is running
+  (`Test-NetConnection localhost -Port 5432` on Windows); check credentials with `psql`.
+  **Note:** if `DATABASE_PROFILE=neon` your local Django commands will use Neon, not a local
+  database. Set `DATABASE_PROFILE=local` for local work.
+
+### 13.5 Pending migrations / missing tables
+
+- **Observed:** `relation "core_schoolconfiguration" does not exist`, or unapplied-migration
+  warnings.
+- **Check:** `manage.py showmigrations`.
+- **Fix:** `manage.py migrate`. In multi-school mode also
+  `migrate --include-dynamic-schemas`, and per school `migrate --schema <name>`.
+
+### 13.6 Allowed hosts / CSRF / HTTPS errors
+
+- **Observed (single-school prod):** `DisallowedHost`, or
+  `Origin checking failed - ... does not match any trusted origins`.
+- **Cause:** missing `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS`, or an `http://` origin posted to an
+  `https://` endpoint (rejected on purpose).
+- **Fix:** set the explicit hostnames/origins; for a tenant hostname, register and verify it
+  (`add_school_domain`). `DynamicCsrfMiddleware` caches verified domains for 5 minutes, so a new
+  domain may need a short wait or a service restart.
+
+### 13.7 HTTP 403 on exeat / gate / roll-call / ID-card pages
+
+- **Cause (confirmed):** the school's subscription does not entitle the feature. With no
+  subscription the Free-plan defaults disable `exeat_gate`, `student_id_cards` and `sms_dispatch`.
+- **Fix:**
   ```powershell
-  .\.venv\Scripts\celery.exe -A schoolsystem worker --pool=solo --concurrency=1 --loglevel=INFO
-  ```
-
-### 10.2 Redis Handshake Error (`HELLO` command)
-* **Symptom**: `redis.exceptions.ResponseError: unknown command 'HELLO'`.
-* **Cause**: Redis server version is older than 6.0 (e.g., Redis 5.0.14).
-* **Fix**: Upgrade Redis to version 6.2 or 7.x, or use a Docker/cloud Redis instance.
-
-### 10.3 `UndefinedTable` Error in Django Shell or Tests
-* **Symptom**: `django.db.utils.ProgrammingError: relation "auth_user" does not exist`.
-* **Cause**: In multi-tenant mode (`TENANCY_ENABLED=true`), `auth` and `core` tables are created in tenant schemas, not `public`. A fresh Django test database has no tenants yet, so ordinary `TestCase` tests run against `public` without those tables.
-* **Fix for the legacy `core` test suite**: Use the dedicated test settings, which disable tenancy before loading the application settings and use a separate test database:
-  ```powershell
-  .\.venv\Scripts\python.exe .\manage.py test core --settings=schoolsystem.settings.test
-  ```
-  This runs `core` tests in single-school mode; it does not validate schema isolation. Run platform/tenancy tests using the normal development settings:
-  ```powershell
-  .\.venv\Scripts\python.exe .\manage.py test tenancy
-  ```
-  To test actual tenant-schema behavior, run the tenancy PostgreSQL integration tests with tenancy enabled and a PostgreSQL database:
-  ```powershell
-  $env:TENANCY_ENABLED = "true"
-  .\.venv\Scripts\python.exe .\manage.py test tenancy.test_tenant_provisioning_integration
-  .\.venv\Scripts\python.exe .\manage.py test tenancy.test_postgres_integration
-  ```
-  The `Tenant PostgreSQL integration` GitHub Actions workflow runs a focused fresh-tenant provisioning test against PostgreSQL. It creates a tenant through the normal provisioning command, verifies that `core_academicyear`, `core_house`, and `auth_user` exist in the tenant schema, and performs an ORM query there. Require this check in repository branch protection before merging or deploying tenancy-related changes.
-* **For interactive shell queries in multi-tenant mode**: Activate a tenant schema before querying:
-  ```powershell
-  python manage.py runschema shell --schema achimota_shs
-  ```
-
-### 10.4 Dynamic CSRF Origin Rejection
-* **Symptom**: HTTP 403 Forbidden: `Origin checking failed - https://school.customdomain.com does not match any trusted origins`.
-* **Cause**: The domain has not been registered in `Domain` table, is unverified, or an HTTP origin was submitted to an HTTPS endpoint.
-* **Fix**:
-  1. Confirm the domain is registered and verified:
-     ```powershell
-     python manage.py add_school_domain --schema <schema> --domain school.customdomain.com --confirm-domain-verified
-     ```
-  2. Verify cache invalidation signal fired, or restart the web service to refresh the in-memory domain cache.
-
-### 10.5 Render Health Check Fails (`/healthz`)
-* **Symptom**: Render web service deployment times out or reports unhealthy.
-* **Cause**: Health check path `/healthz` is blocked by tenant resolution middleware.
-* **Fix**: `VerifiedDomainRoutingMiddleware` contains built-in bypasses for `/healthz`, `/healthz/`, `/live`, and `/live/`. Ensure Render's Health Check Path setting is set to `/healthz`.
-
-### 10.6 Neon Statement Timeout (`30000ms`)
-* **Symptom**: `django.db.utils.OperationalError: canceling statement due to statement timeout`.
-* **Cause**: A bulk migration, heavy report, or large student import exceeded the 30-second statement timeout configured in `DATABASES["default"]["OPTIONS"]`.
-* **Fix**: Management commands like `migrate_legacy_school` set `SET LOCAL statement_timeout = '0'`. For one-off large queries in the shell, execute:
-  ```python
-  from django.db import connection
-  with connection.cursor() as cursor:
-      cursor.execute("SET statement_timeout = 0;")
-  ```
-
-### 10.7 HTTP 403 on Exeat, Gate, Roll-Call or ID-Card Pages
-* **Symptom**: An authenticated staff member receives `403 Forbidden` on pages such as `/exeats/`, `/operations/gate/`, `/operations/roll-call/`, or the student-ID export, even though their role should allow access.
-* **Cause**: The school's subscription does not entitle the required feature. Those views are wrapped in `@tenant_feature_required(...)` for `exeat_gate`, `roll_call`, `student_id_cards`, `roster_import`, and `advanced_reports`. A school with no `TenantSubscription` row falls back to the **Free** plan defaults, which disable `exeat_gate`, `student_id_cards`, and `sms_dispatch`.
-* **Fix**: Grant the missing feature (or move the school to a plan that includes it):
-  ```powershell
-  # Enable specific features
   .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema> --enable=exeat_gate
-  .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema> --enable=student_id_cards
-
-  # Or adopt a plan tier and apply its defaults
   .\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema> --set-plan=standard --apply-plan-defaults
   ```
-* **Note**: A 403 page explains when the feature is disabled for the school's plan; other permission denials show a general access explanation. The public QR verification page (`/verify/student/<token>/`) requires the `student_id_cards` feature to be enabled.
+
+### 13.8 Celery / Redis
+
+- **`unknown command 'HELLO'`** → Redis older than 6.0. Upgrade.
+- **`PermissionError [WinError 5]` (Windows)** → start the worker with `--pool=solo --concurrency=1`.
+- **Tasks not processed** → Beat not running, or `REDIS_URL` differs between services.
+- **SMS stuck `QUEUED`** → SMS disabled, no worker/Beat, or monthly quota reached.
+
+### 13.9 SMS and email
+
+- **Nothing sent** → `SMS_ENABLED=false`, missing/incorrect `SMS_ONLINE_GH_API_KEY`, no credit, or
+  `student_id_cards`/`sms_dispatch` feature disabled.
+- **Email "sent" but nothing arrives** → the console backend is active (by design). Configure a real
+  SMTP backend and test with `sendtestemail`.
+
+### 13.10 Multi-school routing
+
+- **404 "No active school is configured for this hostname."** → the host has no verified `Domain`
+  row, or its tenant is inactive. Add the domain (`add_school_domain`) and activate the school.
+- **`UndefinedTable: relation "auth_user" does not exist` in the shell** → you are querying the
+  `public` schema, which has no school tables. Use `runschema shell --schema <name>`.
+- **Neon statement timeout** (`canceling statement due to statement timeout`) → the 30-second
+  `statement_timeout` was exceeded. For a one-off large operation in the shell, run
+  `SET statement_timeout = 0;` (some commands do this automatically).
+
+### 13.11 Render deploy and start-up problems
+
+- **Build fails** → usually a dependency error (`pip install`) or a settings import error. Read the
+  build log; run `check --deploy --settings=schoolsystem.settings.production` locally first.
+- **Deploy healthy but 500s** → likely missing env vars, unapplied migrations, or the `-pooler`
+  host being used (breaks schema isolation).
+- **Health check failing** → confirm the Health Check Path is exactly `/healthz` and that the start
+  command binds to `0.0.0.0:$PORT`.
+
+### 13.12 Tests
+
+- **`relation "auth_user" does not exist`** when running the standard suite in tenancy mode → run
+  `core` tests with tenancy-off settings, and tenancy suites with tenancy-on settings:
+  ```powershell
+  .\.venv\Scripts\python.exe .\manage.py test --settings=schoolsystem.settings.test
+  .\.venv\Scripts\python.exe .\manage.py test tenancy --settings=schoolsystem.settings.tenancy_test
+  ```
+  `test.py` uses `test_schoolsystem_core`; `tenancy_test.py` uses `test_schoolsystem_tenancy`, so
+  they do not collide. **Tests need PostgreSQL and honour `DATABASE_PROFILE`.** Set
+  `DATABASE_PROFILE=local` before running them, or you will create test databases in your configured
+  (possibly production) database.
+
+---
+
+## 14. What Was Verified in This Audit
+
+**Performed on this repository (Windows, Python 3.12.12, Django 6.0.9):**
+
+| Check | Result |
+| :--- | :--- |
+| `manage.py check --settings=schoolsystem.settings.development` | `System check identified no issues (0 silenced).` |
+| `manage.py check --deploy --settings=schoolsystem.settings.production` | Loaded successfully; reported `security.W004` (HSTS) because the local `.env` sets `SECURE_HSTS_SECONDS=0`; 1 issue, 1 silenced. **Expected for a staging/HTTPS-pending host.** |
+| `manage.py help` | Confirmed the full command list in section 7.1. |
+| Per-command option lists | Verified against source for the platform CLI, provisioning, and website commands. |
+| Environment variables | Verified against `schoolsystem/settings/base.py` and `production.py`. |
+| Deployment start command | Verified against `render.yaml` and `Procfile`. |
+| Celery app name and schedule | Verified in `schoolsystem/celery.py` and `settings/base.py`. |
+
+**Could not be executed during this audit (documented honestly):**
+
+- **The database-backed test suite** was **not run**, because the local PostgreSQL instance did not
+  accept the available credentials and the configured profile (`DATABASE_PROFILE=neon`) points at a
+  remote Neon database — running the suite there would create test databases on it. Run the tests
+  yourself against a local PostgreSQL with `DATABASE_PROFILE=local` before deploying.
+- **A live Render/Neon deployment** was not performed here; section 9 is based on the repository's
+  own `render.yaml`, `Procfile`, and settings, which are internally consistent, but the deployment
+  itself should be validated in your own Render account.
+
+**Gaps and cautions found:**
+
+1. **The `.env` in the working tree is set to `DATABASE_PROFILE=neon`.** For local development,
+   change it to `local` or Django commands and tests will target the remote Neon database. (`.env`
+   is git-ignored — never commit it.)
+2. **The repository currently has uncommitted work** in progress, including a new `website/`
+   application, `schoolsystem/urls_public.py`, and template changes. Commit or review these before
+   deploying.
+3. **Filesystem media on Render is ephemeral.** Use `MEDIA_STORAGE_BACKEND=neon_s3` for any deploy
+   where uploaded photos/crests must survive redeploys.
+4. **The `website` app's migrations must be applied** (`website/migrations/0001_initial.py`) — this
+   happens with the normal `migrate`/`migrate --schema public` steps.
+5. **`build_brand_assets` requires Pillow** (a normal dependency) and only writes files; it does not
+   touch the database.
+
+**No code or configuration was changed as part of this documentation task.** Only `README.md`
+was rewritten. If you later want a machine-readable environment template, `.env.example` already
+exists and was left as found.
