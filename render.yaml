@@ -197,7 +197,9 @@ services:
       - key: REDIS_URL
         sync: false
 
-# --- Optional: Celery worker + Beat (required only for SMS dispatch) --------
+# --- Optional: Celery worker + Beat (SMS, scheduled cleanup, SHS 3 phase-out)
+# The SHS 3 academic-year phase-out runs only when Beat is running. Deploy a
+# Beat service for automatic completion even when school SMS is disabled.
 # Add a Render Key Value (Redis) instance and a Background Worker for each of:
 #
 #   worker -> startCommand: celery -A schoolsystem worker --loglevel=INFO

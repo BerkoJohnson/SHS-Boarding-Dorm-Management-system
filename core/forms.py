@@ -19,20 +19,22 @@ from .models import (
     Guardian,
     HouseMaster,
     AcademicTerm,
+    AcademicYear,
     DisciplinaryRecord,
 )
 from .widgets import PrivateStudentPhotoInput
 
-
 # Report types that are point-in-time snapshots. They ignore the date range and
 # term filters entirely, so those controls are rendered disabled on their filter
 # bars instead of silently accepting values that have no effect.
-REPORTS_WITHOUT_PERIOD_FILTERS = frozenset({
-    "housing",
-    "placement_exceptions",
-    "room_register",
-    "data_completeness",
-})
+REPORTS_WITHOUT_PERIOD_FILTERS = frozenset(
+    {
+        "housing",
+        "placement_exceptions",
+        "room_register",
+        "data_completeness",
+    }
+)
 
 # Controls that only carry meaning for a period-scoped report.
 PERIOD_FILTER_FIELDS = ("date_from", "date_to", "term")
@@ -57,7 +59,14 @@ def available_dormitory_rooms(dormitory_id=None, include_room_id=None):
     ).annotate(
         occupied=Count(
             "students",
-            filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+            filter=Q(
+                students__residency=Student.ResidencyStatus.BOARDING,
+                students__status__in=(
+                    Student.EnrollmentStatus.ENROLLED,
+                    Student.EnrollmentStatus.APPROVED,
+                    Student.EnrollmentStatus.IN_PROGRESS,
+                ),
+            ),
         )
     )
     available_rooms = Q(occupied__lt=F("capacity"))
@@ -103,35 +112,45 @@ class ReportFilterForm(forms.Form):
         choices=REPORT_CHOICES,
         required=False,
         label="Detailed report",
-        widget=forms.Select(attrs={
-            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
-            "onchange": "this.form.submit()",
-        }),
+        widget=forms.Select(
+            attrs={
+                "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
+                "onchange": "this.form.submit()",
+            }
+        ),
     )
     date_from = forms.DateField(
         required=False,
         label="From",
-        widget=forms.DateInput(attrs={
-            "type": "date",
-            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
-        }),
+        widget=forms.DateInput(
+            attrs={
+                "type": "date",
+                "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
+            }
+        ),
     )
     date_to = forms.DateField(
         required=False,
         label="To",
-        widget=forms.DateInput(attrs={
-            "type": "date",
-            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
-        }),
+        widget=forms.DateInput(
+            attrs={
+                "type": "date",
+                "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm",
+            }
+        ),
     )
     term = forms.ModelChoiceField(
-        queryset=AcademicTerm.objects.select_related("academic_year").order_by("-start_date"),
+        queryset=AcademicTerm.objects.select_related("academic_year").order_by(
+            "-start_date"
+        ),
         required=False,
         label="Academic term",
         empty_label="All terms",
-        widget=forms.Select(attrs={
-            "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-        }),
+        widget=forms.Select(
+            attrs={
+                "class": "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            }
+        ),
     )
 
     def __init__(self, *args, disabled_fields=(), **kwargs):
@@ -183,79 +202,113 @@ class ExeatRequestForm(forms.ModelForm):
     class Meta:
         model = Exeat
         fields = [
-            'student',
-            'exeat_type',
-            'expected_departure',
-            'expected_return',
-            'destination',
-            'reason',
-            'status',   # kept in fields but forced + disabled (Pending only)
+            "student",
+            "exeat_type",
+            "expected_departure",
+            "expected_return",
+            "destination",
+            "reason",
+            "status",  # kept in fields but forced + disabled (Pending only)
         ]
         widgets = {
-            'student': forms.HiddenInput(),
-            'exeat_type': forms.Select(attrs={
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition'
-            }),
-            'expected_departure': forms.DateTimeInput(attrs={
-                'type': 'datetime-local',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 transition'
-            }),
-            'expected_return': forms.DateTimeInput(attrs={
-                'type': 'datetime-local',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 transition'
-            }),
-            'destination': forms.TextInput(attrs={
-                'placeholder': 'e.g. Korle-Bu Hospital, Accra / Guardian Residence, Kumasi',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition'
-            }),
-            'reason': forms.Textarea(attrs={
-                'rows': 3,
-                'placeholder': 'Provide specific justification, clinic referral notes, or guardian authorization details...',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition'
-            }),
-            'status': forms.Select(attrs={
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/60 text-slate-600 font-medium transition cursor-not-allowed',
-                'disabled': 'disabled',
-            }),
+            "student": forms.HiddenInput(),
+            "exeat_type": forms.Select(
+                attrs={
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition"
+                }
+            ),
+            "expected_departure": forms.DateTimeInput(
+                attrs={
+                    "type": "datetime-local",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 transition",
+                }
+            ),
+            "expected_return": forms.DateTimeInput(
+                attrs={
+                    "type": "datetime-local",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 transition",
+                }
+            ),
+            "destination": forms.TextInput(
+                attrs={
+                    "placeholder": "e.g. Korle-Bu Hospital, Accra / Guardian Residence, Kumasi",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition",
+                }
+            ),
+            "reason": forms.Textarea(
+                attrs={
+                    "rows": 3,
+                    "placeholder": "Provide specific justification, clinic referral notes, or guardian authorization details...",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition",
+                }
+            ),
+            "status": forms.Select(
+                attrs={
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/60 text-slate-600 font-medium transition cursor-not-allowed",
+                    "disabled": "disabled",
+                }
+            ),
         }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["student"].queryset = Student.objects.exclude(
+            status=Student.EnrollmentStatus.COMPLETED
+        )
 
         # Force status to PENDING — this form cannot approve a pass.
         # Disabled UI + backend override in clean() guarantee this.
-        self.fields['status'].choices = [(Exeat.Status.PENDING, Exeat.Status.PENDING.label + ' — Housemaster Review Required')]
-        self.initial['status'] = Exeat.Status.PENDING
-        self.fields['status'].disabled = True
-        self.fields['status'].required = False  # never user-facing, value is coerced
+        self.fields["status"].choices = [
+            (
+                Exeat.Status.PENDING,
+                Exeat.Status.PENDING.label + " — Housemaster Review Required",
+            )
+        ]
+        self.initial["status"] = Exeat.Status.PENDING
+        self.fields["status"].disabled = True
+        self.fields["status"].required = False  # never user-facing, value is coerced
 
         # Default departure to now and return to tomorrow 17:00
         now = timezone.now()
-        if not self.initial.get('expected_departure'):
-            self.initial['expected_departure'] = now.strftime('%Y-%m-%dT%H:%M')
-        if not self.initial.get('expected_return'):
-            tomorrow_evening = (now + timezone.timedelta(days=1)).replace(hour=17, minute=0, second=0)
-            self.initial['expected_return'] = tomorrow_evening.strftime('%Y-%m-%dT%H:%M')
+        if not self.initial.get("expected_departure"):
+            self.initial["expected_departure"] = now.strftime("%Y-%m-%dT%H:%M")
+        if not self.initial.get("expected_return"):
+            tomorrow_evening = (now + timezone.timedelta(days=1)).replace(
+                hour=17, minute=0, second=0
+            )
+            self.initial["expected_return"] = tomorrow_evening.strftime(
+                "%Y-%m-%dT%H:%M"
+            )
 
     def clean(self):
         cleaned_data = super().clean()
-        student = cleaned_data.get('student')
-        departure = cleaned_data.get('expected_departure')
-        expected_return = cleaned_data.get('expected_return')
+        student = cleaned_data.get("student")
+        departure = cleaned_data.get("expected_departure")
+        expected_return = cleaned_data.get("expected_return")
 
         # 1. Enforce student residency rule
         if student and student.residency == Student.ResidencyStatus.DAY:
-            raise ValidationError({'student': "Day students are not boarded and do not require exeat passes."})
+            raise ValidationError(
+                {
+                    "student": "Day students are not boarded and do not require exeat passes."
+                }
+            )
+        if student and student.status == Student.EnrollmentStatus.COMPLETED:
+            raise ValidationError(
+                {"student": "Completed students cannot request new exeat passes."}
+            )
 
         # 2. Date chronological validation
         if departure and expected_return:
             if expected_return <= departure:
-                raise ValidationError({
-                    'expected_return': "Expected return datetime must be after scheduled departure datetime."
-                })
+                raise ValidationError(
+                    {
+                        "expected_return": "Expected return datetime must be after scheduled departure datetime."
+                    }
+                )
 
         # 3. Backend coercion: status MUST end up PENDING regardless of any POST tampering.
-        cleaned_data['status'] = Exeat.Status.PENDING
+        cleaned_data["status"] = Exeat.Status.PENDING
 
         return cleaned_data
 
@@ -265,12 +318,22 @@ class ExeatReconciliationForm(forms.ModelForm):
         model = ExeatReconciliation
         fields = ("outcome", "actual_departure", "actual_return", "reason")
         widgets = {
-            "outcome": forms.Select(attrs={"class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"}),
+            "outcome": forms.Select(
+                attrs={
+                    "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                }
+            ),
             "actual_departure": forms.DateTimeInput(
-                attrs={"type": "datetime-local", "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"}
+                attrs={
+                    "type": "datetime-local",
+                    "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm",
+                }
             ),
             "actual_return": forms.DateTimeInput(
-                attrs={"type": "datetime-local", "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"}
+                attrs={
+                    "type": "datetime-local",
+                    "class": "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm",
+                }
             ),
             "reason": forms.Textarea(
                 attrs={
@@ -294,14 +357,30 @@ class ExeatReconciliationForm(forms.ModelForm):
         departure = cleaned_data.get("actual_departure")
         returned = cleaned_data.get("actual_return")
 
-        if outcome in (ExeatReconciliation.Outcome.STUDENT_OUT, ExeatReconciliation.Outcome.RETURNED) and not departure:
-            self.add_error("actual_departure", "Enter the confirmed or best-known departure time.")
+        if (
+            outcome
+            in (
+                ExeatReconciliation.Outcome.STUDENT_OUT,
+                ExeatReconciliation.Outcome.RETURNED,
+            )
+            and not departure
+        ):
+            self.add_error(
+                "actual_departure", "Enter the confirmed or best-known departure time."
+            )
         if outcome == ExeatReconciliation.Outcome.RETURNED and not returned:
-            self.add_error("actual_return", "Enter the confirmed or best-known return time.")
+            self.add_error(
+                "actual_return", "Enter the confirmed or best-known return time."
+            )
         if outcome == ExeatReconciliation.Outcome.UNUSED and (departure or returned):
-            self.add_error("actual_departure", "An unused pass cannot have travel timestamps.")
+            self.add_error(
+                "actual_departure", "An unused pass cannot have travel timestamps."
+            )
         if outcome != ExeatReconciliation.Outcome.RETURNED and returned:
-            self.add_error("actual_return", "A return time is only valid when the student has returned.")
+            self.add_error(
+                "actual_return",
+                "A return time is only valid when the student has returned.",
+            )
         if departure and returned and returned <= departure:
             self.add_error("actual_return", "Return time must be after departure time.")
         return cleaned_data
@@ -327,20 +406,26 @@ class ExeatApprovalForm(forms.ModelForm):
 
     class Meta:
         model = Exeat
-        fields = ['status', 'approved_by', 'approval_remarks']
+        fields = ["status", "approved_by", "approval_remarks"]
         widgets = {
-            'status': forms.Select(attrs={
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition'
-            }),
-            'approved_by': forms.Select(attrs={
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition'
-            }),
-            'approval_remarks': forms.Textarea(attrs={
-                'rows': 2,
-                'placeholder': 'If Approved: conditions (e.g. report back with hospital card, guardian escort required). '  
-                               'If Rejected: reason for refusal (required)...',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition'
-            }),
+            "status": forms.Select(
+                attrs={
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition"
+                }
+            ),
+            "approved_by": forms.Select(
+                attrs={
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition"
+                }
+            ),
+            "approval_remarks": forms.Textarea(
+                attrs={
+                    "rows": 2,
+                    "placeholder": "If Approved: conditions (e.g. report back with hospital card, guardian escort required). "
+                    "If Rejected: reason for refusal (required)...",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition",
+                }
+            ),
         }
 
     def __init__(self, *args, student=None, reviewing_user=None, **kwargs):
@@ -352,7 +437,7 @@ class ExeatApprovalForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
 
         # 1. Status choices: only Approve / Reject during review step.
-        self.fields['status'].choices = [
+        self.fields["status"].choices = [
             (Exeat.Status.APPROVED, Exeat.Status.APPROVED.label),
             (Exeat.Status.REJECTED, Exeat.Status.REJECTED.label),
         ]
@@ -360,21 +445,21 @@ class ExeatApprovalForm(forms.ModelForm):
         # 2. Scope the approving Housemaster dropdown to valid signatories only:
         #    * the student's own assigned Housemaster(s) for their house
         #    * the (one and only) Senior Housemaster (school-wide authority)
-        eligible_qs = HouseMaster.objects.select_related('house')
+        eligible_qs = HouseMaster.objects.select_related("house")
         if student is not None:
             student_house_id = student.house_id if student.house_id else None
             eligible_qs = eligible_qs.filter(
                 models.Q(is_senior_housemaster=True)
                 | models.Q(house_id=student_house_id)
             )
-        eligible_qs = eligible_qs.order_by('-is_senior_housemaster', 'full_name')
-        self.fields['approved_by'].queryset = eligible_qs
+        eligible_qs = eligible_qs.order_by("-is_senior_housemaster", "full_name")
+        self.fields["approved_by"].queryset = eligible_qs
 
         # 3. Auto-select the current user as authorizer IF they are a HouseMaster
         #    record AND in the eligible list. Prevents HMs from manually hunting for
         #    their own name. (Admins and Senior HMs can still override if needed.)
         if reviewing_user is not None:
-            hm = getattr(reviewing_user, 'housemaster', None)
+            hm = getattr(reviewing_user, "housemaster", None)
             if hm is None:
                 # Backwards-compat fallback used elsewhere in the app
                 hm = HouseMaster.objects.filter(
@@ -382,31 +467,33 @@ class ExeatApprovalForm(forms.ModelForm):
                     | models.Q(full_name__icontains=reviewing_user.username)
                 ).first()
             if hm is not None and eligible_qs.filter(pk=hm.pk).exists():
-                self.initial.setdefault('approved_by', hm.pk)
+                self.initial.setdefault("approved_by", hm.pk)
 
         # Required state enforced in clean(), not via field.required to give clear messages.
-        self.fields['approved_by'].required = False
-        self.fields['approval_remarks'].required = False
+        self.fields["approved_by"].required = False
+        self.fields["approval_remarks"].required = False
 
     def clean(self):
         cleaned_data = super().clean()
-        status = cleaned_data.get('status')
-        approved_by = cleaned_data.get('approved_by')
-        remarks = (cleaned_data.get('approval_remarks') or '').strip()
+        status = cleaned_data.get("status")
+        approved_by = cleaned_data.get("approved_by")
+        remarks = (cleaned_data.get("approval_remarks") or "").strip()
 
         # 1. Approve → authorizer is mandatory (model-level Exeat.clean also enforces this)
         if status == Exeat.Status.APPROVED and not approved_by:
-            raise ValidationError({
-                'approved_by': "An authorizing Housemaster must be selected when approving a pass. "  
-                               "Pick your own record if you are the signing Housemaster."
-            })
+            raise ValidationError(
+                {
+                    "approved_by": "An authorizing Housemaster must be selected when approving a pass. "
+                    "Pick your own record if you are the signing Housemaster."
+                }
+            )
 
         # 2. Reject → a reason MUST be captured in approval_remarks
         if status == Exeat.Status.REJECTED and not remarks:
             self.add_error(
-                'approval_remarks',
-                "Please explain the reason for rejection in Conditions / Special Remarks "  
-                "(e.g. insufficient notice, no guardian confirmation, midterm restriction)."
+                "approval_remarks",
+                "Please explain the reason for rejection in Conditions / Special Remarks "
+                "(e.g. insufficient notice, no guardian confirmation, midterm restriction).",
             )
 
         return cleaned_data
@@ -420,49 +507,61 @@ ExeatCreateForm = ExeatRequestForm
 class DisciplinaryRecordForm(forms.ModelForm):
     """
     Form for logging student conduct infractions and disciplinary actions.
-    
+
     Includes styled Tailwind form inputs, severity controls, and validation.
     """
 
     class Meta:
         model = DisciplinaryRecord
         fields = [
-            'student',
-            'offense',
-            'severity',
-            'action_taken',
-            'description',
+            "student",
+            "offense",
+            "severity",
+            "action_taken",
+            "description",
         ]
         widgets = {
-            'student': forms.HiddenInput(),
-            'offense': forms.TextInput(attrs={
-                'placeholder': 'e.g. Overstayed Exeat, Sneaking to Town, Missing Roll Call, Bullying',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition'
-            }),
-            'severity': forms.Select(attrs={
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition'
-            }),
-            'action_taken': forms.TextInput(attrs={
-                'placeholder': 'e.g. Gating for 1 weekend, campus grounds work, warning letter, suspension referral',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition'
-            }),
-            'description': forms.Textarea(attrs={
-                'rows': 3,
-                'placeholder': 'Provide specific details regarding the incident, time/location observed, and any witness statements...',
-                'class': 'w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition'
-            }),
+            "student": forms.HiddenInput(),
+            "offense": forms.TextInput(
+                attrs={
+                    "placeholder": "e.g. Overstayed Exeat, Sneaking to Town, Missing Roll Call, Bullying",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition",
+                }
+            ),
+            "severity": forms.Select(
+                attrs={
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium text-slate-800 transition"
+                }
+            ),
+            "action_taken": forms.TextInput(
+                attrs={
+                    "placeholder": "e.g. Gating for 1 weekend, campus grounds work, warning letter, suspension referral",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition",
+                }
+            ),
+            "description": forms.Textarea(
+                attrs={
+                    "rows": 3,
+                    "placeholder": "Provide specific details regarding the incident, time/location observed, and any witness statements...",
+                    "class": "w-full px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50/80 focus:bg-white focus:outline-none focus:ring-1 focus:ring-brand-500 text-slate-800 placeholder-slate-400 transition",
+                }
+            ),
         }
 
     def clean(self):
         cleaned_data = super().clean()
-        student = cleaned_data.get('student')
-        offense = cleaned_data.get('offense')
+        student = cleaned_data.get("student")
+        offense = cleaned_data.get("offense")
 
         if not student:
-            raise ValidationError({'student': "Please select a student for this incident record."})
+            raise ValidationError(
+                {"student": "Please select a student for this incident record."}
+            )
 
         if not offense or not offense.strip():
-            raise ValidationError({'offense': "Please state the offense or infraction title."})
+            raise ValidationError(
+                {"offense": "Please state the offense or infraction title."}
+            )
 
         return cleaned_data
 
@@ -520,7 +619,10 @@ class StudentRegistrationForm(forms.ModelForm):
             "room": forms.Select(attrs={"class": "student-form-control"}),
             "status": forms.Select(attrs={"class": "student-form-control"}),
             "photo": PrivateStudentPhotoInput(
-                attrs={"accept": "image/jpeg,image/png", "class": "student-form-control"}
+                attrs={
+                    "accept": "image/jpeg,image/png",
+                    "class": "student-form-control",
+                }
             ),
         }
 
@@ -549,11 +651,7 @@ class StudentRegistrationForm(forms.ModelForm):
             class_group_filter = Q(programme__isnull=True) | Q(
                 programme_id=selected_programme
             )
-            if (
-                self.instance
-                and self.instance.pk
-                and self.instance.class_group_id
-            ):
+            if self.instance and self.instance.pk and self.instance.class_group_id:
                 class_group_filter |= Q(pk=self.instance.class_group_id)
             self.fields["class_group"].queryset = ClassGroup.objects.filter(
                 class_group_filter
@@ -572,14 +670,12 @@ class StudentRegistrationForm(forms.ModelForm):
         selected_house = (
             self.data.get("house")
             if self.is_bound
-            else self.initial.get("house")
-            or getattr(self.instance, "house_id", None)
+            else self.initial.get("house") or getattr(self.instance, "house_id", None)
         )
         selected_gender = (
             self.data.get("gender")
             if self.is_bound
-            else self.initial.get("gender")
-            or getattr(self.instance, "gender", None)
+            else self.initial.get("gender") or getattr(self.instance, "gender", None)
         )
         selected_dormitory = _uuid_or_none(selected_dormitory)
         selected_house = _uuid_or_none(selected_house)
@@ -590,7 +686,18 @@ class StudentRegistrationForm(forms.ModelForm):
             dormitory_queryset = dormitory_queryset.none()
         dormitory_gender = DORMITORY_GENDER_BY_STUDENT_GENDER.get(selected_gender)
         if dormitory_gender:
-            dormitory_queryset = dormitory_queryset.filter(gender=dormitory_gender)
+            gender_filter = Q(gender=dormitory_gender)
+            # Keep the record's current dormitory selectable so editing a legacy
+            # or imported gender mismatch surfaces the model's validation error
+            # instead of silently clearing the placement. Only retain it while it
+            # still belongs to the selected house.
+            if (
+                not self.instance._state.adding
+                and self.instance.dormitory_id
+                and (not selected_house or self.instance.house_id == selected_house)
+            ):
+                gender_filter |= Q(pk=self.instance.dormitory_id)
+            dormitory_queryset = dormitory_queryset.filter(gender_filter)
         self.fields["dormitory"].queryset = dormitory_queryset.order_by(
             "house__display_order", "house__name", "name"
         )
@@ -609,6 +716,19 @@ class StudentRegistrationForm(forms.ModelForm):
         else:
             room_queryset = DormitoryRoom.objects.none()
         self.fields["room"].queryset = room_queryset
+        # Lock the class selector only when editing a stored record; a new form
+        # must let the user choose a class. BaseModel assigns a UUID at
+        # construction, so ``_state.adding`` (not ``pk``) marks a new record.
+        if not self.instance._state.adding:
+            self.fields["class_group"].disabled = True
+        if self.instance.status == Student.EnrollmentStatus.COMPLETED:
+            self.fields["status"].disabled = True
+        else:
+            self.fields["status"].choices = [
+                choice
+                for choice in self.fields["status"].choices
+                if choice[0] != Student.EnrollmentStatus.COMPLETED
+            ]
         self.fields["class_group"].required = False
         self.fields["house"].required = False
         self.fields["dormitory"].required = False
@@ -641,9 +761,7 @@ class StudentRegistrationForm(forms.ModelForm):
             )
         for field_name in ("admission_no", "index_number"):
             value = (cleaned_data.get(field_name) or "").strip()
-            matches = Student.objects.filter(
-                **{f"{field_name}__iexact": value}
-            )
+            matches = Student.objects.filter(**{f"{field_name}__iexact": value})
             if self.instance.pk:
                 matches = matches.exclude(pk=self.instance.pk)
             if value and matches.exists():
@@ -679,9 +797,12 @@ class StudentRegistrationForm(forms.ModelForm):
             matching_guardians = Guardian.objects.filter(
                 phone_number=guardian_phone
             ).exclude(pk=self.instance.guardian_id if self.instance.pk else None)
-            if matching_guardians.exists() and not matching_guardians.filter(
-                full_name__iexact=guardian_name
-            ).exists():
+            if (
+                matching_guardians.exists()
+                and not matching_guardians.filter(
+                    full_name__iexact=guardian_name
+                ).exists()
+            ):
                 self.add_error(
                     "guardian_phone",
                     "This phone number is already linked to a different guardian.",
@@ -717,6 +838,57 @@ class StudentRegistrationForm(forms.ModelForm):
             student.save()
             self.save_m2m()
         return student
+
+
+class StudentPromotionForm(forms.Form):
+    academic_year = forms.ModelChoiceField(
+        queryset=AcademicYear.objects.order_by("-start_date"),
+        label="Academic year students are entering",
+        widget=forms.Select(
+            attrs={
+                "class": "min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base text-slate-800",
+            }
+        ),
+    )
+    source_class = forms.ModelChoiceField(
+        queryset=ClassGroup.objects.order_by("name"),
+        label="Current class",
+        widget=forms.Select(
+            attrs={
+                "class": "min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base text-slate-800",
+            }
+        ),
+    )
+    target_class = forms.ModelChoiceField(
+        queryset=ClassGroup.objects.order_by("name"),
+        label="Promote to class",
+        widget=forms.Select(
+            attrs={
+                "class": "min-h-11 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-base text-slate-800",
+            }
+        ),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        source = cleaned_data.get("source_class")
+        target = cleaned_data.get("target_class")
+        if source and target:
+            from core.services.student_progression import class_group_level
+
+            source_level = class_group_level(source)
+            target_level = class_group_level(target)
+            if source_level not in {1, 2} or target_level != source_level + 1:
+                raise ValidationError(
+                    "Choose consecutive SHS classes, such as SHS 1 to SHS 2."
+                )
+        academic_year = cleaned_data.get("academic_year")
+        if academic_year and academic_year.end_date < timezone.localdate():
+            self.add_error(
+                "academic_year",
+                "Choose an academic year that has not ended.",
+            )
+        return cleaned_data
 
 
 class StudentRosterUploadForm(forms.Form):

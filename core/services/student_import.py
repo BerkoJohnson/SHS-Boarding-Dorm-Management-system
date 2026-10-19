@@ -23,7 +23,6 @@ from core.models import (
 )
 from core.services.roster import normalize_roster_house_name
 
-
 MAX_ROSTER_ROWS = 2000
 REQUIRED_COLUMNS = {
     "admission_no",
@@ -95,7 +94,7 @@ def _row_values(headers, values, sheet_name, row_number, errors):
     if not any(_text(value) for value in values):
         return None
     if len(values) > len(headers) and any(
-        _text(value) for value in values[len(headers):]
+        _text(value) for value in values[len(headers) :]
     ):
         errors.append(
             f"{sheet_name}, row {row_number}: data exists beyond the last header."
@@ -125,14 +124,18 @@ def _read_csv(data):
         headers = next(reader)
     except StopIteration:
         raise ValueError("The uploaded CSV file is empty.") from None
-    return [("CSV", headers, row_number, row) for row_number, row in enumerate(reader, 2)]
+    return [
+        ("CSV", headers, row_number, row) for row_number, row in enumerate(reader, 2)
+    ]
 
 
 def _read_xlsx(data):
     try:
         workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except (InvalidFileException, BadZipFile, OSError, ValueError) as error:
-        raise ValueError("The uploaded file is not a readable Excel .xlsx workbook.") from error
+        raise ValueError(
+            "The uploaded file is not a readable Excel .xlsx workbook."
+        ) from error
 
     rows = []
     try:
@@ -188,9 +191,7 @@ def _parse_date(value, location, errors):
             return datetime.strptime(text, date_format).date()
         except ValueError:
             continue
-    errors.append(
-        f"{location}: date of birth must be YYYY-MM-DD or DD/MM/YYYY."
-    )
+    errors.append(f"{location}: date of birth must be YYYY-MM-DD or DD/MM/YYYY.")
     return None
 
 
@@ -220,9 +221,7 @@ def import_student_roster(uploaded_file):
 
     data = uploaded_file.read()
     try:
-        raw_rows = (
-            _read_csv(data) if extension == ".csv" else _read_xlsx(data)
-        )
+        raw_rows = _read_csv(data) if extension == ".csv" else _read_xlsx(data)
     except ValueError as error:
         return 0, [str(error)]
 
@@ -234,8 +233,7 @@ def import_student_roster(uploaded_file):
         if sheet_name not in checked_sheets:
             checked_sheets.add(sheet_name)
             available = {
-                COLUMN_ALIASES.get(_normalized_header(header))
-                for header in headers
+                COLUMN_ALIASES.get(_normalized_header(header)) for header in headers
             }
             missing = REQUIRED_COLUMNS - available
             if missing:
@@ -261,9 +259,7 @@ def import_student_roster(uploaded_file):
     programme_index = _reference_index(programmes, "name")
     for programme in programmes:
         if programme.code:
-            code_matches = programme_index.setdefault(
-                programme.code.casefold(), []
-            )
+            code_matches = programme_index.setdefault(programme.code.casefold(), [])
             if all(match.pk != programme.pk for match in code_matches):
                 code_matches.append(programme)
     class_index = _reference_index(ClassGroup.objects.all(), "name")
@@ -273,7 +269,14 @@ def import_student_roster(uploaded_file):
         DormitoryRoom.objects.select_related("dormitory").annotate(
             occupied=Count(
                 "students",
-                filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+                filter=Q(
+                    students__residency=Student.ResidencyStatus.BOARDING,
+                    students__status__in=(
+                        Student.EnrollmentStatus.ENROLLED,
+                        Student.EnrollmentStatus.APPROVED,
+                        Student.EnrollmentStatus.IN_PROGRESS,
+                    ),
+                ),
             )
         )
     )
@@ -292,9 +295,9 @@ def import_student_roster(uploaded_file):
     room_occupancy = {}
     for room in rooms:
         rooms_by_dormitory.setdefault(room.dormitory_id, []).append(room)
-        room_index.setdefault(
-            (room.dormitory_id, room.name.casefold()), []
-        ).append(room)
+        room_index.setdefault((room.dormitory_id, room.name.casefold()), []).append(
+            room
+        )
         room_occupancy[room.pk] = room.occupied
 
     existing_admission_numbers = {
@@ -332,9 +335,7 @@ def import_student_roster(uploaded_file):
             ),
         ):
             normalized_value = value.casefold()
-            if value and (
-                normalized_value in seen or normalized_value in existing
-            ):
+            if value and (normalized_value in seen or normalized_value in existing):
                 errors.append(f"{location}: duplicate {label} '{value}'.")
             seen.add(normalized_value)
 
@@ -368,23 +369,31 @@ def import_student_roster(uploaded_file):
         class_value = row.get("class_group", "").strip()
         if class_value.casefold() == "unallocated":
             class_value = ""
-        class_group = _reference(
-            class_value, class_index, "class", location, errors
-        ) if class_value else None
+        class_group = (
+            _reference(class_value, class_index, "class", location, errors)
+            if class_value
+            else None
+        )
         house_value = row.get("house", "").strip()
-        house = _reference(
-            normalize_roster_house_name(house_value),
-            house_index,
-            "house",
-            location,
-            errors,
-        ) if house_value else None
+        house = (
+            _reference(
+                normalize_roster_house_name(house_value),
+                house_index,
+                "house",
+                location,
+                errors,
+            )
+            if house_value
+            else None
+        )
         dormitory_value = row.get("dormitory", "").strip()
         dormitory = None
         if dormitory_value:
-            possible_dormitories = dormitory_index.get(
-                (house.pk, dormitory_value.casefold()), []
-            ) if house else []
+            possible_dormitories = (
+                dormitory_index.get((house.pk, dormitory_value.casefold()), [])
+                if house
+                else []
+            )
             if len(possible_dormitories) == 1:
                 dormitory = possible_dormitories[0]
             elif not house:
@@ -403,9 +412,11 @@ def import_student_roster(uploaded_file):
             possible_dormitories = boarding_dormitories.get(
                 (
                     house.pk,
-                    Dormitory.GenderBlock.MALE
-                    if gender == Student.Gender.MALE
-                    else Dormitory.GenderBlock.FEMALE,
+                    (
+                        Dormitory.GenderBlock.MALE
+                        if gender == Student.Gender.MALE
+                        else Dormitory.GenderBlock.FEMALE
+                    ),
                 ),
                 [],
             )
@@ -420,9 +431,11 @@ def import_student_roster(uploaded_file):
         room_value = row.get("room", "").strip()
         room = None
         if room_value:
-            possible_rooms = room_index.get(
-                (dormitory.pk, room_value.casefold()), []
-            ) if dormitory else []
+            possible_rooms = (
+                room_index.get((dormitory.pk, room_value.casefold()), [])
+                if dormitory
+                else []
+            )
             if len(possible_rooms) == 1:
                 room = possible_rooms[0]
             elif not dormitory:
@@ -480,7 +493,8 @@ def import_student_roster(uploaded_file):
             existing_guardians = guardians_by_phone.get(guardian_phone, [])
             if existing_guardians:
                 matching_guardians = [
-                    item for item in existing_guardians
+                    item
+                    for item in existing_guardians
                     if item.full_name.casefold() == guardian_name.casefold()
                 ]
                 if not matching_guardians:
@@ -543,8 +557,7 @@ def import_student_roster(uploaded_file):
         return 0, errors
 
     enrolled_to_import = sum(
-        item.student.status == Student.EnrollmentStatus.ENROLLED
-        for item in staged
+        item.student.status == Student.EnrollmentStatus.ENROLLED for item in staged
     )
 
     try:

@@ -102,7 +102,9 @@ def send_sms_delivery_task(
     if delivery.status == SMSDelivery.Status.SENT:
         return True
     if not SMSConfiguration.is_enabled():
-        logger.warning("SMS delivery %s remains queued because SMS is disabled", delivery_id)
+        logger.warning(
+            "SMS delivery %s remains queued because SMS is disabled", delivery_id
+        )
         return False
     if delivery.status != SMSDelivery.Status.QUEUED:
         return False
@@ -146,9 +148,7 @@ def send_sms_delivery_task(
         delivery.status = SMSDelivery.Status.SENT
         delivery.sent_at = timezone.now()
         delivery.last_error = ""
-        delivery.save(
-            update_fields=["status", "sent_at", "last_error", "updated_at"]
-        )
+        delivery.save(update_fields=["status", "sent_at", "last_error", "updated_at"])
         return True
 
     max_attempts = max(1, int(getattr(settings, "SMS_MAX_ATTEMPTS", 5)))
@@ -169,9 +169,7 @@ def send_sms_delivery_task(
         )
 
     delivery.status = SMSDelivery.Status.FAILED
-    delivery.save(
-        update_fields=["status", "last_error", "updated_at"]
-    )
+    delivery.save(update_fields=["status", "last_error", "updated_at"])
     logger.error(
         "SMS delivery %s failed after %s attempts",
         delivery_id,
@@ -246,7 +244,10 @@ def _enqueue_overdue_exeat_reminders_for_current_tenant() -> int:
     active_exeats = (
         Exeat.objects.filter(status=Exeat.Status.APPROVED)
         .filter(
-            Q(movement__actual_departure__isnull=False, movement__actual_return__isnull=True)
+            Q(
+                movement__actual_departure__isnull=False,
+                movement__actual_return__isnull=True,
+            )
             | Q(
                 reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
                 reconciliation__actual_return__isnull=True,
@@ -261,11 +262,10 @@ def _enqueue_overdue_exeat_reminders_for_current_tenant() -> int:
             continue
 
         reminder_number = int(
-            (now - exeat.expected_return).total_seconds() // timedelta(days=1).total_seconds()
+            (now - exeat.expected_return).total_seconds()
+            // timedelta(days=1).total_seconds()
         )
-        existing_key_prefix = (
-            f"{SMSDelivery.EventType.OVERDUE}:{exeat.pk}:"
-        )
+        existing_key_prefix = f"{SMSDelivery.EventType.OVERDUE}:{exeat.pk}:"
         if SMSDelivery.objects.filter(
             exeat=exeat,
             event_type=SMSDelivery.EventType.OVERDUE,
@@ -345,6 +345,70 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
 
 
 @shared_task
+def phase_out_shs3_students(tenant_schema: str | None = None) -> int:
+    return _run_for_each_tenant(
+        phase_out_shs3_students,
+        tenant_schema,
+        _phase_out_shs3_students_for_current_year,
+    )
+
+
+def _phase_out_shs3_students_for_current_year() -> int:
+    from core.models import AcademicYear, Student, StudentProgressionRecord
+
+    today = timezone.localdate()
+    year_id = (
+        AcademicYear.objects.filter(
+            end_date__lte=today,
+            students_phased_out_at__isnull=True,
+        )
+        .values_list("pk", flat=True)
+        .first()
+    )
+    if year_id is None:
+        return 0
+
+    with transaction.atomic():
+        year = AcademicYear.objects.select_for_update().get(pk=year_id)
+        if year.end_date > today or year.students_phased_out_at is not None:
+            return 0
+
+        students = list(
+            Student.objects.select_for_update()
+            .filter(
+                status=Student.EnrollmentStatus.ENROLLED,
+                class_group__name__istartswith="3",
+                expected_completion_year=year,
+            )
+            .select_related("class_group")
+            .order_by("pk")
+        )
+        for student in students:
+            StudentProgressionRecord.objects.create(
+                student=student,
+                academic_year=year,
+                event=StudentProgressionRecord.Event.PHASED_OUT,
+                from_class_group=student.class_group,
+                effective_on=year.end_date,
+            )
+            student.status = Student.EnrollmentStatus.COMPLETED
+            student.completed_on = year.end_date
+            student.completion_academic_year = year
+            student.save(
+                update_fields=[
+                    "status",
+                    "completed_on",
+                    "completion_academic_year",
+                    "updated_at",
+                ]
+            )
+
+        year.students_phased_out_at = timezone.now()
+        year.save(update_fields=["students_phased_out_at", "updated_at"])
+    return len(students)
+
+
+@shared_task
 def cleanup_expired_student_id_exports(tenant_schema: str | None = None) -> int:
     return _run_for_each_tenant(
         cleanup_expired_student_id_exports,
@@ -411,7 +475,9 @@ def generate_student_id_export(
 
     if not feature_enabled("student_id_cards"):
         export.status = StudentIDExport.Status.FAILED
-        export.error_message = "This tenant's subscription does not include student ID cards."
+        export.error_message = (
+            "This tenant's subscription does not include student ID cards."
+        )
         export.finished_at = timezone.now()
         export.save(
             update_fields=["status", "error_message", "finished_at", "updated_at"]
@@ -455,7 +521,9 @@ def generate_student_id_export(
 
     storage = student_id_export_storage()
     archive_name = student_id_export_name(export.archive_name)
-    extension = "png" if export.image_format == StudentIDExport.ImageFormat.PNG else "jpg"
+    extension = (
+        "png" if export.image_format == StudentIDExport.ImageFormat.PNG else "jpg"
+    )
     temporary_path = None
     try:
         # Build the archive on local scratch space, then upload the finished ZIP
@@ -465,7 +533,9 @@ def generate_student_id_export(
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as handle:
             temporary_path = Path(handle.name)
         with ZipFile(temporary_path, "w", compression=ZIP_DEFLATED) as archive:
-            for processed, student in enumerate(students.iterator(chunk_size=100), start=1):
+            for processed, student in enumerate(
+                students.iterator(chunk_size=100), start=1
+            ):
                 folder_name = safe_student_folder_name(student)
                 public_url = (
                     f"{public_origin.rstrip('/')}"

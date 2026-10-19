@@ -7,6 +7,7 @@ from django import forms
 from django.conf import settings
 from .models import (
     Student,
+    StudentProgressionRecord,
     Programme,
     House,
     Dormitory,
@@ -38,11 +39,7 @@ from .widgets import PrivateStudentPhotoInput
 class TenantStaffQuotaFormMixin:
     def clean_is_staff(self):
         is_staff = self.cleaned_data["is_staff"]
-        if (
-            is_staff
-            and not self.instance.is_staff
-            and settings.TENANCY_ENABLED
-        ):
+        if is_staff and not self.instance.is_staff and settings.TENANCY_ENABLED:
             from tenancy.entitlements import ensure_quota_available, quota_guard
 
             user_model = get_user_model()
@@ -80,9 +77,15 @@ admin.site.register(user_model, TenantUserAdmin)
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'role', 'phone_number', 'created_at')
-    list_filter = ('role',)
-    search_fields = ('user__username', 'user__first_name', 'user__last_name', 'user__email', 'phone_number')
+    list_display = ("user", "role", "phone_number", "created_at")
+    list_filter = ("role",)
+    search_fields = (
+        "user__username",
+        "user__first_name",
+        "user__last_name",
+        "user__email",
+        "phone_number",
+    )
 
     def save_model(self, request, obj, form, change):
         previous_role = None
@@ -92,7 +95,8 @@ class UserProfileAdmin(admin.ModelAdmin):
         if previous_role != obj.role:
             previous_label = (
                 UserProfile(role=previous_role).get_role_display()
-                if previous_role else "No role"
+                if previous_role
+                else "No role"
             )
             ConfigurationAuditLog.objects.create(
                 actor=request.user,
@@ -111,9 +115,16 @@ class UserProfileAdmin(admin.ModelAdmin):
 
 @admin.register(HouseMaster)
 class HouseMasterAdmin(admin.ModelAdmin):
-    list_display = ('staff_id', 'full_name', 'user', 'house', 'assigned_dormitory', 'is_senior_housemaster')
-    list_filter = ('is_senior_housemaster', 'house')
-    search_fields = ('staff_id', 'full_name', 'user__username', 'phone_number')
+    list_display = (
+        "staff_id",
+        "full_name",
+        "user",
+        "house",
+        "assigned_dormitory",
+        "is_senior_housemaster",
+    )
+    list_filter = ("is_senior_housemaster", "house")
+    search_fields = ("staff_id", "full_name", "user__username", "phone_number")
 
     def save_model(self, request, obj, form, change):
         tracked_fields = (
@@ -122,10 +133,7 @@ class HouseMasterAdmin(admin.ModelAdmin):
             "assigned_dormitory_id",
             "is_senior_housemaster",
         )
-        previous = (
-            HouseMaster.objects.get(pk=obj.pk)
-            if change else None
-        )
+        previous = HouseMaster.objects.get(pk=obj.pk) if change else None
         changes = {}
         for field_name in tracked_fields:
             old_value = getattr(previous, field_name) if previous else None
@@ -148,9 +156,9 @@ class HouseMasterAdmin(admin.ModelAdmin):
 
 @admin.register(House)
 class HouseAdmin(admin.ModelAdmin):
-    list_display = ('name', 'display_order', 'motto')
-    search_fields = ('name', 'motto')
-    ordering = ('display_order', 'name')
+    list_display = ("name", "display_order", "motto")
+    search_fields = ("name", "motto")
+    ordering = ("display_order", "name")
 
 
 @admin.register(Student)
@@ -161,41 +169,124 @@ class StudentAdmin(admin.ModelAdmin):
             fields = "__all__"
             widgets = {"photo": PrivateStudentPhotoInput}
 
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            if self.instance.status == Student.EnrollmentStatus.COMPLETED:
+                self.fields["status"].disabled = True
+            else:
+                self.fields["status"].choices = [
+                    choice
+                    for choice in self.fields["status"].choices
+                    if choice[0] != Student.EnrollmentStatus.COMPLETED
+                ]
+
     form = StudentForm
-    list_display = ('admission_no', 'full_name', 'gender', 'residency', 'status', 'house', 'dormitory', 'room', 'class_group')
+    list_display = (
+        "admission_no",
+        "full_name",
+        "gender",
+        "residency",
+        "status",
+        "house",
+        "dormitory",
+        "room",
+        "class_group",
+    )
     list_filter = (
-        'residency',
-        'status',
-        'gender',
-        'house',
-        'dormitory',
-        'room',
-        'programme',
-        'class_group',
+        "residency",
+        "status",
+        "gender",
+        "house",
+        "dormitory",
+        "room",
+        "programme",
+        "class_group",
     )
     search_fields = (
-        'admission_no',
-        'full_name',
-        'index_number',
-        'programme__name',
-        'class_group__name',
-        'house__name',
-        'dormitory__name',
-        'room__name',
+        "admission_no",
+        "full_name",
+        "index_number",
+        "programme__name",
+        "class_group__name",
+        "house__name",
+        "dormitory__name",
+        "room__name",
     )
     list_per_page = 50
+
+    def get_readonly_fields(self, request, obj=None):
+        readonly_fields = list(super().get_readonly_fields(request, obj))
+        readonly_fields.extend(("completed_on", "completion_academic_year"))
+        if obj is not None and "class_group" not in readonly_fields:
+            readonly_fields.append("class_group")
+        if (
+            obj is not None
+            and obj.status == Student.EnrollmentStatus.COMPLETED
+            and "status" not in readonly_fields
+        ):
+            readonly_fields.append("status")
+        return readonly_fields
+
+
+@admin.register(StudentProgressionRecord)
+class StudentProgressionRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "student",
+        "event",
+        "academic_year",
+        "from_class_group",
+        "to_class_group",
+        "effective_on",
+        "actor",
+    )
+    list_filter = ("event", "academic_year")
+    search_fields = ("student__full_name", "student__admission_no")
+    readonly_fields = (
+        "student",
+        "academic_year",
+        "event",
+        "from_class_group",
+        "to_class_group",
+        "effective_on",
+        "actor",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Exeat)
 class ExeatAdmin(admin.ModelAdmin):
-    list_display = ('exeat_number', 'student', 'exeat_type', 'expected_departure', 'expected_return', 'status', 'approved_by')
-    list_filter = ('status', 'exeat_type', 'student__house')
-    search_fields = ('exeat_number', 'student__full_name', 'student__admission_no')
+    list_display = (
+        "exeat_number",
+        "student",
+        "exeat_type",
+        "expected_departure",
+        "expected_return",
+        "status",
+        "approved_by",
+    )
+    list_filter = ("status", "exeat_type", "student__house")
+    search_fields = ("exeat_number", "student__full_name", "student__admission_no")
 
 
 @admin.register(ExeatMovement)
 class ExeatMovementAdmin(admin.ModelAdmin):
-    list_display = ('exeat', 'actual_departure', 'actual_return', 'departure_recorded_by', 'return_recorded_by')
+    list_display = (
+        "exeat",
+        "actual_departure",
+        "actual_return",
+        "departure_recorded_by",
+        "return_recorded_by",
+    )
 
 
 @admin.register(MovementConcernReport)
@@ -224,22 +315,52 @@ class MovementConcernReportAdmin(admin.ModelAdmin):
 
 @admin.register(ExeatReconciliation)
 class ExeatReconciliationAdmin(admin.ModelAdmin):
-    list_display = ('exeat', 'outcome', 'actual_departure', 'actual_return', 'reconciled_by', 'created_at')
-    list_filter = ('outcome', 'created_at')
-    search_fields = ('exeat__exeat_number', 'exeat__student__full_name', 'reason')
-    readonly_fields = ('created_at', 'updated_at')
+    list_display = (
+        "exeat",
+        "outcome",
+        "actual_departure",
+        "actual_return",
+        "reconciled_by",
+        "created_at",
+    )
+    list_filter = ("outcome", "created_at")
+    search_fields = ("exeat__exeat_number", "exeat__student__full_name", "reason")
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(SMSDelivery)
 class SMSDeliveryAdmin(admin.ModelAdmin):
-    list_display = ('event_type', 'recipient_name', 'phone_number', 'status', 'attempts', 'created_at')
-    list_filter = ('event_type', 'status', 'created_at')
-    search_fields = ('recipient_name', 'phone_number', 'exeat__exeat_number', 'exeat__student__full_name')
+    list_display = (
+        "event_type",
+        "recipient_name",
+        "phone_number",
+        "status",
+        "attempts",
+        "created_at",
+    )
+    list_filter = ("event_type", "status", "created_at")
+    search_fields = (
+        "recipient_name",
+        "phone_number",
+        "exeat__exeat_number",
+        "exeat__student__full_name",
+    )
     readonly_fields = (
-        'exeat', 'event_type', 'recipient_name', 'phone_number', 'message',
-        'status', 'provider_reference', 'attempts', 'last_attempted_at',
-        'sent_at', 'last_error', 'dedupe_key', 'scheduled_for',
-        'created_at', 'updated_at',
+        "exeat",
+        "event_type",
+        "recipient_name",
+        "phone_number",
+        "message",
+        "status",
+        "provider_reference",
+        "attempts",
+        "last_attempted_at",
+        "sent_at",
+        "last_error",
+        "dedupe_key",
+        "scheduled_for",
+        "created_at",
+        "updated_at",
     )
 
     def has_add_permission(self, request):
@@ -266,15 +387,20 @@ class SMSConfigurationAdmin(admin.ModelAdmin):
             from django.shortcuts import redirect
             from django.urls import reverse
 
-            return redirect(
-                reverse("admin:core_smsconfiguration_change", args=[1])
-            )
+            return redirect(reverse("admin:core_smsconfiguration_change", args=[1]))
         return super().changelist_view(request, extra_context)
 
 
 @admin.register(AcademicTerm)
 class AcademicTermAdmin(admin.ModelAdmin):
-    list_display = ("academic_year", "term", "level", "start_date", "end_date", "is_current")
+    list_display = (
+        "academic_year",
+        "term",
+        "level",
+        "start_date",
+        "end_date",
+        "is_current",
+    )
     list_filter = ("academic_year", "term", "level", "is_current")
 
     def save_model(self, request, obj, form, change):
@@ -288,16 +414,18 @@ class AcademicTermAdmin(admin.ModelAdmin):
         )
         previous = (
             AcademicTerm.objects.select_related("academic_year").get(pk=obj.pk)
-            if change else None
+            if change
+            else None
         )
         old_values = {
             field_name: (
                 getattr(previous, field_name).isoformat()
                 if previous and field_name in {"start_date", "end_date"}
-                else str(getattr(previous, field_name))
-                if previous and field_name.endswith("_id")
-                else getattr(previous, field_name)
-                if previous else None
+                else (
+                    str(getattr(previous, field_name))
+                    if previous and field_name.endswith("_id")
+                    else getattr(previous, field_name) if previous else None
+                )
             )
             for field_name in tracked_fields
         }
@@ -312,9 +440,11 @@ class AcademicTermAdmin(admin.ModelAdmin):
             field_name: (
                 getattr(obj, field_name).isoformat()
                 if field_name in {"start_date", "end_date"}
-                else str(getattr(obj, field_name))
-                if field_name.endswith("_id")
-                else getattr(obj, field_name)
+                else (
+                    str(getattr(obj, field_name))
+                    if field_name.endswith("_id")
+                    else getattr(obj, field_name)
+                )
             )
             for field_name in tracked_fields
         }
@@ -349,23 +479,24 @@ class SchoolConfigurationAdmin(admin.ModelAdmin):
             from django.shortcuts import redirect
             from django.urls import reverse
 
-            return redirect(
-                reverse("admin:core_schoolconfiguration_change", args=[1])
-            )
+            return redirect(reverse("admin:core_schoolconfiguration_change", args=[1]))
         return super().changelist_view(request, extra_context)
 
     def save_model(self, request, obj, form, change):
         tracked_fields = ("name", "short_name", "logo", "address", "contact_number")
-        previous = (
-            SchoolConfiguration.objects.get(pk=obj.pk)
-            if change else None
-        )
+        previous = SchoolConfiguration.objects.get(pk=obj.pk) if change else None
         changes = {}
         for field_name in tracked_fields:
-            old_value = getattr(previous, field_name).name if (
-                previous and field_name == "logo"
-            ) else getattr(previous, field_name) if previous else None
-            new_value = getattr(obj, field_name).name if field_name == "logo" else getattr(obj, field_name)
+            old_value = (
+                getattr(previous, field_name).name
+                if (previous and field_name == "logo")
+                else getattr(previous, field_name) if previous else None
+            )
+            new_value = (
+                getattr(obj, field_name).name
+                if field_name == "logo"
+                else getattr(obj, field_name)
+            )
             if old_value != new_value:
                 changes[field_name] = {"from": old_value, "to": new_value}
 
@@ -411,53 +542,80 @@ class ConfigurationAuditLogAdmin(admin.ModelAdmin):
 @admin.register(DisciplinaryRecord)
 class DisciplinaryRecordAdmin(admin.ModelAdmin):
     list_display = (
-        'student', 'offense', 'severity', 'is_corrected', 'action_taken',
-        'logged_by', 'corrected_by', 'corrected_at', 'created_at',
+        "student",
+        "offense",
+        "severity",
+        "is_corrected",
+        "action_taken",
+        "logged_by",
+        "corrected_by",
+        "corrected_at",
+        "created_at",
     )
     readonly_fields = (
-        'roll_call_entry',
-        'roll_call_follow_up',
-        'corrected_by',
-        'corrected_at',
-        'correction_note',
+        "roll_call_entry",
+        "roll_call_follow_up",
+        "corrected_by",
+        "corrected_at",
+        "correction_note",
     )
+
+
 @admin.register(RollCallSession)
 class RollCallSessionAdmin(admin.ModelAdmin):
-    list_display = ('house', 'dormitory', 'session_type', 'date', 'conducted_by', 'status')
-    list_filter = ('session_type', 'status', 'house', 'date')
-    search_fields = ('house__name', 'dormitory__name', 'conducted_by__full_name')
+    list_display = (
+        "house",
+        "dormitory",
+        "session_type",
+        "date",
+        "conducted_by",
+        "status",
+    )
+    list_filter = ("session_type", "status", "house", "date")
+    search_fields = ("house__name", "dormitory__name", "conducted_by__full_name")
 
 
 @admin.register(RollCallEntry)
 class RollCallEntryAdmin(admin.ModelAdmin):
-    list_display = ('session', 'student', 'status', 'status_source', 'remarks', 'gate_conflict_at')
-    list_filter = ('status', 'session__house', 'session__date')
-    search_fields = ('student__full_name', 'student__admission_no', 'remarks')
+    list_display = (
+        "session",
+        "student",
+        "status",
+        "status_source",
+        "remarks",
+        "gate_conflict_at",
+    )
+    list_filter = ("status", "session__house", "session__date")
+    search_fields = ("student__full_name", "student__admission_no", "remarks")
 
     def has_change_permission(self, request, obj=None):
-        if obj and obj.session.status == 'Completed':
+        if obj and obj.session.status == "Completed":
             return False
         return super().has_change_permission(request, obj)
 
     def has_delete_permission(self, request, obj=None):
-        if obj and obj.session.status == 'Completed':
+        if obj and obj.session.status == "Completed":
             return False
         return super().has_delete_permission(request, obj)
 
 
 @admin.register(RollCallAbsenceFollowUp)
 class RollCallAbsenceFollowUpAdmin(admin.ModelAdmin):
-    list_display = ('entry', 'status', 'reported_by', 'resolved_by', 'resolved_at')
-    list_filter = ('status', 'entry__session__house', 'entry__session__date')
-    search_fields = ('entry__student__full_name', 'entry__student__admission_no', 'resolution_note')
+    list_display = ("entry", "status", "reported_by", "resolved_by", "resolved_at")
+    list_filter = ("status", "entry__session__house", "entry__session__date")
+    search_fields = (
+        "entry__student__full_name",
+        "entry__student__admission_no",
+        "resolution_note",
+    )
     readonly_fields = (
-        'entry',
-        'status',
-        'reported_by',
-        'resolved_by',
-        'resolved_at',
-        'resolution_note',
-        'resulting_status',
+        "entry",
+        "status",
+        "reported_by",
+        "resolved_by",
+        "resolved_at",
+        "resolution_note",
+        "resulting_status",
     )
 
     def has_add_permission(self, request):
@@ -474,6 +632,11 @@ admin.site.register(
         DormitoryRoom,
         ClassGroup,
         Guardian,
-        AcademicYear,
     ]
 )
+
+
+@admin.register(AcademicYear)
+class AcademicYearAdmin(admin.ModelAdmin):
+    list_display = ("name", "start_date", "end_date", "is_current")
+    readonly_fields = ("students_phased_out_at",)

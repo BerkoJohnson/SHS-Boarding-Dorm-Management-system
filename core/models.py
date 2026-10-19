@@ -16,7 +16,6 @@ from PIL import Image, UnidentifiedImageError
 from django_pgschemas.schema import get_current_schema
 from .storage import PrivateStudentPhotoStorage
 
-
 MAX_STUDENT_PHOTO_SIZE = 5 * 1024 * 1024
 MAX_STUDENT_PHOTO_PIXELS = 25_000_000
 ROLL_CALL_SESSION_TIMEOUT = timedelta(hours=1)
@@ -89,36 +88,41 @@ class AcademicYear(BaseModel):
     Academic Year tracking (e.g., 2025/2026 Academic Year).
     The 'name' field is automatically generated from start_date.year and end_date.year.
     """
+
     name = models.CharField(
-        max_length=50, 
-        unique=True, 
-        blank=True, 
-        editable=False, 
-        help_text="Auto-generated from start and end years."
+        max_length=50,
+        unique=True,
+        blank=True,
+        editable=False,
+        help_text="Auto-generated from start and end years.",
     )
     start_date = models.DateField()
     end_date = models.DateField()
     is_current = models.BooleanField(
-        default=False, 
-        help_text="Set as active academic year."
+        default=False, help_text="Set as active academic year."
+    )
+    students_phased_out_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When automatic SHS 3 completion ran for this academic year.",
     )
 
     class Meta:
-        ordering = ['-start_date']
+        ordering = ["-start_date"]
         verbose_name = "Academic Year"
         verbose_name_plural = "Academic Years"
 
     def clean(self):
         super().clean()
         if self.start_date and self.end_date and self.end_date <= self.start_date:
-            raise ValidationError({'end_date': "End date must be after start date."})
+            raise ValidationError({"end_date": "End date must be after start date."})
 
     def save(self, *args, **kwargs):
         # Auto-generate name from start_date and end_date years
         if self.start_date and self.end_date:
             start_year = self.start_date.year
             end_year = self.end_date.year
-            
+
             if start_year == end_year:
                 self.name = f"{start_year} Academic Year"
             else:
@@ -126,7 +130,9 @@ class AcademicYear(BaseModel):
 
         # Ensure only one active academic year exists at a time
         if self.is_current:
-            AcademicYear.objects.filter(is_current=True).exclude(pk=self.pk).update(is_current=False)
+            AcademicYear.objects.filter(is_current=True).exclude(pk=self.pk).update(
+                is_current=False
+            )
 
         self.full_clean()
         super().save(*args, **kwargs)
@@ -158,16 +164,15 @@ class AcademicTerm(BaseModel):
     )
     term = models.CharField(max_length=10, choices=TermChoice.choices)
     level = models.CharField(
-        max_length=10, 
-        choices=LevelChoice.choices, 
+        max_length=10,
+        choices=LevelChoice.choices,
         default=LevelChoice.ALL,
-        help_text="Target form/cohort for Double Track schedules."
+        help_text="Target form/cohort for Double Track schedules.",
     )
     start_date = models.DateField()
     end_date = models.DateField()
     is_current = models.BooleanField(
-        default=False, 
-        help_text="Designates active term/semester for this level."
+        default=False, help_text="Designates active term/semester for this level."
     )
 
     class Meta:
@@ -179,22 +184,28 @@ class AcademicTerm(BaseModel):
     def clean(self):
         super().clean()
         if self.start_date and self.end_date and self.end_date <= self.start_date:
-            raise ValidationError({'end_date': "Term end date must be after start date."})
+            raise ValidationError(
+                {"end_date": "Term end date must be after start date."}
+            )
 
     def save(self, *args, **kwargs):
         # Reset active status ONLY for other terms matching this specific level
         if self.is_current:
-            AcademicTerm.objects.filter(
-                is_current=True, 
-                level=self.level
-            ).exclude(pk=self.pk).update(is_current=False)
+            AcademicTerm.objects.filter(is_current=True, level=self.level).exclude(
+                pk=self.pk
+            ).update(is_current=False)
 
         self.full_clean()
         super().save(*args, **kwargs)
 
     def __str__(self):
-        level_str = f" [{self.get_level_display()}]" if self.level != self.LevelChoice.ALL else ""
+        level_str = (
+            f" [{self.get_level_display()}]"
+            if self.level != self.LevelChoice.ALL
+            else ""
+        )
         return f"{self.academic_year.name} - {self.get_term_display()}{level_str}"
+
 
 class Programme(BaseModel):
     """Academic programmes offered in the Senior High School."""
@@ -307,18 +318,18 @@ class DormitoryRoom(BaseModel):
     def clean(self):
         super().clean()
         if self.pk:
-            previous = type(self).objects.filter(pk=self.pk).values(
-                "dormitory_id"
-            ).first()
-            occupied = Student.objects.filter(
-                room_id=self.pk,
-                residency=Student.ResidencyStatus.BOARDING,
-            ).count()
-            if (
-                occupied
-                and previous
-                and previous["dormitory_id"] != self.dormitory_id
-            ):
+            previous = (
+                type(self).objects.filter(pk=self.pk).values("dormitory_id").first()
+            )
+            occupied = (
+                Student.objects.exclude(status=Student.EnrollmentStatus.COMPLETED)
+                .filter(
+                    room_id=self.pk,
+                    residency=Student.ResidencyStatus.BOARDING,
+                )
+                .count()
+            )
+            if occupied and previous and previous["dormitory_id"] != self.dormitory_id:
                 raise ValidationError(
                     {
                         "dormitory": (
@@ -351,6 +362,7 @@ class DormitoryRoom(BaseModel):
 
 class StaffRole(models.TextChoices):
     """Institutional system user roles for Eden High School."""
+
     UNASSIGNED = "UNASSIGNED", "Unassigned"
     ADMIN = "ADMIN", "System Administrator"
     SENIOR_HOUSEMASTER = "SENIOR_HOUSEMASTER", "Senior Housemaster"
@@ -364,17 +376,18 @@ class UserProfile(BaseModel):
     Profile extension linking auth.User to their institutional role
     and operational boundaries in Eden High School.
     """
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="profile",
-        help_text="Underlying authentication user account."
+        help_text="Underlying authentication user account.",
     )
     role = models.CharField(
         max_length=30,
         choices=StaffRole.choices,
         default=StaffRole.UNASSIGNED,
-        help_text="Institutional operational role governing permissions."
+        help_text="Institutional operational role governing permissions.",
     )
     phone_number = models.CharField(max_length=17, blank=True)
 
@@ -393,12 +406,17 @@ class UserProfile(BaseModel):
     @property
     def is_senior_housemaster(self) -> bool:
         return self.role == StaffRole.SENIOR_HOUSEMASTER or (
-            hasattr(self.user, 'housemaster') and self.user.housemaster and self.user.housemaster.is_senior_housemaster
+            hasattr(self.user, "housemaster")
+            and self.user.housemaster
+            and self.user.housemaster.is_senior_housemaster
         )
 
     @property
     def is_housemaster(self) -> bool:
-        return self.role in (StaffRole.HOUSEMASTER, StaffRole.SENIOR_HOUSEMASTER) or hasattr(self.user, 'housemaster')
+        return self.role in (
+            StaffRole.HOUSEMASTER,
+            StaffRole.SENIOR_HOUSEMASTER,
+        ) or hasattr(self.user, "housemaster")
 
     @property
     def is_gate_officer(self) -> bool:
@@ -411,7 +429,7 @@ class UserProfile(BaseModel):
         """
         if self.is_admin or self.is_senior_housemaster:
             return True
-        if hasattr(self.user, 'housemaster') and self.user.housemaster:
+        if hasattr(self.user, "housemaster") and self.user.housemaster:
             hm = self.user.housemaster
             if hm.is_senior_housemaster:
                 return True
@@ -419,7 +437,8 @@ class UserProfile(BaseModel):
                 return True
         # Backwards-compatibility fallback: lookup by staff_id or username
         hm = HouseMaster.objects.filter(
-            models.Q(staff_id__iexact=self.user.username) | models.Q(full_name__icontains=self.user.username)
+            models.Q(staff_id__iexact=self.user.username)
+            | models.Q(full_name__icontains=self.user.username)
         ).first()
         if hm:
             if hm.is_senior_housemaster:
@@ -433,9 +452,13 @@ class UserProfile(BaseModel):
         Determines if user can record disciplinary infractions.
         Admins, Senior Housemasters, Housemasters, and Tutors can all record incidents.
         """
-        if self.is_admin or self.is_senior_housemaster or self.role == StaffRole.HOUSE_TUTOR:
+        if (
+            self.is_admin
+            or self.is_senior_housemaster
+            or self.role == StaffRole.HOUSE_TUTOR
+        ):
             return True
-        if hasattr(self.user, 'housemaster'):
+        if hasattr(self.user, "housemaster"):
             return True
         return False
 
@@ -448,45 +471,46 @@ class UserProfile(BaseModel):
 
 class HouseMaster(BaseModel):
     """Housemasters / Housemistresses supervising houses or dormitory blocks."""
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="housemaster",
-        help_text="Login user account associated with this housemaster profile."
+        help_text="Login user account associated with this housemaster profile.",
     )
     full_name = models.CharField(max_length=150)
     staff_id = models.CharField(max_length=30, unique=True)
     phone_number = models.CharField(max_length=17)
-    
+
     house = models.ForeignKey(
-        House, 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True, 
-        related_name='housemasters',
-        help_text="House assigned to this master. Senior Housemaster can be left blank for school-wide oversight."
+        House,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="housemasters",
+        help_text="House assigned to this master. Senior Housemaster can be left blank for school-wide oversight.",
     )
     assigned_dormitory = models.ForeignKey(
-        Dormitory, 
-        on_delete=models.SET_NULL, 
-        null=True, 
+        Dormitory,
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
-        help_text="Optional specific dormitory block assigned to this housemaster."
+        help_text="Optional specific dormitory block assigned to this housemaster.",
     )
     is_senior_housemaster = models.BooleanField(
         default=False,
-        help_text="Designates the Senior Housemaster. Only one staff member can hold this title."
+        help_text="Designates the Senior Housemaster. Only one staff member can hold this title.",
     )
 
     class Meta:
-        ordering = ['full_name']
+        ordering = ["full_name"]
         constraints = [
             models.UniqueConstraint(
-                fields=['is_senior_housemaster'],
+                fields=["is_senior_housemaster"],
                 condition=models.Q(is_senior_housemaster=True),
-                name='unique_senior_housemaster'
+                name="unique_senior_housemaster",
             )
         ]
 
@@ -494,31 +518,45 @@ class HouseMaster(BaseModel):
         super().clean()
         # 1. Enforce that regular Housemasters MUST be assigned to a House
         if not self.is_senior_housemaster and self.house is None:
-            raise ValidationError({
-                'house': "Regular Housemasters must be assigned to a specific House."
-            })
+            raise ValidationError(
+                {"house": "Regular Housemasters must be assigned to a specific House."}
+            )
 
         # 2. Guarantee only one Senior Housemaster exists across the institution
         if self.is_senior_housemaster:
-            existing = HouseMaster.objects.filter(is_senior_housemaster=True).exclude(pk=self.pk)
+            existing = HouseMaster.objects.filter(is_senior_housemaster=True).exclude(
+                pk=self.pk
+            )
             if existing.exists():
-                raise ValidationError({
-                    'is_senior_housemaster': f"A Senior Housemaster already exists ({existing.first().full_name}). "
-                                             f"Unmark the active Senior Housemaster before assigning a new one."
-                })
+                raise ValidationError(
+                    {
+                        "is_senior_housemaster": f"A Senior Housemaster already exists ({existing.first().full_name}). "
+                        f"Unmark the active Senior Housemaster before assigning a new one."
+                    }
+                )
 
         # 3. Ensure assigned dormitory belongs to the selected House (if both are selected)
-        if self.assigned_dormitory and self.house and self.assigned_dormitory.house_id != self.house_id:
-            raise ValidationError({
-                'assigned_dormitory': f"Dormitory '{self.assigned_dormitory.name}' does not belong to {self.house.name}."
-            })
+        if (
+            self.assigned_dormitory
+            and self.house
+            and self.assigned_dormitory.house_id != self.house_id
+        ):
+            raise ValidationError(
+                {
+                    "assigned_dormitory": f"Dormitory '{self.assigned_dormitory.name}' does not belong to {self.house.name}."
+                }
+            )
 
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
         if self.user:
             profile, _ = UserProfile.objects.get_or_create(user=self.user)
-            target_role = StaffRole.SENIOR_HOUSEMASTER if self.is_senior_housemaster else StaffRole.HOUSEMASTER
+            target_role = (
+                StaffRole.SENIOR_HOUSEMASTER
+                if self.is_senior_housemaster
+                else StaffRole.HOUSEMASTER
+            )
             if (
                 profile.role
                 in (
@@ -529,7 +567,7 @@ class HouseMaster(BaseModel):
                 and profile.role != target_role
             ):
                 profile.role = target_role
-                profile.save(update_fields=['role'])
+                profile.save(update_fields=["role"])
 
     def __str__(self):
         if self.is_senior_housemaster:
@@ -595,6 +633,7 @@ class Student(BaseModel):
         ENROLLED = "Enrolled", "Enrolled"
         APPROVED = "Approved", "Approved"
         IN_PROGRESS = "Forms In Progress", "Forms In Progress"
+        COMPLETED = "Completed", "Completed"
 
     admission_no = models.CharField(max_length=30, unique=True, db_index=True)
     index_number = models.CharField(max_length=20, unique=True, db_index=True)
@@ -671,12 +710,43 @@ class Student(BaseModel):
         choices=EnrollmentStatus.choices,
         default=EnrollmentStatus.ENROLLED,
     )
+    completed_on = models.DateField(null=True, blank=True)
+    completion_academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="completed_students",
+    )
+    expected_completion_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="students_expected_to_complete",
+    )
 
     class Meta:
         ordering = ["full_name"]
 
     def clean(self):
         super().clean()
+        if self.status == self.EnrollmentStatus.COMPLETED and (
+            not self.completed_on or not self.completion_academic_year_id
+        ):
+            raise ValidationError(
+                "Completed students must have a completion date and academic year."
+            )
+        if self.status == self.EnrollmentStatus.COMPLETED and (
+            not self.pk
+            or not self.progression_records.filter(
+                event=StudentProgressionRecord.Event.PHASED_OUT,
+                academic_year_id=self.completion_academic_year_id,
+            ).exists()
+        ):
+            raise ValidationError(
+                "Students can only be completed through the audited phase-out process."
+            )
         if self.residency == self.ResidencyStatus.DAY and self.dormitory is not None:
             raise ValidationError(
                 {"dormitory": "Day students cannot be assigned to a dormitory block."}
@@ -706,8 +776,10 @@ class Student(BaseModel):
             raise ValidationError(
                 {"room": "The selected room must belong to the assigned dormitory."}
             )
-        if self.room:
-            room_occupancy = Student.objects.filter(
+        if self.room and self.status != self.EnrollmentStatus.COMPLETED:
+            room_occupancy = Student.objects.exclude(
+                status=self.EnrollmentStatus.COMPLETED
+            ).filter(
                 room_id=self.room_id,
                 residency=self.ResidencyStatus.BOARDING,
             )
@@ -723,14 +795,11 @@ class Student(BaseModel):
             and self.programme_id != self.class_group.programme_id
         ):
             raise ValidationError(
-                {
-                    "class_group": "The selected class belongs to a different programme."
-                }
+                {"class_group": "The selected class belongs to a different programme."}
             )
         if self.dormitory:
-            if (
-                self.dormitory.gender
-                != DORMITORY_GENDER_BY_STUDENT_GENDER.get(self.gender)
+            if self.dormitory.gender != DORMITORY_GENDER_BY_STUDENT_GENDER.get(
+                self.gender
             ):
                 raise ValidationError(
                     {
@@ -741,6 +810,14 @@ class Student(BaseModel):
 
     def save(self, *args, **kwargs):
         with transaction.atomic():
+            if (
+                not self.expected_completion_year_id
+                and self.status == self.EnrollmentStatus.ENROLLED
+                and self.level == AcademicTerm.LevelChoice.SHS_3
+            ):
+                self.expected_completion_year = AcademicYear.objects.filter(
+                    is_current=True
+                ).first()
             if self.room_id:
                 # Lock the target room so concurrent saves cannot overfill it.
                 DormitoryRoom.objects.select_for_update().filter(
@@ -748,9 +825,11 @@ class Student(BaseModel):
                 ).exists()
             previous_status = None
             if not self._state.adding:
-                previous_status = Student.objects.filter(pk=self.pk).values_list(
-                    "status", flat=True
-                ).first()
+                previous_status = (
+                    Student.objects.filter(pk=self.pk)
+                    .values_list("status", flat=True)
+                    .first()
+                )
             if (
                 self.status == self.EnrollmentStatus.ENROLLED
                 and previous_status != self.EnrollmentStatus.ENROLLED
@@ -768,8 +847,7 @@ class Student(BaseModel):
                     )
             self.full_clean()
             super().save(*args, **kwargs)
-        
-        
+
     @property
     def public_token_expired(self):
         """True when the public QR link has an expiry that has already passed."""
@@ -783,16 +861,71 @@ class Student(BaseModel):
         """Extracts level string (SHS1, SHS2, SHS3) from assigned class group name."""
         if self.class_group and self.class_group.name:
             name = self.class_group.name.strip().upper()
-            if name.startswith('1'):
+            if name.startswith("1"):
                 return AcademicTerm.LevelChoice.SHS_1
-            elif name.startswith('2'):
+            elif name.startswith("2"):
                 return AcademicTerm.LevelChoice.SHS_2
-            elif name.startswith('3'):
+            elif name.startswith("3"):
                 return AcademicTerm.LevelChoice.SHS_3
         return AcademicTerm.LevelChoice.ALL
 
     def __str__(self):
         return f"{self.full_name} ({self.admission_no})"
+
+
+class StudentProgressionRecord(BaseModel):
+    """Auditable class promotion or end-of-school completion event."""
+
+    class Event(models.TextChoices):
+        PROMOTED = "promoted", "Promoted"
+        PHASED_OUT = "phased_out", "Completed SHS 3"
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.PROTECT,
+        related_name="progression_records",
+    )
+    academic_year = models.ForeignKey(
+        AcademicYear,
+        on_delete=models.PROTECT,
+        related_name="student_progression_records",
+    )
+    event = models.CharField(max_length=20, choices=Event.choices)
+    from_class_group = models.ForeignKey(
+        ClassGroup,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="progressions_from",
+    )
+    to_class_group = models.ForeignKey(
+        ClassGroup,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="progressions_to",
+    )
+    effective_on = models.DateField()
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="student_progression_actions",
+    )
+
+    class Meta:
+        ordering = ["-effective_on", "student__full_name"]
+        indexes = [models.Index(fields=["student", "academic_year"])]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "academic_year", "event"],
+                name="unique_student_progression_event_per_year",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.student} - {self.get_event_display()} ({self.academic_year})"
 
 
 # Single source of truth for matching a student's gender to a dormitory block.
@@ -806,73 +939,84 @@ DORMITORY_GENDER_BY_STUDENT_GENDER = {
 
 class Exeat(BaseModel):
     """Core Exeat request and approval lifecycle (Housemaster & Student Workflow)."""
+
     class ExeatType(models.TextChoices):
-        MEDICAL = 'Medical', 'Medical Exeat'
-        TOWN = 'Town', 'Town Day Exeat'
-        WEEKEND = 'Weekend', 'Weekend Exeat'
-        EMERGENCY = 'Emergency', 'Emergency / Personal Exeat'
-        VACATION = 'Vacation', 'End of Term / Vacation Exeat'
+        MEDICAL = "Medical", "Medical Exeat"
+        TOWN = "Town", "Town Day Exeat"
+        WEEKEND = "Weekend", "Weekend Exeat"
+        EMERGENCY = "Emergency", "Emergency / Personal Exeat"
+        VACATION = "Vacation", "End of Term / Vacation Exeat"
 
     class Status(models.TextChoices):
-        PENDING = 'Pending', 'Pending Approval'
-        APPROVED = 'Approved', 'Approved (Pass Issued)'
-        REJECTED = 'Rejected', 'Rejected'
-        CANCELLED = 'Cancelled', 'Cancelled'
+        PENDING = "Pending", "Pending Approval"
+        APPROVED = "Approved", "Approved (Pass Issued)"
+        REJECTED = "Rejected", "Rejected"
+        CANCELLED = "Cancelled", "Cancelled"
 
     exeat_number = models.CharField(
-        max_length=30, 
-        unique=True, 
-        editable=False, 
-        help_text="Auto-generated exeat reference number e.g. EXT-20261004-A1B2"
+        max_length=30,
+        unique=True,
+        editable=False,
+        help_text="Auto-generated exeat reference number e.g. EXT-20261004-A1B2",
     )
     student = models.ForeignKey(
-        Student, 
-        on_delete=models.CASCADE, 
-        related_name='exeats',
-        help_text="Student requesting leave."
+        Student,
+        on_delete=models.CASCADE,
+        related_name="exeats",
+        help_text="Student requesting leave.",
     )
     academic_term = models.ForeignKey(
-        AcademicTerm, 
-        on_delete=models.SET_NULL, 
-        null=True, 
+        AcademicTerm,
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
-        related_name='exeats'
+        related_name="exeats",
     )
-    exeat_type = models.CharField(max_length=20, choices=ExeatType.choices, default=ExeatType.MEDICAL)
+    exeat_type = models.CharField(
+        max_length=20, choices=ExeatType.choices, default=ExeatType.MEDICAL
+    )
     reason = models.TextField(help_text="Detailed reason for leave request.")
-    destination = models.CharField(max_length=200, help_text="Destination address or town during leave.")
-    
+    destination = models.CharField(
+        max_length=200, help_text="Destination address or town during leave."
+    )
+
     # Scheduled Travel Timestamps
-    expected_departure = models.DateTimeField(help_text="Scheduled departure date & time.")
+    expected_departure = models.DateTimeField(
+        help_text="Scheduled departure date & time."
+    )
     expected_return = models.DateTimeField(help_text="Scheduled return date & time.")
 
     # Status & Approvals
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
     approved_by = models.ForeignKey(
-        HouseMaster, 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True, 
-        related_name='approved_exeats',
-        help_text="Housemaster / Senior Housemaster who signed off this pass (Approved only)."
+        HouseMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_exeats",
+        help_text="Housemaster / Senior Housemaster who signed off this pass (Approved only).",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='drafted_exeats',
-        help_text="Staff member who originally drafted / submitted this leave request (audit trail)."
+        related_name="drafted_exeats",
+        help_text="Staff member who originally drafted / submitted this leave request (audit trail).",
     )
-    approval_remarks = models.TextField(blank=True, null=True, help_text="Housemaster's notes or conditions.")
+    approval_remarks = models.TextField(
+        blank=True, null=True, help_text="Housemaster's notes or conditions."
+    )
 
     class Meta:
-        ordering = ['-expected_departure']
+        ordering = ["-expected_departure"]
         verbose_name = "Exeat / Leave Pass"
         verbose_name_plural = "Exeats / Leave Passes"
         indexes = [
-            models.Index(fields=['exeat_number']),
-            models.Index(fields=['status', 'expected_return']),
+            models.Index(fields=["exeat_number"]),
+            models.Index(fields=["status", "expected_return"]),
         ]
 
     def clean(self):
@@ -885,35 +1029,69 @@ class Exeat(BaseModel):
                     "This tenant's subscription does not include exeat management."
                 )
         # 1. Day students validation
-        if self.student_id and getattr(self, 'student', None) and self.student.residency == Student.ResidencyStatus.DAY:
-            raise ValidationError({'student': "Day students do not require boarding exeat passes."})
+        if (
+            self.student_id
+            and getattr(self, "student", None)
+            and self.student.residency == Student.ResidencyStatus.DAY
+        ):
+            raise ValidationError(
+                {"student": "Day students do not require boarding exeat passes."}
+            )
+        if (
+            self.student_id
+            and getattr(self, "student", None)
+            and self.student.status == Student.EnrollmentStatus.COMPLETED
+        ):
+            raise ValidationError(
+                {"student": "Completed students cannot receive new exeat passes."}
+            )
 
         # 2. Date order validation
         if self.expected_departure and self.expected_return:
             if self.expected_return <= self.expected_departure:
-                raise ValidationError({'expected_return': "Expected return time must be after expected departure time."})
+                raise ValidationError(
+                    {
+                        "expected_return": "Expected return time must be after expected departure time."
+                    }
+                )
 
         # 3. Require approval details when status is Approved
         if self.status == self.Status.APPROVED and not self.approved_by_id:
-            raise ValidationError({'approved_by': "An approving Housemaster must be specified when issuing an exeat pass."})
+            raise ValidationError(
+                {
+                    "approved_by": "An approving Housemaster must be specified when issuing an exeat pass."
+                }
+            )
 
         # 4. Jurisdiction guard: the signatory Housemaster must actually have authority over this student's house
-        if self.status == self.Status.APPROVED and self.approved_by_id and self.student_id:
+        if (
+            self.status == self.Status.APPROVED
+            and self.approved_by_id
+            and self.student_id
+        ):
             hm = self.approved_by
             if not hm.is_senior_housemaster:
-                student_house_id = self.student.house_id if getattr(self.student, 'house_id', None) else None
+                student_house_id = (
+                    self.student.house_id
+                    if getattr(self.student, "house_id", None)
+                    else None
+                )
                 if hm.house_id is None:
                     # Non-senior Housemaster with no assigned house cannot approve anything
-                    raise ValidationError({
-                        'approved_by': f"{hm.full_name} is not assigned to a House and is not the Senior Housemaster. "
-                                        f"Only the student's Housemaster or the Senior Housemaster can approve this pass."
-                    })
+                    raise ValidationError(
+                        {
+                            "approved_by": f"{hm.full_name} is not assigned to a House and is not the Senior Housemaster. "
+                            f"Only the student's Housemaster or the Senior Housemaster can approve this pass."
+                        }
+                    )
                 if student_house_id is not None and hm.house_id != student_house_id:
-                    raise ValidationError({
-                        'approved_by': f"Jurisdiction error: {hm.full_name} is the Housemaster for {hm.house.name}, "
-                                        f"but this student belongs to {self.student.house.name if self.student.house else 'an unassigned House'}. "
-                                        f"Approval is restricted to the student's own Housemaster or the Senior Housemaster."
-                    })
+                    raise ValidationError(
+                        {
+                            "approved_by": f"Jurisdiction error: {hm.full_name} is the Housemaster for {hm.house.name}, "
+                            f"but this student belongs to {self.student.house.name if self.student.house else 'an unassigned House'}. "
+                            f"Approval is restricted to the student's own Housemaster or the Senior Housemaster."
+                        }
+                    )
 
     def save(self, *args, **kwargs):
         # 1. Auto-generate unique Exeat Pass Number on creation
@@ -925,10 +1103,14 @@ class Exeat(BaseModel):
         # 2. Auto-assign active term matching the student's form level
         if not self.academic_term_id and self.student_id:
             student_level = self.student.level
-            current_term = AcademicTerm.objects.filter(
-                is_current=True,
-                level__in=[student_level, AcademicTerm.LevelChoice.ALL]
-            ).order_by('-created_at').first()
+            current_term = (
+                AcademicTerm.objects.filter(
+                    is_current=True,
+                    level__in=[student_level, AcademicTerm.LevelChoice.ALL],
+                )
+                .order_by("-created_at")
+                .first()
+            )
 
             if current_term:
                 self.academic_term = current_term
@@ -976,16 +1158,35 @@ class Exeat(BaseModel):
 
 class ExeatMovement(BaseModel):
     """Gate control log tracking real-time departures and arrivals (Security/Gate Workflow)."""
+
     exeat = models.OneToOneField(
-        Exeat, 
-        on_delete=models.CASCADE, 
-        related_name='movement',
-        help_text="Associated approved exeat pass."
+        Exeat,
+        on_delete=models.CASCADE,
+        related_name="movement",
+        help_text="Associated approved exeat pass.",
     )
-    actual_departure = models.DateTimeField(null=True, blank=True, help_text="Timestamp when student exited the school gate.")
-    actual_return = models.DateTimeField(null=True, blank=True, help_text="Timestamp when student returned through the gate.")
-    departure_recorded_by = models.CharField(max_length=100, blank=True, null=True, help_text="Gate officer or master name/ID.")
-    return_recorded_by = models.CharField(max_length=100, blank=True, null=True, help_text="Gate officer or master name/ID.")
+    actual_departure = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when student exited the school gate.",
+    )
+    actual_return = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when student returned through the gate.",
+    )
+    departure_recorded_by = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Gate officer or master name/ID.",
+    )
+    return_recorded_by = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Gate officer or master name/ID.",
+    )
 
     class Meta:
         verbose_name = "Exeat Gate Log"
@@ -995,16 +1196,28 @@ class ExeatMovement(BaseModel):
         super().clean()
         # 1. Gate movement can only be created for APPROVED exeats
         if self.exeat_id and self.exeat.status != Exeat.Status.APPROVED:
-            raise ValidationError({'exeat': f"Cannot record gate movements for exeat pass '{self.exeat.exeat_number}' because it is {self.exeat.get_status_display()}."})
+            raise ValidationError(
+                {
+                    "exeat": f"Cannot record gate movements for exeat pass '{self.exeat.exeat_number}' because it is {self.exeat.get_status_display()}."
+                }
+            )
 
         # 2. Return timestamp must be after departure timestamp
         if self.actual_departure and self.actual_return:
             if self.actual_return <= self.actual_departure:
-                raise ValidationError({'actual_return': "Actual return time must be after actual departure time."})
+                raise ValidationError(
+                    {
+                        "actual_return": "Actual return time must be after actual departure time."
+                    }
+                )
 
         # 3. Cannot log return before departure is logged
         if self.actual_return and not self.actual_departure:
-            raise ValidationError({'actual_return': "Cannot log return timestamp before actual departure has been logged."})
+            raise ValidationError(
+                {
+                    "actual_return": "Cannot log return timestamp before actual departure has been logged."
+                }
+            )
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -1093,7 +1306,9 @@ class ExeatReconciliation(BaseModel):
     outcome = models.CharField(max_length=20, choices=Outcome.choices)
     actual_departure = models.DateTimeField(null=True, blank=True)
     actual_return = models.DateTimeField(null=True, blank=True)
-    reason = models.TextField(help_text="Evidence or explanation for reconciling missing gate records.")
+    reason = models.TextField(
+        help_text="Evidence or explanation for reconciling missing gate records."
+    )
     reconciled_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -1118,26 +1333,52 @@ class ExeatReconciliation(BaseModel):
         if self.exeat_id and self.exeat.status != Exeat.Status.APPROVED:
             raise ValidationError({"exeat": "Only approved exeats can be reconciled."})
 
-        movement = ExeatMovement.objects.filter(exeat_id=self.exeat_id).first() if self.exeat_id else None
+        movement = (
+            ExeatMovement.objects.filter(exeat_id=self.exeat_id).first()
+            if self.exeat_id
+            else None
+        )
         if movement and (movement.actual_departure or movement.actual_return):
-            raise ValidationError({"exeat": "A pass with recorded gate movement cannot be reconciled."})
+            raise ValidationError(
+                {"exeat": "A pass with recorded gate movement cannot be reconciled."}
+            )
 
         if self.outcome == self.Outcome.UNUSED:
             if self.actual_departure or self.actual_return:
-                raise ValidationError({"outcome": "An unused pass cannot have travel timestamps."})
+                raise ValidationError(
+                    {"outcome": "An unused pass cannot have travel timestamps."}
+                )
         elif self.outcome == self.Outcome.STUDENT_OUT:
             if not self.actual_departure:
-                raise ValidationError({"actual_departure": "Record the confirmed or best-known departure time."})
+                raise ValidationError(
+                    {
+                        "actual_departure": "Record the confirmed or best-known departure time."
+                    }
+                )
             if self.actual_return:
-                raise ValidationError({"actual_return": "A student still out cannot have a return time."})
+                raise ValidationError(
+                    {"actual_return": "A student still out cannot have a return time."}
+                )
         elif self.outcome == self.Outcome.RETURNED:
             if not self.actual_departure:
-                raise ValidationError({"actual_departure": "Record the confirmed or best-known departure time."})
+                raise ValidationError(
+                    {
+                        "actual_departure": "Record the confirmed or best-known departure time."
+                    }
+                )
             if not self.actual_return:
-                raise ValidationError({"actual_return": "Record the confirmed or best-known return time."})
+                raise ValidationError(
+                    {"actual_return": "Record the confirmed or best-known return time."}
+                )
 
-        if self.actual_departure and self.actual_return and self.actual_return <= self.actual_departure:
-            raise ValidationError({"actual_return": "Actual return must be after actual departure."})
+        if (
+            self.actual_departure
+            and self.actual_return
+            and self.actual_return <= self.actual_departure
+        ):
+            raise ValidationError(
+                {"actual_return": "Actual return must be after actual departure."}
+            )
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -1154,7 +1395,9 @@ class ExeatReconciliation(BaseModel):
         return "Student Out (Reconciled)"
 
     def __str__(self):
-        return f"Reconciliation: {self.exeat.exeat_number} ({self.get_outcome_display()})"
+        return (
+            f"Reconciliation: {self.exeat.exeat_number} ({self.get_outcome_display()})"
+        )
 
 
 class SMSDelivery(BaseModel):
@@ -1364,7 +1607,9 @@ class StudentIDExport(BaseModel):
                 )
         if not self.archive_name:
             timestamp = timezone.now().strftime("%Y%m%d-%H%M%S")
-            self.archive_name = f"student-id-export-{timestamp}-{uuid.uuid4().hex[:8]}.zip"
+            self.archive_name = (
+                f"student-id-export-{timestamp}-{uuid.uuid4().hex[:8]}.zip"
+            )
         if not self.expires_at:
             self.expires_at = timezone.now() + timezone.timedelta(days=7)
         super().save(*args, **kwargs)
@@ -1441,6 +1686,7 @@ class RollCallSession(BaseModel):
     Boarding House roll call inspection session conducted by Housemasters / Tutors.
     Tracks muster attendance per house or dormitory block for a specific date and time slot.
     """
+
     class SessionType(models.TextChoices):
         EVENING = "Evening", "Evening Roll Call (Lights Out)"
         MORNING = "Morning", "Morning Roll Call & Inspection"
@@ -1454,7 +1700,7 @@ class RollCallSession(BaseModel):
         House,
         on_delete=models.CASCADE,
         related_name="roll_call_sessions",
-        help_text="House being inspected."
+        help_text="House being inspected.",
     )
     dormitory = models.ForeignKey(
         Dormitory,
@@ -1462,19 +1708,17 @@ class RollCallSession(BaseModel):
         null=True,
         blank=True,
         related_name="roll_call_sessions",
-        help_text="Optional specific dormitory block (or all blocks in house if blank)."
+        help_text="Optional specific dormitory block (or all blocks in house if blank).",
     )
     academic_term = models.ForeignKey(
         AcademicTerm,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name="roll_call_sessions"
+        related_name="roll_call_sessions",
     )
     session_type = models.CharField(
-        max_length=20,
-        choices=SessionType.choices,
-        default=SessionType.EVENING
+        max_length=20, choices=SessionType.choices, default=SessionType.EVENING
     )
     date = models.DateField(default=date.today)
     conducted_by = models.ForeignKey(
@@ -1483,7 +1727,7 @@ class RollCallSession(BaseModel):
         null=True,
         blank=True,
         related_name="conducted_roll_calls",
-        help_text="Staff member conducting this roll call muster."
+        help_text="Staff member conducting this roll call muster.",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1491,14 +1735,14 @@ class RollCallSession(BaseModel):
         null=True,
         blank=True,
         related_name="created_roll_call_sessions",
-        help_text="User who started this roll call session."
+        help_text="User who started this roll call session.",
     )
     status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.IN_PROGRESS
+        max_length=20, choices=Status.choices, default=Status.IN_PROGRESS
     )
-    notes = models.TextField(blank=True, null=True, help_text="General inspection notes or observations.")
+    notes = models.TextField(
+        blank=True, null=True, help_text="General inspection notes or observations."
+    )
 
     class Meta:
         ordering = ["-date", "-created_at"]
@@ -1610,6 +1854,7 @@ class RollCallEntry(BaseModel):
     """
     Individual student attendance record within a RollCallSession.
     """
+
     class Status(models.TextChoices):
         UNMARKED = "Unmarked", "Not yet verified"
         PRESENT = "Present", "Present"
@@ -1623,19 +1868,13 @@ class RollCallEntry(BaseModel):
         GATE = "gate", "Reconciled from gate log"
 
     session = models.ForeignKey(
-        RollCallSession,
-        on_delete=models.CASCADE,
-        related_name="entries"
+        RollCallSession, on_delete=models.CASCADE, related_name="entries"
     )
     student = models.ForeignKey(
-        Student,
-        on_delete=models.CASCADE,
-        related_name="roll_call_entries"
+        Student, on_delete=models.CASCADE, related_name="roll_call_entries"
     )
     status = models.CharField(
-        max_length=20,
-        choices=Status.choices,
-        default=Status.UNMARKED
+        max_length=20, choices=Status.choices, default=Status.UNMARKED
     )
     status_source = models.CharField(
         max_length=10,
@@ -1669,6 +1908,7 @@ class RollCallEntry(BaseModel):
         # Allow initial creation (no pk yet) but block updates on completed sessions
         if self.pk and self.session.status == RollCallSession.Status.COMPLETED:
             from django.core.exceptions import ValidationError
+
             raise ValidationError(
                 "Cannot modify attendance records in a finalized roll call session. "
                 "Records are locked for audit integrity."
@@ -1744,7 +1984,7 @@ def ensure_user_profile(sender, instance, created, **kwargs):
     """Automatically provisions a UserProfile whenever a new User is registered."""
     if created:
         role = StaffRole.ADMIN if instance.is_superuser else StaffRole.UNASSIGNED
-        UserProfile.objects.get_or_create(user=instance, defaults={'role': role})
+        UserProfile.objects.get_or_create(user=instance, defaults={"role": role})
 
 
 @receiver(pre_save, sender=settings.AUTH_USER_MODEL)
@@ -1795,19 +2035,25 @@ def get_user_profile(user):
         profile = UserProfile.objects.get(user=user)
     except UserProfile.DoesNotExist:
         role = StaffRole.ADMIN if user.is_superuser else StaffRole.UNASSIGNED
-        profile, _ = UserProfile.objects.get_or_create(user=user, defaults={'role': role})
+        profile, _ = UserProfile.objects.get_or_create(
+            user=user, defaults={"role": role}
+        )
 
     # Keep role in sync if linked to a HouseMaster
-    hm = getattr(user, 'housemaster', None)
+    hm = getattr(user, "housemaster", None)
     if hm and profile.role in (
         StaffRole.UNASSIGNED,
         StaffRole.HOUSEMASTER,
         StaffRole.SENIOR_HOUSEMASTER,
     ):
-        target_role = StaffRole.SENIOR_HOUSEMASTER if hm.is_senior_housemaster else StaffRole.HOUSEMASTER
+        target_role = (
+            StaffRole.SENIOR_HOUSEMASTER
+            if hm.is_senior_housemaster
+            else StaffRole.HOUSEMASTER
+        )
         if profile.role != target_role:
             profile.role = target_role
-            profile.save(update_fields=['role'])
+            profile.save(update_fields=["role"])
 
     return profile
 
@@ -1833,12 +2079,17 @@ def get_approvable_pending_for_user(user):
     Returns:
         QuerySet[Exeat]: scoped, select_related for list rendering.
     """
-    base_qs = Exeat.objects.filter(
-        status=Exeat.Status.PENDING
-    ).select_related(
-        'student', 'student__house', 'student__dormitory',
-        'academic_term', 'created_by'
-    ).order_by('-created_at')
+    base_qs = (
+        Exeat.objects.filter(status=Exeat.Status.PENDING)
+        .select_related(
+            "student",
+            "student__house",
+            "student__dormitory",
+            "academic_term",
+            "created_by",
+        )
+        .order_by("-created_at")
+    )
 
     if not user or not user.is_authenticated:
         return base_qs.none()
@@ -1852,7 +2103,11 @@ def get_approvable_pending_for_user(user):
     # Role guard — only Admin / Senior HM / Housemaster can approve anything
     if not profile:
         return base_qs.none()
-    if profile.role not in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER, StaffRole.HOUSEMASTER):
+    if profile.role not in (
+        StaffRole.ADMIN,
+        StaffRole.SENIOR_HOUSEMASTER,
+        StaffRole.HOUSEMASTER,
+    ):
         return base_qs.none()
 
     # ADMIN and SENIOR_HOUSEMASTER: school-wide
@@ -1860,7 +2115,7 @@ def get_approvable_pending_for_user(user):
         return base_qs
 
     # HOUSEMASTER: only their directly assigned house
-    hm = getattr(user, 'housemaster', None)
+    hm = getattr(user, "housemaster", None)
 
     if hm:
         # Senior flag could be set on the HouseMaster row even if role on profile drifted
@@ -1894,85 +2149,117 @@ def get_exeat_queue_stats(scoped_pending_qs, user):
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
     stats = {
-        'total_pending': scoped_pending_qs.count(),
-        'oldest_pending_hours': 0,
-        'avg_queue_age_hours': 0,
-        'approved_today': 0,
-        'rejected_today': 0,
-        'overdue_returns': 0,
-        'per_house': [],
+        "total_pending": scoped_pending_qs.count(),
+        "oldest_pending_hours": 0,
+        "avg_queue_age_hours": 0,
+        "approved_today": 0,
+        "rejected_today": 0,
+        "overdue_returns": 0,
+        "per_house": [],
     }
 
     # --- Oldest + average age (in hours) for the SLA gauges ---
     agg = scoped_pending_qs.aggregate(
-        oldest_created=Min('created_at'),
-        avg_created=Avg('created_at'),
+        oldest_created=Min("created_at"),
+        avg_created=Avg("created_at"),
     )
-    if agg['oldest_created']:
-        age_delta = now - agg['oldest_created']
-        stats['oldest_pending_hours'] = round(age_delta.total_seconds() / 3600, 1)
-    if agg['avg_created']:
-        avg_delta = now - agg['avg_created']
-        stats['avg_queue_age_hours'] = round(avg_delta.total_seconds() / 3600, 1)
+    if agg["oldest_created"]:
+        age_delta = now - agg["oldest_created"]
+        stats["oldest_pending_hours"] = round(age_delta.total_seconds() / 3600, 1)
+    if agg["avg_created"]:
+        avg_delta = now - agg["avg_created"]
+        stats["avg_queue_age_hours"] = round(avg_delta.total_seconds() / 3600, 1)
 
     # --- Today's throughput for the current approver (SLA context) ---
     # Approved_today attributed to the currently-logged-in approver so each
     # HM sees *their own* desk stats, not a system-wide pool.
-    today_by_me = Exeat.objects.filter(
-        updated_at__gte=today_start,
-        approved_by__in=list(
-            HouseMaster.objects.filter(
-                _Q(staff_id__iexact=user.username) | _Q(full_name__icontains=user.username)
-            ).values_list('id', flat=True)
-        ) if user.is_authenticated else _Q(pk__in=[]),
-    ) if user.is_authenticated else Exeat.objects.none()
-    if getattr(user, 'housemaster', None):
+    today_by_me = (
+        Exeat.objects.filter(
+            updated_at__gte=today_start,
+            approved_by__in=(
+                list(
+                    HouseMaster.objects.filter(
+                        _Q(staff_id__iexact=user.username)
+                        | _Q(full_name__icontains=user.username)
+                    ).values_list("id", flat=True)
+                )
+                if user.is_authenticated
+                else _Q(pk__in=[])
+            ),
+        )
+        if user.is_authenticated
+        else Exeat.objects.none()
+    )
+    if getattr(user, "housemaster", None):
         today_by_me = Exeat.objects.filter(
             updated_at__gte=today_start,
             approved_by_id=user.housemaster.id,
         )
-    stats['approved_today'] = today_by_me.filter(status=Exeat.Status.APPROVED).count()
-    stats['rejected_today'] = today_by_me.filter(status=Exeat.Status.REJECTED).count()
+    stats["approved_today"] = today_by_me.filter(status=Exeat.Status.APPROVED).count()
+    stats["rejected_today"] = today_by_me.filter(status=Exeat.Status.REJECTED).count()
 
     # --- Overdue currently-out (cross queue context for approvers) ---
-    stats['overdue_returns'] = Exeat.objects.filter(
-        status=Exeat.Status.APPROVED,
-        expected_return__lte=now,
-    ).filter(
-        _Q(movement__actual_departure__isnull=False, movement__actual_return__isnull=True)
-        | _Q(
-            reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
-            reconciliation__actual_return__isnull=True,
+    stats["overdue_returns"] = (
+        Exeat.objects.filter(
+            status=Exeat.Status.APPROVED,
+            expected_return__lte=now,
         )
-    ).filter(
-        # For regular Housemasters scope overdue to their own house, not global
-        student__house_id__in=list(
-            set(
-                e.student.house_id
-                for e in scoped_pending_qs.select_related('student__house')
-                if e.student and e.student.house_id
+        .filter(
+            _Q(
+                movement__actual_departure__isnull=False,
+                movement__actual_return__isnull=True,
             )
-        ) if not (user.is_superuser or (getattr(get_user_profile(user), 'role', None) in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)))
-        else _Q(pk__isnull=False)  # admin/senior: unrestricted
-    ).count()
+            | _Q(
+                reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+                reconciliation__actual_return__isnull=True,
+            )
+        )
+        .filter(
+            # For regular Housemasters scope overdue to their own house, not global
+            student__house_id__in=(
+                list(
+                    set(
+                        e.student.house_id
+                        for e in scoped_pending_qs.select_related("student__house")
+                        if e.student and e.student.house_id
+                    )
+                )
+                if not (
+                    user.is_superuser
+                    or (
+                        getattr(get_user_profile(user), "role", None)
+                        in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)
+                    )
+                )
+                else _Q(pk__isnull=False)
+            )  # admin/senior: unrestricted
+        )
+        .count()
+    )
 
     # --- Per-house breakdown (for the queue-jump chip bar) ---
     house_totals = list(
-        scoped_pending_qs
-        .values(house_id=F('student__house_id'), house_name=F('student__house__name'), house_order=F('student__house__display_order'))
-        .annotate(pending=Count('id'))
-        .order_by('house_order', 'house_name')
+        scoped_pending_qs.values(
+            house_id=F("student__house_id"),
+            house_name=F("student__house__name"),
+            house_order=F("student__house__display_order"),
+        )
+        .annotate(pending=Count("id"))
+        .order_by("house_order", "house_name")
     )
-    stats['per_house'] = [
+    stats["per_house"] = [
         {
-            'id': row['house_id'],
-            'name': row['house_name'] or 'Unassigned',
-            'pending': row['pending'],
+            "id": row["house_id"],
+            "name": row["house_name"] or "Unassigned",
+            "pending": row["pending"],
         }
-        for row in house_totals if row['house_id'] is not None
+        for row in house_totals
+        if row["house_id"] is not None
     ]
     # Also carry an "All houses" chip with total count
-    if stats['per_house']:
-        stats['per_house'].insert(0, {'id': None, 'name': 'All Queues', 'pending': stats['total_pending']})
+    if stats["per_house"]:
+        stats["per_house"].insert(
+            0, {"id": None, "name": "All Queues", "pending": stats["total_pending"]}
+        )
 
     return stats

@@ -304,9 +304,7 @@ EMAIL_BACKEND = (
     os.getenv("EMAIL_BACKEND", "").strip()
     or "django.core.mail.backends.console.EmailBackend"
 )
-DEFAULT_FROM_EMAIL = (
-    os.getenv("DEFAULT_FROM_EMAIL", "").strip() or "no-reply@localhost"
-)
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "").strip() or "no-reply@localhost"
 
 # Standard Django SMTP transport settings. Django does not read these from the
 # environment on its own, so they are mapped here: without this an SMTP
@@ -423,6 +421,10 @@ CELERY_BEAT_SCHEDULE = {
     },
     "cleanup-expired-student-id-exports": {
         "task": "core.tasks.cleanup_expired_student_id_exports",
+        "schedule": 24 * 60 * 60.0,
+    },
+    "phase-out-shs3-students-after-academic-year": {
+        "task": "core.tasks.phase_out_shs3_students",
         "schedule": 24 * 60 * 60.0,
     },
 }

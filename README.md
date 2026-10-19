@@ -1229,6 +1229,9 @@ fans out to every active tenant.
 | `check-overdue-exeats-for-sms` | `core.tasks.enqueue_overdue_exeat_reminders` | 15 min | Queues daily overdue-return reminders for students still out. |
 | `expire-unfinished-roll-calls` | `core.tasks.expire_unfinished_roll_calls` | 60 s | Deletes roll-call sessions left in progress more than 1 hour and notifies the creator. |
 | `cleanup-expired-student-id-exports` | `core.tasks.cleanup_expired_student_id_exports` | 24 h | Deletes expired student ID export archives. |
+| `phase-out-shs3-students-after-academic-year` | `core.tasks.phase_out_shs3_students` | 24 h | Marks enrolled SHS 3 students completed after an academic year's configured end date and records each transition. |
+
+**SHS 3 completion depends on Celery Beat running.** If Beat is stopped, students remain enrolled until it runs again; after restart, due academic years are processed safely. Historical ended years are marked as already processed during migration so deployment does not phase out old cohorts retroactively.
 
 ### 8.4 How to run them
 
@@ -1713,6 +1716,14 @@ Via the web (`/students/import/`) or `import_roster`. Excel `.xlsx` or UTF-8 CSV
 - **Rules:** duplicate admission/index numbers reject the whole batch; boarders need a valid,
   gender-compatible house/dormitory; room capacity is enforced; existing students are never
   silently overwritten.
+
+Student class changes are performed from **Student Registry → Promote cohort**. An administrator
+previews the enrolled class roster, then confirms promotion by one level for the academic year the
+students are entering. Promotion history records the previous and new class, effective date, year,
+and acting administrator. Enrolled SHS 3 students carry an expected completion year and are
+automatically marked **Completed** after that year's configured end date. The task preserves their
+student and movement history and removes them from current boarding workflows. Celery Beat must be
+running for this automatic phase-out; the task is safe to retry if it runs late.
 
 ### 12.3 Exeat life cycle and SMS
 

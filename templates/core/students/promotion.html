@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Promote Students - {{ school_configuration.name }}{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-4">
+  <header>
+    <h1 class="text-base font-bold text-slate-900">Promote Students</h1>
+    <p class="mt-1 text-sm text-slate-600">Review an enrolled class and promote it one SHS level for the selected academic year.</p>
+  </header>
+
+  <section class="border-y border-slate-200 py-4">
+    <form method="get" action="{% url 'core:student_promotion' %}" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label for="id_academic_year" class="mb-1 block text-sm font-semibold text-slate-800">Academic year students are entering</label>
+        {{ form.academic_year }}
+        {{ form.academic_year.errors }}
+      </div>
+      <div>
+        <label for="id_source_class" class="mb-1 block text-sm font-semibold text-slate-800">Current class</label>
+        {{ form.source_class }}
+        {{ form.source_class.errors }}
+      </div>
+      <div>
+        <label for="id_target_class" class="mb-1 block text-sm font-semibold text-slate-800">Promote to class</label>
+        {{ form.target_class }}
+        {{ form.target_class.errors }}
+      </div>
+      <div class="flex items-end">
+        <button type="submit" name="preview" value="1" class="min-h-11 rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Preview cohort</button>
+      </div>
+      {% if form.non_field_errors %}<div class="sm:col-span-2" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+    </form>
+  </section>
+
+  {% if preview_ready %}
+  <section class="space-y-3" aria-live="polite">
+    <div>
+      <h2 class="text-sm font-bold text-slate-900">{{ preview_students|length }} enrolled student(s) will move to {{ form.cleaned_data.target_class.name }}</h2>
+      <p class="mt-1 text-sm text-slate-600">This change takes effect on {{ form.cleaned_data.academic_year.start_date|date:"j M Y" }}. Each student's previous and new class will be recorded.</p>
+    </div>
+    {% if preview_students %}
+    <div class="overflow-x-auto border-y border-slate-200">
+      <table class="w-full text-left text-sm">
+        <thead class="border-b border-slate-200 text-xs uppercase text-slate-500">
+          <tr><th class="px-3 py-2">Student</th><th class="px-3 py-2">Admission no.</th><th class="px-3 py-2">Current class</th><th class="px-3 py-2">House</th></tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for student in preview_students %}
+          <tr>
+            <td class="px-3 py-2 font-medium text-slate-900">{{ student.full_name }}</td>
+            <td class="px-3 py-2 text-slate-700">{{ student.admission_no }}</td>
+            <td class="px-3 py-2 text-slate-700">{{ student.class_group.name }}</td>
+            <td class="px-3 py-2 text-slate-700">{{ student.house.name|default:"—" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <form method="post" action="{% url 'core:student_promotion' %}" class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+      {% csrf_token %}
+      <input type="hidden" name="academic_year" value="{{ form.cleaned_data.academic_year.pk }}">
+      <input type="hidden" name="source_class" value="{{ form.cleaned_data.source_class.pk }}">
+      <input type="hidden" name="target_class" value="{{ form.cleaned_data.target_class.pk }}">
+      <a href="{% url 'core:student_registry' %}" class="text-sm font-medium text-slate-600 hover:text-slate-900">Cancel</a>
+      <button type="submit" class="min-h-11 rounded-md bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800">Promote {{ preview_students|length }} student(s)</button>
+    </form>
+    {% else %}
+    <p class="border-y border-slate-200 py-3 text-sm text-slate-600">No enrolled students are currently assigned to this class.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

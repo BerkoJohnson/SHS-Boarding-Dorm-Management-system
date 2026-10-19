@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -448,6 +449,7 @@ class StudentRegistryTests(TestCase):
 
         self.assertRedirects(response, reverse("core:student_registry"))
         student = Student.objects.get(admission_no="ADM-001")
+        self.assertEqual(student.class_group, self.class_group)
         self.assertEqual(student.guardian.full_name, "Akosua Mensah")
         self.assertTrue(student.photo.name.startswith("students/photos/"))
         self.assertEqual(student.photo.name.rsplit(".", 1)[-1], "jpg")
@@ -632,6 +634,42 @@ class StudentRegistryTests(TestCase):
             list(create_form.fields["dormitory"].queryset),
             [self.female_dorm],
         )
+
+        # A legacy/imported mismatch must stay visible on the edit form so the
+        # model validation can report it instead of silently dropping the dorm.
+        Student.objects.filter(pk=male_student.pk).update(
+            dormitory=self.female_dorm
+        )
+        male_student.refresh_from_db()
+        legacy_form = StudentRegistrationForm(instance=male_student)
+        self.assertIn(self.female_dorm, legacy_form.fields["dormitory"].queryset)
+
+    def test_student_gender_must_match_the_dormitory(self):
+        with self.assertRaises(ValidationError) as error:
+            Student.objects.create(
+                admission_no="ADM-GENDER-MISMATCH",
+                index_number="IDX-GENDER-MISMATCH",
+                full_name="Mismatched Gender Student",
+                gender=Student.Gender.MALE,
+                programme=self.programme,
+                class_group=self.class_group,
+                house=self.house,
+                dormitory=self.female_dorm,
+            )
+
+        self.assertIn(
+            "Gender Mismatch",
+            error.exception.message_dict["dormitory"][0],
+        )
+
+    def test_registration_page_renders_options_without_javascript(self):
+        response = self.client.get(reverse("core:student_create"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "JavaScript is turned off.")
+        self.assertContains(response, "data-student-registration-options=")
+        form = response.context["form"]
+        self.assertIn(self.class_group, form.fields["class_group"].queryset)
 
     def test_new_registration_form_offers_options_without_javascript(self):
         DormitoryRoom.objects.create(

@@ -59,6 +59,29 @@
     </div>
   </section>
 
+  {% if progression_records %}
+  <section class="space-y-3 border-y border-slate-200 py-4">
+    <div>
+      <h2 class="text-sm font-bold text-slate-900">Class progression</h2>
+      <p class="mt-1 text-xs text-slate-500">Recorded class promotions and school completion.</p>
+    </div>
+    <ol class="divide-y divide-slate-100">
+      {% for record in progression_records %}
+      <li class="flex flex-wrap items-start justify-between gap-2 py-2 text-sm">
+        <div>
+          <p class="font-semibold text-slate-800">{{ record.get_event_display }}</p>
+          <p class="mt-0.5 text-xs text-slate-600">
+            {{ record.from_class_group.name|default:"—" }}{% if record.to_class_group %} → {{ record.to_class_group.name }}{% endif %}
+            · {{ record.academic_year.name }}
+          </p>
+        </div>
+        <p class="text-xs text-slate-500">{{ record.effective_on|date:"j M Y" }}{% if record.actor %} · {{ record.actor.get_full_name|default:record.actor.username }}{% else %} · System{% endif %}</p>
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+
   <details class="group overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
     <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3.5 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500 sm:px-5">
       <span>
@@ -79,6 +102,8 @@
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Gender</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.get_gender_display }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Date of birth</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.date_of_birth|date:"d M Y"|default:"Not recorded" }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Enrollment status</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.get_status_display }}</dd></div>
+          <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Expected completion year</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.expected_completion_year.name|default:"Not assigned" }}</dd></div>
+          {% if student.completed_on %}<div><dt class="text-[10px] font-semibold uppercase text-slate-400">Completed school</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.completed_on|date:"j M Y" }} · {{ student.completion_academic_year.name }}</dd></div>{% endif %}
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Residency</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.get_residency_display }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Programme</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.programme.name }}</dd></div>
           <div><dt class="text-[10px] font-semibold uppercase text-slate-400">Class</dt><dd class="mt-0.5 text-xs text-slate-800">{{ student.class_group.name|default:"Not assigned" }}</dd></div>
