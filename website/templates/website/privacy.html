@@ -32,7 +32,7 @@
         </section>
       {% endfor %}
 
-      <h2>How the system protects student information</h2>
+      <h2 id="how-the-system-protects-student-information" class="scroll-mt-24">How the system protects student information</h2>
       <p>
         The measures below are the ones in place today, described in plain terms.
       </p>
@@ -42,10 +42,10 @@
         {% endfor %}
       </ul>
 
-      <h2>What we do not claim</h2>
+      <h2 id="what-we-do-not-claim" class="scroll-mt-24">What we do not claim</h2>
       <p>{{ trust_limits }}</p>
 
-      <h2>Questions or requests</h2>
+      <h2 id="questions-or-requests" class="scroll-mt-24">Questions or requests</h2>
       <p>
         Contact {{ site.company }} using the details on the
         <a href="{% url 'website:contact' %}" class="link">contact page</a> and we
@@ -59,10 +59,11 @@
           <h2 class="text-base font-bold">On this page</h2>
           <ul class="mt-4 space-y-2.5">
             {% for section in sections %}
-              <li>
-                <a href="#{{ section.heading|slugify }}" class="text-sm text-eden-slate hover:text-eden-navy hover:underline">{{ section.heading }}</a>
-              </li>
+              {% include "website/partials/_toc_link.html" with slug=section.heading|slugify label=section.heading %}
             {% endfor %}
+            {% include "website/partials/_toc_link.html" with slug="how-the-system-protects-student-information" label="How the system protects student information" %}
+            {% include "website/partials/_toc_link.html" with slug="what-we-do-not-claim" label="What we do not claim" %}
+            {% include "website/partials/_toc_link.html" with slug="questions-or-requests" label="Questions or requests" %}
           </ul>
         </div>
 

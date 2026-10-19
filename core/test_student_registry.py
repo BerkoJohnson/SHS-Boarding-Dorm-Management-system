@@ -190,6 +190,7 @@ class StudentRegistryTests(TestCase):
         for name in (
             "core:student_registry",
             "core:student_create",
+            "core:student_registration_options",
             "core:student_import",
             "core:student_import_template",
         ):
@@ -451,6 +452,265 @@ class StudentRegistryTests(TestCase):
         self.assertTrue(student.photo.name.startswith("students/photos/"))
         self.assertEqual(student.photo.name.rsplit(".", 1)[-1], "jpg")
         self.assertEqual(Guardian.objects.count(), 1)
+
+    def test_registration_form_limits_dependent_querysets_to_selected_parents(self):
+        other_programme = Programme.objects.create(name="General Arts", code="GART")
+        other_class = ClassGroup.objects.create(
+            name="1A2",
+            programme=other_programme,
+        )
+        other_house = House.objects.create(name="Blue House")
+        other_dormitory = Dormitory.objects.create(
+            house=other_house,
+            name="Other Boys Block",
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=80,
+        )
+        room = DormitoryRoom.objects.create(
+            dormitory=self.male_dorm,
+            name="North Room",
+            capacity=4,
+        )
+        DormitoryRoom.objects.create(
+            dormitory=other_dormitory,
+            name="South Room",
+            capacity=4,
+        )
+
+        form = StudentRegistrationForm(
+            initial={
+                "programme": self.programme.pk,
+                "house": self.house.pk,
+                "dormitory": self.male_dorm.pk,
+            }
+        )
+
+        self.assertEqual(
+            list(form.fields["class_group"].queryset),
+            [self.class_group],
+        )
+        self.assertNotIn(other_class, form.fields["class_group"].queryset)
+        self.assertEqual(
+            list(form.fields["dormitory"].queryset),
+            [self.male_dorm, self.female_dorm],
+        )
+        self.assertEqual(
+            list(form.fields["room"].queryset),
+            [room],
+        )
+
+    def test_registration_options_return_only_matching_child_records(self):
+        other_programme = Programme.objects.create(name="General Arts", code="GART")
+        other_class = ClassGroup.objects.create(
+            name="1A2",
+            programme=other_programme,
+        )
+        other_house = House.objects.create(name="Blue House")
+        other_dormitory = Dormitory.objects.create(
+            house=other_house,
+            name="Other Boys Block",
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=80,
+        )
+        room = DormitoryRoom.objects.create(
+            dormitory=self.male_dorm,
+            name="North Room",
+            capacity=4,
+        )
+        DormitoryRoom.objects.create(
+            dormitory=other_dormitory,
+            name="South Room",
+            capacity=4,
+        )
+        options_url = reverse("core:student_registration_options")
+
+        class_response = self.client.get(
+            options_url,
+            {"type": "class_groups", "programme_id": self.programme.pk},
+        )
+        dormitory_response = self.client.get(
+            options_url,
+            {
+                "type": "dormitories",
+                "house_id": self.house.pk,
+                "gender": Student.Gender.MALE,
+            },
+        )
+        female_dormitory_response = self.client.get(
+            options_url,
+            {
+                "type": "dormitories",
+                "house_id": self.house.pk,
+                "gender": Student.Gender.FEMALE,
+            },
+        )
+        room_response = self.client.get(
+            options_url,
+            {
+                "type": "rooms",
+                "house_id": self.house.pk,
+                "dormitory_id": self.male_dorm.pk,
+                "gender": Student.Gender.MALE,
+            },
+        )
+        mismatched_room_response = self.client.get(
+            options_url,
+            {
+                "type": "rooms",
+                "house_id": self.house.pk,
+                "dormitory_id": other_dormitory.pk,
+                "gender": Student.Gender.MALE,
+            },
+        )
+        mismatched_gender_room_response = self.client.get(
+            options_url,
+            {
+                "type": "rooms",
+                "house_id": self.house.pk,
+                "dormitory_id": self.male_dorm.pk,
+                "gender": Student.Gender.FEMALE,
+            },
+        )
+        invalid_gender_response = self.client.get(
+            options_url,
+            {
+                "type": "dormitories",
+                "house_id": self.house.pk,
+                "gender": "unknown",
+            },
+        )
+
+        self.assertEqual(
+            [item["id"] for item in class_response.json()["results"]],
+            [str(self.class_group.pk)],
+        )
+        self.assertNotIn(
+            str(other_class.pk),
+            [item["id"] for item in class_response.json()["results"]],
+        )
+        self.assertEqual(
+            [item["id"] for item in dormitory_response.json()["results"]],
+            [str(self.male_dorm.pk)],
+        )
+        self.assertEqual(
+            [item["id"] for item in female_dormitory_response.json()["results"]],
+            [str(self.female_dorm.pk)],
+        )
+        self.assertEqual(
+            [item["id"] for item in room_response.json()["results"]],
+            [str(room.pk)],
+        )
+        self.assertEqual(mismatched_room_response.status_code, 404)
+        self.assertEqual(mismatched_gender_room_response.status_code, 404)
+        self.assertEqual(invalid_gender_response.status_code, 400)
+
+    def test_registration_form_filters_dormitories_by_student_gender(self):
+        male_student = Student.objects.create(
+            admission_no="ADM-MALE-GENDER",
+            index_number="IDX-MALE-GENDER",
+            full_name="Male Gender Student",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            class_group=self.class_group,
+            house=self.house,
+            dormitory=self.male_dorm,
+        )
+
+        edit_form = StudentRegistrationForm(instance=male_student)
+        create_form = StudentRegistrationForm(
+            initial={
+                "gender": Student.Gender.FEMALE,
+                "house": self.house.pk,
+            }
+        )
+
+        self.assertEqual(
+            list(edit_form.fields["dormitory"].queryset),
+            [self.male_dorm],
+        )
+        self.assertEqual(
+            list(create_form.fields["dormitory"].queryset),
+            [self.female_dorm],
+        )
+
+    def test_new_registration_form_offers_options_without_javascript(self):
+        DormitoryRoom.objects.create(
+            dormitory=self.male_dorm,
+            name="Fallback Room",
+            capacity=4,
+        )
+
+        form = StudentRegistrationForm()
+
+        self.assertIn(self.class_group, form.fields["class_group"].queryset)
+        self.assertIn(self.male_dorm, form.fields["dormitory"].queryset)
+        self.assertIn(self.female_dorm, form.fields["dormitory"].queryset)
+        self.assertTrue(form.fields["room"].queryset.exists())
+
+    def test_registration_form_keeps_a_class_group_whose_programme_is_unset(self):
+        legacy_class = ClassGroup.objects.create(name="LEG1", programme=None)
+        student = Student.objects.create(
+            admission_no="ADM-LEGACY",
+            index_number="IDX-LEGACY",
+            full_name="Legacy Class Student",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            class_group=legacy_class,
+            house=self.house,
+            dormitory=self.male_dorm,
+        )
+
+        form = StudentRegistrationForm(instance=student)
+
+        self.assertIn(legacy_class, form.fields["class_group"].queryset)
+
+    def test_registration_form_edit_preserves_a_class_group_whose_programme_is_unset(self):
+        legacy_class = ClassGroup.objects.create(name="LEG2", programme=None)
+        student = Student.objects.create(
+            admission_no="ADM-LEGACY-EDIT",
+            index_number="IDX-LEGACY-EDIT",
+            full_name="Legacy Edit Student",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            class_group=legacy_class,
+            house=self.house,
+            dormitory=self.male_dorm,
+        )
+
+        form = StudentRegistrationForm(
+            data={
+                "admission_no": student.admission_no,
+                "index_number": student.index_number,
+                "full_name": student.full_name,
+                "gender": student.gender,
+                "programme": self.programme.pk,
+                "class_group": legacy_class.pk,
+                "residency": student.residency,
+                "house": self.house.pk,
+                "dormitory": self.male_dorm.pk,
+                "status": student.status,
+            },
+            instance=student,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        saved = form.save()
+        saved.refresh_from_db()
+        self.assertEqual(saved.class_group, legacy_class)
+
+    def test_registration_options_include_classes_with_no_programme(self):
+        legacy_class = ClassGroup.objects.create(name="LEG3", programme=None)
+
+        response = self.client.get(
+            reverse("core:student_registration_options"),
+            {"type": "class_groups", "programme_id": self.programme.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            str(legacy_class.pk),
+            [item["id"] for item in response.json()["results"]],
+        )
 
     def test_registration_form_updates_existing_guardian_alternative_phone(self):
         guardian = Guardian.objects.create(

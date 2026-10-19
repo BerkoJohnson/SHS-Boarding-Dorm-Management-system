@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from django import forms
 from django.db import models
 from django.db.models import Count, F, Q
@@ -5,6 +7,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from .models import (
+    DORMITORY_GENDER_BY_STUDENT_GENDER,
     Exeat,
     ExeatReconciliation,
     Student,
@@ -33,6 +36,41 @@ REPORTS_WITHOUT_PERIOD_FILTERS = frozenset({
 
 # Controls that only carry meaning for a period-scoped report.
 PERIOD_FILTER_FIELDS = ("date_from", "date_to", "term")
+
+
+def _uuid_or_none(value):
+    try:
+        return UUID(str(getattr(value, "pk", value)))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def available_dormitory_rooms(dormitory_id=None, include_room_id=None):
+    """Return rooms that still have a free bed.
+
+    Passing ``dormitory_id=None`` returns every available room; the create form
+    uses that as a no-JavaScript fallback so the room control is never empty.
+    """
+
+    room_queryset = DormitoryRoom.objects.select_related(
+        "dormitory", "dormitory__house"
+    ).annotate(
+        occupied=Count(
+            "students",
+            filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
+        )
+    )
+    available_rooms = Q(occupied__lt=F("capacity"))
+    if include_room_id:
+        available_rooms |= Q(pk=include_room_id)
+    if dormitory_id:
+        room_queryset = room_queryset.filter(dormitory_id=dormitory_id)
+    return room_queryset.filter(available_rooms).order_by(
+        "dormitory__house__display_order",
+        "dormitory__house__name",
+        "dormitory__name",
+        "name",
+    )
 
 
 def report_uses_period_filters(report_type):
@@ -489,39 +527,88 @@ class StudentRegistrationForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["programme"].queryset = Programme.objects.order_by("name")
-        self.fields["class_group"].queryset = ClassGroup.objects.order_by("name")
-        self.fields["house"].queryset = House.objects.order_by("display_order", "name")
-        self.fields["dormitory"].queryset = Dormitory.objects.select_related(
-            "house"
-        ).order_by("house__display_order", "house__name", "name")
-        room_queryset = DormitoryRoom.objects.select_related(
-            "dormitory", "dormitory__house"
-        ).annotate(
-            occupied=Count(
-                "students",
-                filter=Q(students__residency=Student.ResidencyStatus.BOARDING),
-            )
+        selected_programme = (
+            self.data.get("programme")
+            if self.is_bound
+            else self.initial.get("programme")
+            or getattr(self.instance, "programme_id", None)
         )
-        available_rooms = Q(occupied__lt=F("capacity"))
-        if self.instance and self.instance.pk and self.instance.room_id:
-            available_rooms |= Q(pk=self.instance.room_id)
+        selected_programme = _uuid_or_none(selected_programme)
+        # A brand-new, unbound form renders outside the browser's JavaScript
+        # flow too. Offer everything in that case; the bound form always applies
+        # the parent filters below, so server-side validation is unchanged.
+        # BaseModel assigns a UUID at construction, so ``_state.adding`` is the
+        # reliable way to tell a new record from one loaded from the database.
+        is_new_create_form = self.instance._state.adding and not self.is_bound
+        if selected_programme:
+            # Mirror Student.clean(): a class is valid when it belongs to the
+            # selected programme or carries no programme (ClassGroup.programme
+            # is nullable and set to NULL when a programme is deleted). The
+            # instance's current class is always kept so editing a student can
+            # never silently clear it.
+            class_group_filter = Q(programme__isnull=True) | Q(
+                programme_id=selected_programme
+            )
+            if (
+                self.instance
+                and self.instance.pk
+                and self.instance.class_group_id
+            ):
+                class_group_filter |= Q(pk=self.instance.class_group_id)
+            self.fields["class_group"].queryset = ClassGroup.objects.filter(
+                class_group_filter
+            ).order_by("name")
+        elif is_new_create_form:
+            self.fields["class_group"].queryset = ClassGroup.objects.order_by("name")
+        else:
+            self.fields["class_group"].queryset = ClassGroup.objects.none()
+        self.fields["house"].queryset = House.objects.order_by("display_order", "name")
         selected_dormitory = (
             self.data.get("dormitory")
-            or self.initial.get("dormitory")
+            if self.is_bound
+            else self.initial.get("dormitory")
             or getattr(self.instance, "dormitory_id", None)
         )
-        if selected_dormitory:
-            room_queryset = room_queryset.filter(
-                dormitory_id=selected_dormitory
-            )
-        self.fields["room"].queryset = room_queryset.filter(
-            available_rooms
-        ).order_by(
-            "dormitory__house__display_order",
-            "dormitory__house__name",
-            "dormitory__name",
-            "name",
+        selected_house = (
+            self.data.get("house")
+            if self.is_bound
+            else self.initial.get("house")
+            or getattr(self.instance, "house_id", None)
         )
+        selected_gender = (
+            self.data.get("gender")
+            if self.is_bound
+            else self.initial.get("gender")
+            or getattr(self.instance, "gender", None)
+        )
+        selected_dormitory = _uuid_or_none(selected_dormitory)
+        selected_house = _uuid_or_none(selected_house)
+        dormitory_queryset = Dormitory.objects.select_related("house")
+        if selected_house:
+            dormitory_queryset = dormitory_queryset.filter(house_id=selected_house)
+        elif not is_new_create_form:
+            dormitory_queryset = dormitory_queryset.none()
+        dormitory_gender = DORMITORY_GENDER_BY_STUDENT_GENDER.get(selected_gender)
+        if dormitory_gender:
+            dormitory_queryset = dormitory_queryset.filter(gender=dormitory_gender)
+        self.fields["dormitory"].queryset = dormitory_queryset.order_by(
+            "house__display_order", "house__name", "name"
+        )
+        if selected_dormitory:
+            room_queryset = available_dormitory_rooms(
+                selected_dormitory,
+                include_room_id=(
+                    self.instance.room_id
+                    if self.instance and self.instance.pk
+                    else None
+                ),
+            )
+        elif is_new_create_form:
+            # No-JavaScript fallback: show every room that still has a bed.
+            room_queryset = available_dormitory_rooms()
+        else:
+            room_queryset = DormitoryRoom.objects.none()
+        self.fields["room"].queryset = room_queryset
         self.fields["class_group"].required = False
         self.fields["house"].required = False
         self.fields["dormitory"].required = False

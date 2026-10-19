@@ -728,11 +728,10 @@ class Student(BaseModel):
                 }
             )
         if self.dormitory:
-            gender_map = {
-                "male": Dormitory.GenderBlock.MALE,
-                "female": Dormitory.GenderBlock.FEMALE,
-            }
-            if self.dormitory.gender != gender_map.get(self.gender):
+            if (
+                self.dormitory.gender
+                != DORMITORY_GENDER_BY_STUDENT_GENDER.get(self.gender)
+            ):
                 raise ValidationError(
                     {
                         "dormitory": f"Gender Mismatch! Cannot place a {self.get_gender_display()} student in a "
@@ -794,6 +793,15 @@ class Student(BaseModel):
 
     def __str__(self):
         return f"{self.full_name} ({self.admission_no})"
+
+
+# Single source of truth for matching a student's gender to a dormitory block.
+# Student.clean(), the registration form, and the dependent-options view all use
+# this so the offered choices and the validation can never disagree.
+DORMITORY_GENDER_BY_STUDENT_GENDER = {
+    Student.Gender.MALE: Dormitory.GenderBlock.MALE,
+    Student.Gender.FEMALE: Dormitory.GenderBlock.FEMALE,
+}
 
 
 class Exeat(BaseModel):

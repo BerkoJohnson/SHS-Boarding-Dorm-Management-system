@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ report.title }} | {{ school_configuration.name }}</title>
-  <style>
+  <style nonce="{{ request.csp_nonce }}">
     :root { color-scheme: light; font-family: Arial, sans-serif; color: #172033; }
     body { margin: 0; background: #f1f5f9; }
     .report { max-width: 1000px; margin: 32px auto; padding: 32px; background: #fff; }

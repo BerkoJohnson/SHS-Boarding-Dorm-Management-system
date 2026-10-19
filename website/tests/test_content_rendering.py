@@ -10,8 +10,11 @@ exists, or the copy was changed without the template being updated.
 """
 from __future__ import annotations
 
+import re
+
 from django.test import TestCase, override_settings
 from django.utils.html import escape
+from django.utils.text import slugify
 
 from website import content, legal, pricing
 
@@ -221,6 +224,63 @@ class ContentRenderingTests(TestCase):
 
         for item in legal.TERMS_WITHHELD:
             self.assert_rendered(body, item, "terms")
+
+    # ---------------------------------------------------- legal anchors -----
+    LEGAL_PAGES = (
+        ("/privacy-policy/", legal.PRIVACY_SECTIONS),
+        ("/terms-of-service/", legal.TERMS_SECTIONS),
+    )
+
+    def test_legal_contents_links_every_heading_and_nothing_else(self):
+        """Each contents list must mirror the article, with no dead links.
+
+        ``slugify`` is applied to display headings at render time, so a copy
+        edit can silently produce a duplicate or empty ``id``. This asserts the
+        rendered contract instead of trusting the filter: every article heading
+        has one unique id, and the sidebar's in-page links match that set
+        exactly (all headings, nothing missing, no targets that do not exist).
+        """
+        for path, sections in self.LEGAL_PAGES:
+            with self.subTest(path=path):
+                body = self.render(path)
+
+                article = re.search(r"<article\b.*?</article>", body, re.S)
+                aside = re.search(r"<aside\b.*?</aside>", body, re.S)
+                self.assertIsNotNone(article, f"{path}: no article block")
+                self.assertIsNotNone(aside, f"{path}: no sidebar block")
+
+                heading_ids = re.findall(r'<h2 id="([^"]+)"', article.group(0))
+                heading_count = len(re.findall(r"<h2\b", article.group(0)))
+                toc_targets = re.findall(r'href="#([^"]+)"', aside.group(0))
+
+                self.assertEqual(
+                    len(heading_ids),
+                    heading_count,
+                    f"{path}: every article heading needs a non-empty id",
+                )
+                self.assertEqual(
+                    len(set(heading_ids)),
+                    len(heading_ids),
+                    f"{path}: duplicate heading ids",
+                )
+                self.assertEqual(
+                    sorted(toc_targets),
+                    sorted(heading_ids),
+                    f"{path}: contents links do not match the article headings",
+                )
+
+                for section in sections:
+                    slug = slugify(section["heading"])
+                    self.assertIn(
+                        slug,
+                        heading_ids,
+                        f"{path}: no id for {section['heading']!r}",
+                    )
+                    self.assertIn(
+                        slug,
+                        toc_targets,
+                        f"{path}: no contents link for {section['heading']!r}",
+                    )
 
     # ----------------------------------------------------------- meta ------
     def test_every_page_has_a_meta_entry(self):

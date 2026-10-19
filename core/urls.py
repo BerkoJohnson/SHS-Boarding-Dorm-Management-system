@@ -17,6 +17,11 @@ urlpatterns = [
     path('houses/', views.house_list_view, name='house_list'),
     path('students/', views.student_registry_view, name='student_registry'),
     path('students/new/', views.student_registration_view, name='student_create'),
+    path(
+        'students/registration-options/',
+        views.student_registration_options_view,
+        name='student_registration_options',
+    ),
     path('students/import/', views.student_roster_import_view, name='student_import'),
     path('students/import/template.csv', views.student_import_template_view, name='student_import_template'),
     path('verify/student/<uuid:token>/', views.public_student_exeat_view, name='public_student_exeat'),

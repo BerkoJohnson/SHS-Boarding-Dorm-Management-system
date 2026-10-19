@@ -9,7 +9,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="{% static 'favicons/favicon-32x32.png' %}">
   <link rel="apple-touch-icon" href="{% static 'favicons/apple-touch-icon.png' %}">
 
-  <script>
+  <script nonce="{{ request.csp_nonce }}">
     (function () {
       const savedThemeMode = localStorage.getItem('themeMode');
       const themeMode = ['light', 'dark', 'system'].includes(savedThemeMode)
@@ -52,7 +52,7 @@
   <script src="{% static 'js/htmx.min.js' %}" defer></script>
   <script src="{% static 'js/alpine.min.js' %}" defer></script>
 
-  <style>
+  <style nonce="{{ request.csp_nonce }}">
     [x-cloak] { display: none !important; }
     .htmx-indicator { display: none; }
     .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-flex !important; }
@@ -538,7 +538,7 @@
     </main>
   </div>
 
-  <script>
+  <script nonce="{{ request.csp_nonce }}">
     document.addEventListener('htmx:configRequest', function(evt) {
       let csrfToken = null;
       if (document.cookie && document.cookie !== '') {

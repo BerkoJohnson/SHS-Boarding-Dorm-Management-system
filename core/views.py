@@ -5,9 +5,20 @@ import uuid
 from pathlib import Path
 
 from django.conf import settings
-from django.views.decorators.http import require_POST, require_http_methods
-from django.http import Http404, HttpResponse, HttpResponseForbidden, HttpResponseBadRequest, FileResponse
-from django.shortcuts import render, get_object_or_404, redirect
+from django.views.decorators.http import (
+    require_GET,
+    require_POST,
+    require_http_methods,
+)
+from django.http import (
+    FileResponse,
+    Http404,
+    HttpResponse,
+    HttpResponseBadRequest,
+    HttpResponseForbidden,
+    JsonResponse,
+)
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.db import IntegrityError, transaction
@@ -50,6 +61,7 @@ from .models import (
     ConfigurationAuditLog,
     StudentIDExport,
     MovementConcernReport,
+    DORMITORY_GENDER_BY_STUDENT_GENDER,
 )
 from .forms import (
     ExeatCreateForm,
@@ -60,6 +72,7 @@ from .forms import (
     report_uses_period_filters,
     StudentRegistrationForm,
     StudentRosterUploadForm,
+    available_dormitory_rooms,
     MovementConcernReportForm,
 )
 from .permissions import (
@@ -826,11 +839,82 @@ def student_registration_view(request, student_pk=None):
         {
             "form": form,
             "student": student,
-            "houses": House.objects.order_by("display_order", "name"),
-            "dormitories": Dormitory.objects.select_related("house").order_by(
-                "house__display_order", "house__name", "name"
-            ),
         },
+    )
+
+
+@login_required
+@role_required(*STUDENT_MANAGEMENT_ROLES)
+@require_GET
+def student_registration_options_view(request):
+    option_type = request.GET.get("type")
+    if option_type == "class_groups":
+        try:
+            programme_id = uuid.UUID(request.GET.get("programme_id", ""))
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("A valid programme is required.")
+        programme = get_object_or_404(Programme, pk=programme_id)
+        # Keep this in step with StudentRegistrationForm: classes with no
+        # programme are valid values for the model, so they must be offered
+        # here as well or the dropdown and the form will disagree.
+        options = ClassGroup.objects.filter(
+            Q(programme=programme) | Q(programme__isnull=True)
+        ).order_by("name")
+    elif option_type == "dormitories":
+        try:
+            house_id = uuid.UUID(request.GET.get("house_id", ""))
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("A valid house is required.")
+        house = get_object_or_404(House, pk=house_id)
+        options = Dormitory.objects.filter(house=house).order_by("name")
+        gender = request.GET.get("gender")
+        if gender:
+            dormitory_gender = DORMITORY_GENDER_BY_STUDENT_GENDER.get(gender)
+            if dormitory_gender is None:
+                return HttpResponseBadRequest("A valid gender is required.")
+            options = options.filter(gender=dormitory_gender)
+    elif option_type == "rooms":
+        try:
+            house_id = uuid.UUID(request.GET.get("house_id", ""))
+            dormitory_id = uuid.UUID(request.GET.get("dormitory_id", ""))
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("A valid house and dormitory are required.")
+        house = get_object_or_404(House, pk=house_id)
+        dormitory_filters = {"pk": dormitory_id, "house": house}
+        gender = request.GET.get("gender")
+        if gender:
+            dormitory_gender = DORMITORY_GENDER_BY_STUDENT_GENDER.get(gender)
+            if dormitory_gender is None:
+                return HttpResponseBadRequest("A valid gender is required.")
+            dormitory_filters["gender"] = dormitory_gender
+        dormitory = get_object_or_404(Dormitory, **dormitory_filters)
+        include_room_id = request.GET.get("include_room_id")
+        if include_room_id:
+            try:
+                include_room_id = uuid.UUID(include_room_id)
+            except (TypeError, ValueError):
+                return HttpResponseBadRequest("A valid room is required.")
+            # The current room stays selectable only while the chosen dormitory
+            # still owns it; a stale value from another dormitory is ignored
+            # rather than trusted.
+            if not DormitoryRoom.objects.filter(
+                pk=include_room_id, dormitory=dormitory
+            ).exists():
+                include_room_id = None
+        options = available_dormitory_rooms(
+            dormitory.pk,
+            include_room_id=include_room_id,
+        )
+    else:
+        return HttpResponseBadRequest("An option type is required.")
+
+    return JsonResponse(
+        {
+            "results": [
+                {"id": str(option.pk), "name": option.name}
+                for option in options
+            ]
+        }
     )
 
 

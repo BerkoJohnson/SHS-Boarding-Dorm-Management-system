@@ -3,7 +3,7 @@
 {% block title %}Import Student Roster - {{ school_configuration.name }}{% endblock %}
 
 {% block extra_head %}
-<style>
+<style nonce="{{ request.csp_nonce }}">
   .student-form-control {
     width: 100%;
     border: 1px solid #cbd5e1;

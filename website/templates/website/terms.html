@@ -32,7 +32,7 @@
         </section>
       {% endfor %}
 
-      <h2>Commitments that are deliberately not made here</h2>
+      <h2 id="commitments-that-are-deliberately-not-made-here" class="scroll-mt-24">Commitments that are deliberately not made here</h2>
       <p>
         Rather than publish terms that have not been agreed with any school, the
         following are stated only in a school's own written agreement:
@@ -43,7 +43,7 @@
         {% endfor %}
       </ul>
 
-      <h2>Getting in touch</h2>
+      <h2 id="getting-in-touch" class="scroll-mt-24">Getting in touch</h2>
       <p>
         Questions about these terms can be raised through the
         <a href="{% url 'website:contact' %}" class="link">contact page</a>.
@@ -53,13 +53,13 @@
     <aside class="lg:col-span-4">
       <div class="sticky top-24 space-y-5">
         <div class="card">
-          <h2 class="text-base font-bold">Contents</h2>
+          <h2 class="text-base font-bold">On this page</h2>
           <ul class="mt-4 space-y-2.5">
             {% for section in sections %}
-              <li>
-                <a href="#{{ section.heading|slugify }}" class="text-sm text-eden-slate hover:text-eden-navy hover:underline">{{ section.heading }}</a>
-              </li>
+              {% include "website/partials/_toc_link.html" with slug=section.heading|slugify label=section.heading %}
             {% endfor %}
+            {% include "website/partials/_toc_link.html" with slug="commitments-that-are-deliberately-not-made-here" label="Commitments that are deliberately not made here" %}
+            {% include "website/partials/_toc_link.html" with slug="getting-in-touch" label="Getting in touch" %}
           </ul>
         </div>
 

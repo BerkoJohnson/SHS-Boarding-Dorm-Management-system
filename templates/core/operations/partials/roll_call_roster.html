@@ -57,7 +57,7 @@
           {% endif %}
         </p>
         {% if not current_session.is_expired %}
-          <script>
+          <script nonce="{{ request.csp_nonce }}">
             (() => {
               if (window._rollCallTimer) {
                 window.clearInterval(window._rollCallTimer);

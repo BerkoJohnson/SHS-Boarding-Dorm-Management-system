@@ -135,7 +135,7 @@
 
 </div>
 
-<script>
+<script nonce="{{ request.csp_nonce }}">
   document.body.addEventListener("showToast", (event) => {
     const container = document.getElementById("toast-container");
     if (!container || !event.detail?.message) return;

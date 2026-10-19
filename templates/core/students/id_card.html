@@ -3,7 +3,7 @@
 {% block title %}Student ID Card - {{ student.full_name }}{% endblock %}
 
 {% block extra_head %}
-<style>
+<style nonce="{{ request.csp_nonce }}">
   .id-card-preview { --card-accent: #b45309; --card-ink: #172554; }
   .id-card-preview.layout-crest { --card-accent: #047857; --card-ink: #064e3b; }
   .id-card-preview.layout-modern { --card-accent: #2563eb; --card-ink: #172554; }

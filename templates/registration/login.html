@@ -15,7 +15,7 @@
   <script src="{% static 'js/htmx.min.js' %}" defer></script>
   <script src="{% static 'js/alpine.min.js' %}" defer></script>
 
-    <style>
+    <style nonce="{{ request.csp_nonce }}">
         [x-cloak] { display: none !important; }
         /* Custom styles matching app aesthetic */
         .glass-panel {
