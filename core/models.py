@@ -1009,6 +1009,14 @@ class Exeat(BaseModel):
     approval_remarks = models.TextField(
         blank=True, null=True, help_text="Housemaster's notes or conditions."
     )
+    is_active = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text=(
+            "True while this Approved pass has no recorded return. "
+            "Enforced by a per-student partial unique constraint."
+        ),
+    )
 
     class Meta:
         ordering = ["-expected_departure"]
@@ -1017,6 +1025,13 @@ class Exeat(BaseModel):
         indexes = [
             models.Index(fields=["exeat_number"]),
             models.Index(fields=["status", "expected_return"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student"],
+                condition=models.Q(is_active=True),
+                name="unique_active_exeat_per_student",
+            )
         ]
 
     def clean(self):
@@ -1093,6 +1108,68 @@ class Exeat(BaseModel):
                         }
                     )
 
+        # 5. One active (Approved and unreturned) pass per student (F-02).
+        # The database partial unique constraint is the final guard for
+        # concurrent approvals; this check provides a clear, actionable error.
+        if self.status == self.Status.APPROVED and self.student_id:
+            conflicting = Exeat.objects.filter(
+                student_id=self.student_id,
+                is_active=True,
+            )
+            if self.pk:
+                conflicting = conflicting.exclude(pk=self.pk)
+            conflict = conflicting.order_by("expected_departure").first()
+            if conflict is not None:
+                raise ValidationError(
+                    {
+                        "status": (
+                            "This student already has an active approved pass "
+                            f"({conflict.exeat_number}). Record the return or "
+                            "cancel that pass before approving another."
+                        )
+                    }
+                )
+
+    def _compute_is_active(self):
+        """Return whether this pass is Approved with no recorded return."""
+        if self.status != self.Status.APPROVED or not self.pk:
+            return False
+
+        reconciliation = (
+            ExeatReconciliation.objects.filter(exeat_id=self.pk)
+            .only("outcome", "actual_return")
+            .first()
+        )
+        if reconciliation is not None:
+            return bool(
+                reconciliation.outcome == ExeatReconciliation.Outcome.STUDENT_OUT
+                and reconciliation.actual_return is None
+            )
+
+        movement = (
+            ExeatMovement.objects.filter(exeat_id=self.pk)
+            .only("actual_return")
+            .first()
+        )
+        return not (movement is not None and movement.actual_return is not None)
+
+    @classmethod
+    def refresh_active_state(cls, exeat_id):
+        """Recompute and persist one pass's active flag after a movement change."""
+        if not exeat_id:
+            return None
+        exeat = cls.objects.filter(pk=exeat_id).first()
+        if exeat is None:
+            return None
+        expected_state = exeat._compute_is_active()
+        if exeat.is_active != expected_state:
+            cls.objects.filter(pk=exeat_id).update(
+                is_active=expected_state,
+                updated_at=timezone.now(),
+            )
+            exeat.is_active = expected_state
+        return exeat
+
     def save(self, *args, **kwargs):
         # 1. Auto-generate unique Exeat Pass Number on creation
         if not self.exeat_number:
@@ -1115,6 +1192,9 @@ class Exeat(BaseModel):
             if current_term:
                 self.academic_term = current_term
 
+        # Keep the database guard in sync with the request state before the
+        # model constraint validation runs.
+        self.is_active = self._compute_is_active()
         self.full_clean()
         super().save(*args, **kwargs)
 
@@ -1222,6 +1302,8 @@ class ExeatMovement(BaseModel):
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+        # A recorded return releases the student's single active pass.
+        Exeat.refresh_active_state(self.exeat_id)
 
     @property
     def is_currently_out(self):
@@ -1383,6 +1465,9 @@ class ExeatReconciliation(BaseModel):
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+        # UNUSED/RETURNED reconciliations release the student; STUDENT_OUT
+        # keeps the pass active until a return is recorded.
+        Exeat.refresh_active_state(self.exeat_id)
 
     @property
     def state_display(self):
@@ -1695,6 +1780,7 @@ class RollCallSession(BaseModel):
     class Status(models.TextChoices):
         IN_PROGRESS = "In Progress", "In Progress"
         COMPLETED = "Completed", "Completed"
+        EXPIRED = "Expired", "Expired - unfinished (records retained)"
 
     house = models.ForeignKey(
         House,
@@ -1748,6 +1834,27 @@ class RollCallSession(BaseModel):
         ordering = ["-date", "-created_at"]
         verbose_name = "Roll Call Session"
         verbose_name_plural = "Roll Call Sessions"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["house", "dormitory", "session_type", "date"],
+                condition=models.Q(
+                    status="In Progress",
+                    dormitory__isnull=False,
+                ),
+                name="unique_in_progress_roll_call_session",
+            ),
+            # PostgreSQL 14 does not support NULLS NOT DISTINCT. A separate
+            # constraint for the house-wide (dormitory IS NULL) case keeps the
+            # documented PostgreSQL 14 minimum working.
+            models.UniqueConstraint(
+                fields=["house", "session_type", "date"],
+                condition=models.Q(
+                    status="In Progress",
+                    dormitory__isnull=True,
+                ),
+                name="unique_in_progress_roll_call_house_wide",
+            ),
+        ]
 
     def clean(self):
         super().clean()
@@ -1824,6 +1931,8 @@ class RollCallSession(BaseModel):
 
     @property
     def is_expired(self):
+        if self.status == self.Status.EXPIRED:
+            return True
         return (
             self.status == self.Status.IN_PROGRESS
             and self.expires_at is not None
@@ -1903,16 +2012,24 @@ class RollCallEntry(BaseModel):
         return f"{self.student.full_name}: {self.get_status_display()}"
 
     def clean(self):
-        """Prevents modification of entries belonging to a finalized session."""
+        """Prevents modification of entries belonging to a closed session."""
         super().clean()
-        # Allow initial creation (no pk yet) but block updates on completed sessions
-        if self.pk and self.session.status == RollCallSession.Status.COMPLETED:
+        # Allow initial creation (no pk yet) but block updates on completed
+        # or expired sessions. Expired sessions retain their evidence and are
+        # immutable until an audited correction workflow exists (F-12).
+        if self.pk:
             from django.core.exceptions import ValidationError
 
-            raise ValidationError(
-                "Cannot modify attendance records in a finalized roll call session. "
-                "Records are locked for audit integrity."
-            )
+            if self.session.status == RollCallSession.Status.COMPLETED:
+                raise ValidationError(
+                    "Cannot modify attendance records in a finalized roll call session. "
+                    "Records are locked for audit integrity."
+                )
+            if self.session.is_expired:
+                raise ValidationError(
+                    "Cannot modify attendance records in an expired roll call session. "
+                    "Records are locked for audit integrity."
+                )
 
     def save(self, *args, **kwargs):
         """Enforces clean() validation before every save to prevent silent bypasses."""

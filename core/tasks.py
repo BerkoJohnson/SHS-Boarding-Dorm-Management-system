@@ -305,7 +305,7 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
         created_at__lte=now - ROLL_CALL_SESSION_TIMEOUT,
     ).values_list("pk", flat=True)[:100]
 
-    deleted_count = 0
+    expired_count = 0
     for session_id in expired_ids:
         with transaction.atomic():
             session = (
@@ -330,8 +330,9 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
                     title="Unfinished roll call expired",
                     message=(
                         f"The {session.get_session_type_display()} for "
-                        f"{session.house.name} was deleted because it was not "
-                        "completed within one hour."
+                        f"{session.house.name} expired because it was not "
+                        "completed within one hour. Its attendance records were "
+                        "preserved for review."
                     ),
                 )
             else:
@@ -339,9 +340,19 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
                     "Expired roll call %s has no creator to notify",
                     session.pk,
                 )
-            session.delete()
-            deleted_count += 1
-    return deleted_count
+            session.status = RollCallSession.Status.EXPIRED
+            note = (
+                "Expired automatically after the one-hour completion window; "
+                "attendance records retained for review."
+            )
+            session.notes = (
+                f"{session.notes.rstrip()}\n{note}"
+                if session.notes
+                else note
+            )
+            session.save(update_fields=["status", "notes", "updated_at"])
+            expired_count += 1
+    return expired_count
 
 
 @shared_task

@@ -67,9 +67,9 @@ def create_roll_call_session(
         academic_term = AcademicTerm.objects.filter(is_current=True).first()
 
     with transaction.atomic():
-        # Serialize concurrent starts for this house. Locking the house row is
-        # a stable, schema-free guard until the partial unique constraint is
-        # introduced in the next batch.
+        # Serialize concurrent starts for this house. The row lock and the
+        # partial unique constraint below both protect against duplicate
+        # in-progress sessions.
         House.objects.select_for_update().get(pk=house.pk)
 
         existing_sessions = list(
@@ -83,22 +83,34 @@ def create_roll_call_session(
             )
             .order_by("created_at")
         )
-        existing_session = next(
-            (
-                candidate
-                for candidate in existing_sessions
-                if not candidate.is_expired
-            ),
-            None,
-        )
-        if existing_session is not None:
+        active_session = None
+        for candidate in existing_sessions:
+            if candidate.is_expired:
+                # Preserve the evidence instead of deleting it. Marking the
+                # stale row EXPIRED also releases the partial unique constraint
+                # so a fresh muster can start for the same slot.
+                candidate.status = RollCallSession.Status.EXPIRED
+                note = (
+                    "Automatically expired when a new muster was started after "
+                    "the one-hour completion window."
+                )
+                candidate.notes = (
+                    f"{candidate.notes.rstrip()}\n{note}"
+                    if candidate.notes
+                    else note
+                )
+                candidate.save(
+                    update_fields=["status", "notes", "updated_at"]
+                )
+            elif active_session is None:
+                active_session = candidate
+
+        if active_session is not None:
             # The view uses this transient flag to explain that an already-open
             # muster was reused instead of implying that a new one was started.
-            existing_session.reused_existing = True
-            return existing_session
+            active_session.reused_existing = True
+            return active_session
 
-        # Expired in-progress sessions are left to the scheduled cleanup task;
-        # they must not block a fresh muster or be silently reused.
         session = RollCallSession.objects.create(
             house=house,
             dormitory=dormitory,

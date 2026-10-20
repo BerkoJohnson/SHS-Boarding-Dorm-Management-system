@@ -1,7 +1,10 @@
+import logging
 from functools import wraps
 
 from django.apps import AppConfig
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 class CoreConfig(AppConfig):
@@ -9,6 +12,20 @@ class CoreConfig(AppConfig):
 
     def ready(self):
         _install_staff_quota_guard()
+        _warn_if_background_jobs_disabled()
+        # Registers the background-job deployment checks in core/checks.py.
+        from core import checks  # noqa: F401
+
+
+def _warn_if_background_jobs_disabled():
+    """Make a deliberately web-only deployment visible in the process log."""
+    if getattr(settings, "BACKGROUND_JOBS_ENABLED", True):
+        return
+    logger.warning(
+        "BACKGROUND_JOBS_ENABLED=False: SMS dispatch, overdue reminders, "
+        "roll-call expiry, student ID export cleanup, and SHS 3 phase-out "
+        "will not run automatically. See README section 8."
+    )
 
 
 def _install_staff_quota_guard():

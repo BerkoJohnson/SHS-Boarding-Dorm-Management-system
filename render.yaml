@@ -43,6 +43,7 @@ services:
     plan: free
     buildCommand: >-
       pip install -r requirements.txt &&
+      python manage.py check --settings=schoolsystem.settings.build &&
       python manage.py collectstatic --noinput --settings=schoolsystem.settings.build
     startCommand: >-
       gunicorn schoolsystem.wsgi:application
@@ -196,16 +197,31 @@ services:
       # Celery broker (needed only if the worker/beat services are enabled).
       - key: REDIS_URL
         sync: false
+      # This staging blueprint intentionally deploys the web service only.
+      # Setting this to False makes that choice explicit: `manage.py check`
+      # emits core.W003, Celery Beat refuses to load periodic rows, and the
+      # following do NOT run automatically:
+      #   * queued SMS dispatch and overdue-exeat reminders
+      #   * unfinished roll-call expiry
+      #   * expired student ID export cleanup
+      #   * SHS 3 academic-year phase-out
+      # Turn this on only after adding paid worker + Beat services (see bottom).
+      - key: BACKGROUND_JOBS_ENABLED
+        value: "False"
 
-# --- Optional: Celery worker + Beat (SMS, scheduled cleanup, SHS 3 phase-out)
-# The SHS 3 academic-year phase-out runs only when Beat is running. Deploy a
-# Beat service for automatic completion even when school SMS is disabled.
-# Add a Render Key Value (Redis) instance and a Background Worker for each of:
+# --- Background jobs are deliberately disabled in this staging blueprint ----
+# Render does not deploy a Celery worker or Beat here, so SMS delivery, overdue
+# reminders, roll-call expiry, ID-export cleanup, and SHS 3 phase-out are
+# dormant. This is an explicit deployment choice, not an oversight: the web
+# service sets BACKGROUND_JOBS_ENABLED=False and `manage.py check` warns.
 #
-#   worker -> startCommand: celery -A schoolsystem worker --loglevel=INFO
-#   beat   -> startCommand: celery -A schoolsystem beat --loglevel=INFO
-#
+# To enable them, approve the paid Render plan and add:
+#   * a Render Key Value (Redis 6+) instance and set REDIS_URL on all services;
+#   * a Background Worker:
+#       startCommand: celery -A schoolsystem worker --loglevel=INFO
+#   * a second Background Worker for Beat:
+#       startCommand: celery -A schoolsystem beat --loglevel=INFO
 # Give both the same env vars as the web service (at minimum DATABASE_PROFILE,
-# PG*, TENANCY_ENABLED, REDIS_URL, MEDIA_STORAGE_BACKEND + S3 keys, SMS_*).
-# Without them, SMS deliveries remain queued and the beat-scheduled cleanup
-# tasks do not run.
+# PG*, TENANCY_ENABLED, REDIS_URL, MEDIA_STORAGE_BACKEND + S3 keys, SMS_*), and
+# set BACKGROUND_JOBS_ENABLED=True on all three services. Never enable
+# SMS_ENABLED=True without a worker and Beat: core.E004 blocks that combination.

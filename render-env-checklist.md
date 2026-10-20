@@ -28,7 +28,7 @@ Two caveats worth memorising:
 - Keys using `value:` belong to the Blueprint. If you would rather tune one in the dashboard, move it to
   `sync: false` first, or the next sync will overwrite your change.
 
-This repository's `render.yaml` currently sets **23** keys inline and leaves **20** for the first-apply prompt:
+This repository's `render.yaml` currently sets **24** keys inline and leaves **20** for the first-apply prompt:
 
 ```
 PGHOST  PGDATABASE  PGUSER  PGPASSWORD  DJANGO_SECRET_KEY  ALLOWED_HOSTS
@@ -167,12 +167,19 @@ These are independent: either can be enabled without the other.
 | `CACHE_BACKEND` | `django.core.cache.backends.redis.RedisCache` | O |
 | `CACHE_LOCATION` | `redis://<host>:6379/1` | O |
 | `REDIS_URL` | Celery broker — needed only for the worker/beat services | O |
+| `BACKGROUND_JOBS_ENABLED` | `False` on the web-only blueprint; set `True` only when worker + Beat run | O |
 | `TRUSTED_PROXY_COUNT` | `1` | O |
 
 > `MEDIA_STORAGE_BACKEND=filesystem` loses uploads on every deploy and restart. Use `neon_s3` in production.
 >
 > Without a shared `CACHE_BACKEND`, rate limits are per-process and each of the 3 Gunicorn workers keeps
 > its own counters.
+>
+> The supplied `render.yaml` is **web-only**: it sets `BACKGROUND_JOBS_ENABLED=False`, so SMS
+> dispatch, overdue reminders, roll-call expiry, ID-export cleanup, and SHS 3 phase-out do not run.
+> `manage.py check` warns with `core.W003`; `SMS_ENABLED=True` with background jobs off is a hard
+> error (`core.E004`). Add paid worker + Beat services, set `REDIS_URL`, and set
+> `BACKGROUND_JOBS_ENABLED=True` on every service before enabling SMS.
 
 ## 6. Paste-ready block
 
@@ -211,6 +218,7 @@ DEMO_REQUEST_NOTIFY_EMAILS=berkojohnson@gmail.com
 SMS_ONLINE_GH_API_KEY=<smsonlinegh-api-key>
 SMS_SENDER_ID=EDENSYS
 SMS_ENABLED=False
+BACKGROUND_JOBS_ENABLED=False
 DEMO_REQUEST_SMS_TO=+233248160391
 DEMO_REQUEST_SMS_SENDER=EDENSYS
 PUBLIC_WEBSITE_DOMAIN=ecreativesys.com,www.ecreativesys.com

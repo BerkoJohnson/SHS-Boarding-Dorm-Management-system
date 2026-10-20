@@ -16,6 +16,8 @@
         Finalize Roll Call
       </button>
     </form>
+  {% elif current_session.status == 'Expired' %}
+    <span class="text-xs text-rose-500 italic">Roll call expired &mdash; records preserved and locked.</span>
   {% else %}
     <span class="text-xs text-slate-400 italic">Roll call records finalized & archived.</span>
   {% endif %}

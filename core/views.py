@@ -23,6 +23,7 @@ from django.urls import reverse
 from django.utils import timezone
 from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Count, F, Prefetch, Q, Sum, Value
+from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth import views as auth_views
@@ -1877,7 +1878,19 @@ def exeat_approval_review_view(request, pk):
                 ):
                     reviewed.approved_by = hm
 
-            reviewed.save()
+            try:
+                reviewed.save()
+            except ValidationError as error:
+                messages.error(request, " ".join(error.messages))
+                return redirect("core:exeat_detail", pk=pk)
+            except IntegrityError:
+                messages.error(
+                    request,
+                    "This student already has an active approved pass. "
+                    "Record the return or cancel that pass before approving another.",
+                )
+                return redirect("core:exeat_detail", pk=pk)
+
             if reviewed.status == Exeat.Status.APPROVED:
                 enqueue_exeat_event_sms(reviewed, SMSDelivery.EventType.APPROVED)
             elif reviewed.status == Exeat.Status.REJECTED:
@@ -2203,8 +2216,21 @@ def exeat_action_view(request, pk, action):
 
                 exeat.status = Exeat.Status.APPROVED
                 # Note: Exeat.clean() + Exeat.save() both run full_clean so
-                # approved_by-is-set and jurisdiction rules from Phase 1 are enforced here.
-                exeat.save()
+                # approved_by-is-set, jurisdiction, and one-active-pass rules
+                # are enforced here. The database constraint is the final guard
+                # for concurrent approvals.
+                try:
+                    exeat.save()
+                except ValidationError as error:
+                    messages.error(request, " ".join(error.messages))
+                    return redirect("core:exeat_detail", pk=exeat.pk)
+                except IntegrityError:
+                    messages.error(
+                        request,
+                        "This student already has an active approved pass. "
+                        "Record the return or cancel that pass before approving another.",
+                    )
+                    return redirect("core:exeat_detail", pk=exeat.pk)
                 enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.APPROVED)
 
                 # Step 2 transition: gate movement placeholder is ONLY created when the

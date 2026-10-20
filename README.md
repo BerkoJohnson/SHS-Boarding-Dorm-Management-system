@@ -40,7 +40,7 @@ its own PostgreSQL schema.
 | **Houses & dormitories** | Records houses, dormitory blocks (male/female), rooms and capacities. |
 | **Student records** | Admission number, index number, programme, class group, house, dormitory, room, guardian, photo. Imports from Excel/CSV. |
 | **Exeat life cycle** | Staff request leave for a student, a housemaster approves or rejects it, the main gate records departure and return, and guardians receive SMS updates at each stage. |
-| **Roll call** | Housemasters start an attendance session, mark students present/absent/on-exeat, and follow up absences. Unfinished sessions expire automatically. |
+| **Roll call** | Housemasters start an attendance session, mark students present/absent/on-exeat, and follow up absences. Unfinished sessions expire automatically and are retained for review. |
 | **Discipline** | Records disciplinary incidents against students. |
 | **Student ID cards** | Generates printable CR80 ID cards with a portrait and a QR code. Scanning the QR code opens a privacy-safe public page that shows only whether the student is currently out and whether a gate departure was logged. |
 | **Reports** | Boarding KPIs, demographics, SMS usage and configuration audit reports (screen and print). |
@@ -1005,7 +1005,8 @@ Quick reference:
 .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema> --list
 .\.venv\Scripts\python.exe .\manage.py support_access --schema=<schema> --status
 .\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema> --show
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<new-schema> --dry-run
+# The restore target name must match the schema inside the dump.
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<schema> --dump=<archive> --dry-run
 ```
 
 #### 1. `tenant_list` — school inventory
@@ -1166,9 +1167,10 @@ Restores a schema from a `tenant_backup` archive. It verifies the SHA-256 checks
 table of contents, refuses reserved/registered/existing schemas and schema-name mismatches, and
 never issues `DROP`, `--clean` or `--if-exists`.
 
-The command therefore restores into a **new, unregistered, empty schema**. It is not an in-place
-live-tenant restore. To recover a live school, restore into a spare schema, verify it, and switch
-the tenant through an approved maintenance procedure; that switch is not performed by this command.
+The command therefore restores into a **new, empty, unregistered schema whose name matches the
+dump**. It is not an in-place live-tenant restore and cannot rename a dump to a different schema.
+For a live school, use the full-database procedure in `RESTORE_RUNBOOK.md`; restoring one school in a
+shared database requires the documented decommission/reprovision process.
 
 | Option | Meaning |
 | :--- | :--- |
@@ -1181,15 +1183,24 @@ the tenant through an approved maintenance procedure; that switch is not perform
 | `--json`, `--operator NAME` | As above. |
 
 ```powershell
-# Always validate first against a new, unregistered target
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs_restore_20261020 --dry-run
-# Then restore into that new schema
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs_restore_20261020
+# The dump was taken from 'atebubu_shs', so the target name must also be 'atebubu_shs'.
+# Use a fresh database with the public schema migrated and no Tenant row for that schema.
+.\.venv\Scripts\python.exe .\manage.py tenant_restore `
+  --schema=atebubu_shs `
+  --dump="C:\approved-backups\atebubu_shs\atebubu_shs_20261020_071218.dump" `
+  --backup-dir="C:\approved-backups" `
+  --dry-run
+# Then restore into that empty schema
+.\.venv\Scripts\python.exe .\manage.py tenant_restore `
+  --schema=atebubu_shs `
+  --dump="C:\approved-backups\atebubu_shs\atebubu_shs_20261020_071218.dump" `
+  --backup-dir="C:\approved-backups"
 ```
 
 > **Warning:** restoring creates data in the target schema; it does not overwrite an existing
-> schema, and it cannot restore into a registered live school. Validating with `--dry-run` first is
-> strongly recommended. Existing media files are never overwritten.
+> schema, cannot rename the dump, and cannot restore into a registered live school. Validating with
+> `--dry-run` first is strongly recommended. Existing media files are never overwritten. See
+> `RESTORE_RUNBOOK.md` for the complete recovery procedure.
 
 ### 7.9 Which commands to run when
 
@@ -1221,6 +1232,19 @@ Redis is the **broker** (`REDIS_URL`). Celery Beat uses the **database scheduler
 server. But **SMS will not be sent** and the scheduled tasks below will not run. To use SMS or any
 scheduled job, you must run both a worker and Beat, plus Redis.
 
+**Explicit deployment switch.** `BACKGROUND_JOBS_ENABLED` (default `true`) records whether the
+deployment actually runs those processes. When it is `false`:
+
+- `manage.py check` emits warning **`core.W003`** listing the dormant features.
+- If `SMS_ENABLED=True` at the same time, it emits error **`core.E004`** because SMS deliveries
+  would queue forever. The Render build command runs `manage.py check`, so this aborts the deploy.
+- Celery Beat uses `schoolsystem.beat.DisabledScheduler`, which loads **no** periodic tasks —
+  including rows left in `django_celery_beat`.
+- The web application still works; only background work is paused.
+
+The supplied Render **staging** blueprint sets `BACKGROUND_JOBS_ENABLED=False` and runs web-only.
+Set it to `true` only after adding worker and Beat services (section 9.4).
+
 ### 8.2 The Celery app
 
 The Celery app is defined in `schoolsystem/celery.py` and named **`schoolsystem`**, and it is loaded
@@ -1235,11 +1259,11 @@ fans out to every active tenant.
 | :--- | :--- | :--- | :--- |
 | `dispatch-queued-sms-deliveries` | `core.tasks.dispatch_queued_sms_deliveries` | 60 s | Recovers stale deliveries and sends up to 100 queued SMS. |
 | `check-overdue-exeats-for-sms` | `core.tasks.enqueue_overdue_exeat_reminders` | 15 min | Queues daily overdue-return reminders for students still out. |
-| `expire-unfinished-roll-calls` | `core.tasks.expire_unfinished_roll_calls` | 60 s | Deletes roll-call sessions left in progress more than 1 hour and notifies the creator. |
+| `expire-unfinished-roll-calls` | `core.tasks.expire_unfinished_roll_calls` | 60 s | Marks roll-call sessions left in progress more than 1 hour as `Expired`, preserves their entries for review, and notifies the creator. |
 | `cleanup-expired-student-id-exports` | `core.tasks.cleanup_expired_student_id_exports` | 24 h | Deletes expired student ID export archives. |
 | `phase-out-shs3-students-after-academic-year` | `core.tasks.phase_out_shs3_students` | 24 h | Marks enrolled SHS 3 students completed after an academic year's configured end date and records each transition. |
 
-**SHS 3 completion depends on Celery Beat running.** If Beat is stopped, students remain enrolled until it runs again; after restart, due academic years are processed safely. Historical ended years are marked as already processed during migration so deployment does not phase out old cohorts retroactively.
+**SHS 3 completion depends on Celery Beat running.** If Beat is stopped, students remain enrolled until it runs again; after restart, due academic years are processed safely. Historical ended years are marked as already processed during migration so deployment does not phase out old cohorts retroactively. With `BACKGROUND_JOBS_ENABLED=False`, the phase-out does not run at all until the switch is turned on and Beat is deployed.
 
 ### 8.4 How to run them
 
@@ -1259,8 +1283,25 @@ celery -A schoolsystem worker --loglevel=INFO --concurrency=4
 celery -A schoolsystem beat   --loglevel=INFO
 ```
 
-**Production (Render):** run the same commands as Background Workers (`render.yaml` documents the
-optional worker and Beat services — see section 9.4).
+**Production (Render):** the supplied staging blueprint is **web-only** and sets
+`BACKGROUND_JOBS_ENABLED=False`. To run background work, add the paid worker and Beat services
+described in section 9.4, set `REDIS_URL` on all services, then set `BACKGROUND_JOBS_ENABLED=True`
+on all three. Do not turn on `SMS_ENABLED` before those services exist; `core.E004` blocks it.
+
+**Manual runs while background jobs are disabled** (for cleanup and the SHS 3 phase-out; do not
+run SMS dispatch by hand on a web-only deployment):
+
+```powershell
+# Roll-call expiry
+.\.venv\Scripts\python.exe .\manage.py shell -c "from core.tasks import expire_unfinished_roll_calls; print(expire_unfinished_roll_calls())"
+# Expired student ID export cleanup
+.\.venv\Scripts\python.exe .\manage.py shell -c "from core.tasks import cleanup_expired_student_id_exports; print(cleanup_expired_student_id_exports())"
+# SHS 3 phase-out for due academic years
+.\.venv\Scripts\python.exe .\manage.py shell -c "from core.tasks import phase_out_shs3_students; print(phase_out_shs3_students())"
+```
+
+Run these only during an approved maintenance window. Overdue-exeat reminders and SMS dispatch
+remain dormant; do not enable `SMS_ENABLED` until a worker and Beat are running.
 
 Worker connection hygiene (already implemented in `celery.py`): child processes close inherited
 database sockets on start, and every task resets the PostgreSQL `search_path` to `public` before
@@ -1283,6 +1324,7 @@ and after running, so one school's schema cannot leak into another's over a long
 | Worker crashes with `PermissionError [WinError 5]` on Windows | Missing `--pool=solo --concurrency=1`. |
 | Worker starts but tasks never run | Beat not running, or `REDIS_URL` mismatch between services. |
 | SMS stays `QUEUED` forever | SMS disabled, no worker/Beat, or quota reached. |
+| Scheduled jobs never run | `BACKGROUND_JOBS_ENABLED=False`, Beat not running, or `REDIS_URL` mismatch. |
 | `Connection refused` to Redis | Redis not running, or wrong `REDIS_URL`. |
 
 ### 8.7 SMS and email — safe testing
@@ -1422,7 +1464,7 @@ Web Service:
 | :--- | :--- |
 | Type | Web Service (Python) |
 | Root directory | repository root (contains `manage.py`) |
-| Build command | `pip install -r requirements.txt && python manage.py collectstatic --noinput --settings=schoolsystem.settings.build` |
+| Build command | `pip install -r requirements.txt && python manage.py check --settings=schoolsystem.settings.build && python manage.py collectstatic --noinput --settings=schoolsystem.settings.build` |
 | Start command | `gunicorn schoolsystem.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --threads 2 --timeout 60` |
 | Health check path | `/healthz` |
 | Python version | `3.12` (set `PYTHON_VERSION=3.12`) |
@@ -1439,8 +1481,9 @@ Optional Background Workers (required for SMS and scheduled jobs):
 
 Give both the same environment variables as the web service, plus `REDIS_URL`. Provision a Render
 Key Value (Redis) instance, or an external Redis 6+ instance, and put its URL in `REDIS_URL` for all
-three services. The `Procfile` in the repository defines equivalent `web`, `worker` and `beat`
-processes if your platform uses it.
+three services. Set `BACKGROUND_JOBS_ENABLED=True` on all three; the supplied staging blueprint
+instead sets it to `False` and runs web-only. The `Procfile` in the repository defines equivalent
+`web`, `worker` and `beat` processes if your platform uses it.
 
 ### 9.5 Production environment variables (Render dashboard)
 
@@ -1461,6 +1504,7 @@ PGSSLMODE=require
 DJANGO_SECRET_KEY=at-least-50-random-characters-kept-secret
 CSRF_TRUSTED_ORIGINS=https://your-app.onrender.com,https://school.example.com
 REDIS_URL=redis://<host>:6379
+BACKGROUND_JOBS_ENABLED=False   # True only after worker + Beat services exist
 MEDIA_STORAGE_BACKEND=neon_s3
 NEON_STORAGE_BUCKET=uploads
 AWS_ENDPOINT_URL_S3=https://<bucket>.storage.<region>.neon.tech
@@ -1638,12 +1682,15 @@ Never paste the password into a script that is committed.
 
 ### 10.3 Restoring
 
-- **Per-school:** `tenant_restore --schema <new-unregistered-schema> --dry-run` first, then without
-  `--dry-run`. The command restores into a new schema only; it does not replace a live tenant in
-  place. Verify the spare schema and switch the tenant through an approved maintenance procedure.
-- **Whole database / public schema:** use `pg_restore` into a database. For the public schema in
-  multi-school mode this is dangerous — the schema registry (`tenancy_tenant`, `tenancy_domain`) is
-  what prevents a hostname resolving to the wrong school.
+See **[`RESTORE_RUNBOOK.md`](RESTORE_RUNBOOK.md)** for the full, drilled procedure, validation
+queries, media notes, and the local drill evidence from 2026-10-20.
+
+- **Per-school:** `tenant_restore --schema=<schema> --dry-run` first, then without `--dry-run`.
+  The target must be an **empty, unregistered schema whose name matches the dump**. It is not an
+  in-place live-tenant restore and cannot rename a dump to a different schema.
+- **Whole database / public schema:** use `pg_restore` into a fresh database. For the public schema
+  in multi-school mode this is dangerous — the schema registry (`tenancy_tenant`, `tenancy_domain`)
+  is what prevents a hostname resolving to the wrong school.
   > **Warning:** restoring can overwrite newer data and, for the public schema, change which school
   > a hostname points to. Production restores need careful verification and authorisation. Prefer
   > restoring into a fresh database first, verifying it, and only then switching.
@@ -1742,12 +1789,16 @@ Request -> Housemaster review -> (Approved) -> SMS: Approved -> Gate departure -
                               -> (Rejected) -> SMS: Rejected                    -> Gate return -> SMS: Safe return
 ```
 Submitting a request queues an "awaiting approval" SMS. If an approved student is not back by the
-expected time, the overdue task queues daily reminders until they return.
+expected time, the overdue task queues daily reminders until they return. A student may hold only
+one **Approved and unreturned** pass; approval is refused while another active pass exists. Pending
+requests do not block by themselves.
 
 ### 12.4 Roll call
 
 Sessions start with students Unmarked; active gate departures set a student to On Exeat; sessions
-left in progress expire after one hour; unexcused absences enter the follow-up queue.
+left in progress expire after one hour and are retained as **Expired** with their entries for review;
+unexcused absences enter the follow-up queue. Expired sessions are locked; use the attendance
+correction process when it is available (F-12).
 
 ### 12.5 Student ID cards and public QR checks
 

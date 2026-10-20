@@ -397,8 +397,22 @@ SMS_HTTP_TIMEOUT = env_float("SMS_HTTP_TIMEOUT", 10)
 SMS_MAX_ATTEMPTS = env_int("SMS_MAX_ATTEMPTS", 5)
 
 # Celery / Redis
+#
+# BACKGROUND_JOBS_ENABLED is an explicit deployment switch. The Render staging
+# blueprint ships without a Celery worker or Beat and sets this to False, so the
+# app does not silently imply that queued SMS or scheduled tasks are running.
+# A deployment that wants background work must run both processes and set this
+# to True.
+BACKGROUND_JOBS_ENABLED = os.getenv(
+    "BACKGROUND_JOBS_ENABLED", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_BEAT_SCHEDULER = (
+    "django_celery_beat.schedulers:DatabaseScheduler"
+    if BACKGROUND_JOBS_ENABLED
+    else "schoolsystem.beat.DisabledScheduler"
+)
 CELERY_TIMEZONE = SMS_TIME_ZONE
 CELERY_ENABLE_UTC = True
 CELERY_TASK_SERIALIZER = "json"
@@ -428,6 +442,10 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 24 * 60 * 60.0,
     },
 }
+if not BACKGROUND_JOBS_ENABLED:
+    # The database scheduler would otherwise load periodic rows left in
+    # django_celery_beat. The explicit switch means "do not schedule anything".
+    CELERY_BEAT_SCHEDULE = {}
 
 
 # -----------------------------------------------------------------------------

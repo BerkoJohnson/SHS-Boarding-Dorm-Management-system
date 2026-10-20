@@ -2056,7 +2056,7 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertTrue(RollCallSession.objects.filter(pk=session.pk).exists())
 
-    def test_expired_unfinished_roll_calls_are_deleted_and_notify_the_creator(self):
+    def test_expired_unfinished_roll_calls_are_preserved_and_notify_the_creator(self):
         session = create_roll_call_session(
             house=self.house,
             conducted_by=self.hm,
@@ -2073,12 +2073,14 @@ class RollCallAndGateTests(TestCase):
                 updated_by=self.user_hm,
             )
 
-        deleted_count = expire_unfinished_roll_calls()
+        expired_count = expire_unfinished_roll_calls()
 
-        self.assertEqual(deleted_count, 1)
-        self.assertFalse(RollCallSession.objects.filter(pk=session.pk).exists())
+        self.assertEqual(expired_count, 1)
+        session.refresh_from_db()
+        self.assertEqual(session.status, RollCallSession.Status.EXPIRED)
+        self.assertTrue(session.entries.exists())
         notification = RollCallNotification.objects.get(user=self.user_hm)
-        self.assertIn('deleted because it was not completed within one hour', notification.message)
+        self.assertIn('preserved for review', notification.message)
 
         self.client.force_login(self.user_hm)
         dashboard_response = self.client.get('/')
@@ -2131,9 +2133,21 @@ class RollCallAndGateTests(TestCase):
 
     def test_gate_currently_out_table_paginates_movement_and_reconciliation_rows(self):
         now = timezone.now()
+        # Each student may hold only one active pass (F-02), so use separate
+        # students to exercise pagination of the currently-out table.
         for index in range(16):
+            student = Student.objects.create(
+                admission_no=f'GATE-OUT-{index:02d}',
+                index_number=f'GATE-OUT-IDX-{index:02d}',
+                full_name=f'Gate Out Student {index:02d}',
+                gender=Student.Gender.MALE,
+                programme=self.programme,
+                residency=Student.ResidencyStatus.BOARDING,
+                house=self.house,
+                dormitory=self.dorm,
+            )
             exeat = Exeat.objects.create(
-                student=self.boarder1,
+                student=student,
                 academic_term=self.term,
                 exeat_type=Exeat.ExeatType.TOWN,
                 expected_departure=now - timezone.timedelta(hours=2),

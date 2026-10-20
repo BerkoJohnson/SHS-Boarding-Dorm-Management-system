@@ -20,6 +20,10 @@
               <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-50 text-amber-700 border border-amber-200 animate-pulse">
                 ● In Progress
               </span>
+            {% elif current_session.status == 'Expired' %}
+              <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                ! Expired
+              </span>
             {% else %}
               <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                 ✓ Completed
@@ -50,7 +54,7 @@
       {% if current_session.status == 'In Progress' %}
         <p class="mt-2 text-xs {% if current_session.is_expired %}text-rose-700{% else %}text-amber-700{% endif %}">
           {% if current_session.is_expired %}
-            This roll call has expired and will be deleted shortly.
+            This roll call has expired. Its attendance records are preserved below for review.
           {% else %}
             Complete within one hour. Time remaining:
             <strong data-roll-call-countdown data-expires-at="{{ current_session.expires_at|date:'c' }}">Calculating…</strong>
@@ -93,6 +97,8 @@
         <span class="text-xs font-semibold text-slate-700">Dormitory Roster ({{ session_entries.paginator.count }} Students)</span>
         {% if current_session.status == 'In Progress' %}
           <span class="text-[11px] text-slate-400">Entries start unmarked. Verify each student before finalizing.</span>
+        {% elif current_session.status == 'Expired' %}
+          <span class="text-[11px] text-rose-500 font-medium">Session expired &mdash; records preserved and locked</span>
         {% else %}
           <span class="text-[11px] text-slate-400 font-medium">Session finalized &mdash; records are locked</span>
         {% endif %}
