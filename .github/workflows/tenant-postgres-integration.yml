@@ -47,3 +47,73 @@ jobs:
           tenancy
           --settings=schoolsystem.settings.tenancy_test
           --noinput
+
+  core-regression:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: schoolsystem_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d schoolsystem_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TENANCY_ENABLED: "false"
+      DATABASE_PROFILE: local
+      DB_NAME: schoolsystem_test
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      REDIS_URL: redis://127.0.0.1:6379/0
+      DJANGO_SECRET_KEY: ci-only-secret-key-with-more-than-fifty-characters-1234567890
+      DEBUG: "False"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Check Django configuration
+        run: python manage.py check --settings=schoolsystem.settings.test
+      - name: Run core regression suite
+        run: >-
+          python manage.py test
+          core
+          --settings=schoolsystem.settings.test
+          --noinput
+      - name: Check production security configuration
+        env:
+          DATABASE_PROFILE: neon
+          PGHOST: 127.0.0.1
+          PGDATABASE: postgres
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGSSLMODE: require
+          TENANCY_ENABLED: "false"
+          ALLOWED_HOSTS: example.com
+          SECURE_HSTS_SECONDS: "31536000"
+        run: >-
+          python manage.py check
+          --deploy
+          --settings=schoolsystem.settings.production
+          --fail-level ERROR

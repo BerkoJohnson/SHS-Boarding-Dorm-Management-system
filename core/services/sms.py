@@ -20,12 +20,36 @@ HOUSEMASTER_AUDIENCE = "housemaster"
 
 
 def _school_short_name() -> str:
-    """Return a GSM 03.38–safe sender ID (alphanumeric only, max 11 chars)."""
+    """Return the school's short display name for SMS message text."""
     configuration = SchoolConfiguration.get_solo()
     raw = (configuration.short_name or configuration.name or "ATSEC").strip()
-    # Strip characters not allowed in SMS sender IDs (GSM 03.38).
+    # Keep the message prefix short and safe for the GSM 03.38 alphabet.
     sanitized = re.sub(r"[^A-Za-z0-9]", "", raw)[:11]
     return sanitized.upper() if sanitized else "EDENSYS"
+
+
+def _sms_sender_id() -> str:
+    """Resolve the approved SMS sender ID.
+
+    The deployment-level ``SMS_SENDER_ID`` is the approved value maintained by
+    Eden Sys. The school short name is only a fallback when no sender has been
+    configured. Both paths are normalised to the GSM 03.38 alphanumeric sender
+    format (maximum 11 characters).
+    """
+    configured = (getattr(settings, "SMS_SENDER_ID", "") or "").strip()
+    if not configured:
+        configuration = SchoolConfiguration.get_solo()
+        configured = (configuration.short_name or configuration.name or "ATSEC").strip()
+
+    sanitized = re.sub(r"[^A-Za-z0-9]", "", configured)[:11].upper()
+    sender = sanitized or "EDENSYS"
+    if configured.upper() != sender:
+        logger.warning(
+            "SMS sender ID %r was normalised to %r",
+            configured,
+            sender,
+        )
+    return sender
 
 
 def normalize_phone_number(value: str | None) -> str:
@@ -265,11 +289,13 @@ def send_bulk_sms(
         logger.error("SMS_ONLINE_GH_API_KEY is not configured; SMS was not sent")
         return False
 
+    sender = _sms_sender_id()
+    logger.info("Sending SMS with resolved sender ID %s", sender)
     payload = {
         "key": api_key,
         "text": message,
         "type": 0,
-        "sender": _school_short_name() or getattr(settings, "SMS_SENDER_ID", "ATSEC"),
+        "sender": sender,
         "to": ",".join(cleaned_numbers),
     }
     try:

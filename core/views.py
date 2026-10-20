@@ -2973,10 +2973,17 @@ def roll_call_create_session_view(request):
             notes=notes,
         )
 
-        messages.success(
-            request,
-            f"Muster started for {session.house.name}: {session.total_students} boarders loaded into roster.",
-        )
+        if getattr(session, "reused_existing", False):
+            messages.info(
+                request,
+                f"An in-progress roll call for {session.house.name} is already open; "
+                "it has been reused instead of starting a duplicate.",
+            )
+        else:
+            messages.success(
+                request,
+                f"Muster started for {session.house.name}: {session.total_students} boarders loaded into roster.",
+            )
         return redirect(f"{reverse('core:roll_call_sessions')}?session_id={session.id}")
 
     return redirect("core:roll_call_sessions")
@@ -3455,41 +3462,78 @@ def gate_terminal_action_view(request, exeat_pk, action):
     return redirect("core:gate_security")
 
 
+def _gate_lookup_sort_key(exeat, now):
+    """Rank matching passes by immediate gate relevance.
+
+    A student who is already out is always shown first. A pass inside its
+    scheduled window comes next, followed by the soonest upcoming pass and then
+    the most recently expired pass. This only orders the disambiguation list;
+    it never chooses a pass for the officer.
+    """
+    movement = getattr(exeat, "movement", None)
+    if movement and movement.actual_departure and not movement.actual_return:
+        return (0, -movement.actual_departure.timestamp())
+    if exeat.expected_departure <= now <= exeat.expected_return:
+        return (1, exeat.expected_return.timestamp())
+    if now < exeat.expected_departure:
+        return (2, exeat.expected_departure.timestamp())
+    return (3, -exeat.expected_return.timestamp())
+
+
 @login_required
 @role_required(*GATE_ROLES)
 @tenant_feature_required("exeat_gate")
 def gate_verify_pass_view(request):
     """
     Real-time lookup for Gate Officers scanning or typing student passes.
-    Matches by exeat_number, student admission_no, or index_number.
+
+    An exact pass number is honoured so staff can see why a pending, rejected,
+    or cancelled pass cannot be used. Broader admission/index/partial searches
+    only return approved passes that have not already been returned, and show a
+    disambiguation list when more than one pass matches.
     """
     q = request.GET.get("q", "").strip()
     exeat = None
-    if q:
+    matches = []
+    query_too_short = bool(q) and len(q) < 2
+    if q and not query_too_short:
         get_gate_house_scope(request.user)
-        exeat = (
-            Exeat.objects.filter(
-                Q(exeat_number__iexact=q)
-                | Q(student__admission_no__iexact=q)
-                | Q(student__index_number__iexact=q)
-                | Q(exeat_number__icontains=q)
-            )
-            .select_related(
-                "student",
-                "student__house",
-                "student__dormitory",
-                "student__programme",
-                "movement",
-            )
-            .first()
+        queryset = Exeat.objects.select_related(
+            "student",
+            "student__house",
+            "student__dormitory",
+            "student__programme",
+            "movement",
         )
+        exact_match = queryset.filter(exeat_number__iexact=q).first()
+        if exact_match is not None:
+            exeat = exact_match
+        else:
+            now = timezone.now()
+            candidates = list(
+                queryset.filter(
+                    Q(student__admission_no__iexact=q)
+                    | Q(student__index_number__iexact=q)
+                    | Q(exeat_number__icontains=q),
+                    status=Exeat.Status.APPROVED,
+                ).exclude(movement__actual_return__isnull=False)
+            )
+            candidates.sort(
+                key=lambda candidate: _gate_lookup_sort_key(candidate, now)
+            )
+            if len(candidates) == 1:
+                exeat = candidates[0]
+            else:
+                matches = candidates
 
     return render(
         request,
         "core/operations/partials/gate_verification_card.html",
         {
             "exeat": exeat,
+            "matches": matches,
             "query": q,
+            "query_too_short": query_too_short,
         },
     )
 
