@@ -1,709 +1,1157 @@
-# SHS Boarding & Dormitory Management System — Independent Audit Report
+# SHS Boarding & Dorm Management System
+## Repository Audit and Improvement Plan
 
-**Prepared for:** Product owner / school leadership (pilot: Atebubu Senior High School)
+**Prepared for:** Eden Creative Systems (Eden Sys) and Atebubu Senior High School (pilot school)
 **Audit date:** 19 October 2026
-**Baseline audited:** commit `24afc5c` **plus uncommitted working-tree changes** (15 modified files, 5 untracked files — see Appendix D). All findings refer to this working tree, not to `HEAD`.
-**Auditor scope:** static code, template, schema, and test inspection with targeted logic tracing. No production systems were touched; no SMS/email was sent; no migrations were run; no data was modified.
-**Report status:** For review and approval. No fixes have been implemented.
+**Baseline:** `HEAD 8c490e0` (`feat(students): add cohort promotion and SHS 3 phase-out`, which includes the previously uncommitted progression work and the prior audit file). The only working-tree modification is this report.
+**Audit type:** Read-only repository audit and production-readiness review
+**Status:** Initial audit complete. No source code, schema, data, or external configuration was changed.
+
+> This document replaces the earlier draft of the same filename. It follows the current brief's required order: executive summary, repository map, findings, traceability, security assessment, roadmap, test plan, open decisions, and approval checkpoint.
 
 ---
 
-## 0. Method, Evidence Rules, and Limits
+## How to read the status labels
 
-### 0.1 What was done
-- Read the domain models, all view functions, forms, permissions, admin registrations, report services, roll-call service, SMS service, import/progression/ID-card services, Celery tasks, settings, middleware, entitlements, templates, and deployment configuration.
-- Traced each important feature from UI entry point → view → service → model/database constraint → external service (SMS gateway, QR page, backups).
-- Audited the tenancy layer: provisioning, domain routing, backup, restore, support access, entitlements/quotas, platform audit logs.
-- Ran `python manage.py check --settings=schoolsystem.settings.development` — **passes with no issues** (system check framework only; it does not exercise business logic).
-
-### 0.2 What was NOT done (and why)
-| Not done | Reason | Consequence |
-|---|---|---|
-| Full test suite execution | Local PostgreSQL/test-database setup was not verified in this environment | Findings based on static reasoning carry "Unverified runtime" risk; CI must close this gap |
-| Live browser walkthrough of every screen | Audit focused on code truth over demo truth; runtime UI exercise still required | Rendering/layout issues may exist that code inspection cannot catch |
-| Real SMS gateway call | Explicitly prohibited | Sender-ID and quota findings are code-verified but not gateway-verified |
-| Backup/restore rehearsal | Explicitly prohibited (no external changes) | Restore gap is verified from command logic; an actual drill is required before go-live |
-| Penetration test / load test | Out of static-audit scope | Security findings are configuration-level; formal security testing still needed |
-
-### 0.3 Finding status legend
-- **Verified** — traced in code with concrete evidence; behaviour is as described by the code path.
-- **Partially verified** — core path traced, but a dependent path (runtime, gateway, or environment) was not exercised.
-- **Unverified** — could not be established without running the system or obtaining school input.
-- **Not implemented** — no code path exists for the claimed behaviour.
-
-### 0.4 Severity legend
-- **Critical** — risk of physical harm to a student, or irreversible loss of student records.
-- **High** — breaks a core safety, gate, attendance, or recovery workflow, or produces materially wrong decisions.
-- **Medium** — a workaround exists, but accuracy, efficiency, audit quality, or reliability is degraded.
-- **Low** — cosmetic, documentation, or minor usability issue.
-
-### 0.5 Evidence convention
-Each finding gives: Finding ID, severity, status, location, evidence, expected vs actual, impact, action, and the test required to prove the fix. Findings appear in Deliverables A–H and are indexed in Deliverable D.
-
----
-
-## Deliverable A — Executive Assessment
-
-### A.1 One-paragraph verdict
-This is a **substantially built, security-conscious, operations-focused boarding system** with a far-above-average feature depth for a Ghanaian SHS: 60 view functions, 18+ reports, QR-gated exeat verification, roll-call with gate reconciliation, SMS notifications with retries, tenant provisioning, and a genuine role model. It is **not yet a finished commercial product**. The audit found **no single catastrophic design flaw**, but it found a cluster of integrity and operational gaps concentrated in exactly the places a school feels first: gate pass lookup, roll-call records, leave-time changes, SMS sender identity, occupancy reporting, and disaster recovery. Several README claims also exceed what the code actually does. The system is **conditionally suitable for a supervised pilot** once the P0 items in Deliverable D are fixed and the recovery drill in Deliverable F passes. It is **not ready for unattended multi-school commercial operation** today.
-
-### A.2 What is genuinely strong (verified)
-1. **Role and scope model** — `core/permissions.py` implements ADMIN / SENIOR_HOUSEMASTER / HOUSEMASTER / HOUSE_TUTOR / GATE_OFFICER / UNASSIGNED with house scoping, explicit superuser bypass, and belt-and-suspenders checks inside workflow actions. This is rare in school software and prevents most cross-house data exposure.
-2. **CSV import is production-grade** — atomic transaction, full-roster validation before commit, and formula-injection escaping for exports. This protects both data integrity and the school's spreadsheets.
-3. **QR public pass page is privacy-preserving** — token-scoped, expiry-aware, and intentionally minimal; a scanned QR does not leak the student record.
-4. **Exeat workflow is complete for the standard case** — request → approval with jurisdiction enforcement → gate departure → return, plus a reconciliation path for missed movements and automatic On-Exeat marking in roll call.
-5. **Security baseline** — login rate limiting, 30-minute sessions, strong password validators, HSTS, CSP in report-only mode, CSRF on all mutating operations, no verbatim secret exposure in templates.
-6. **Tenancy architecture** — schema-per-school with verified domain hostname routing, entitlements/quota hooks, provisioning audit trail, and platform-level logs. Backup and restore commands include SHA-256 checksums and a table-of-contents check before restore — uncommon care.
-7. **Celery operations** — SMS retry with backoff, overdue-return reminders, roll-call session expiry, and SHS3 phase-out are all scheduled jobs rather than manual chores.
-
-### A.3 What is genuinely risky (verified)
-1. **Attendance records can be changed after a roll call is closed, silently** (AUD-001). The session lock does not check session status, and the entry is mutated with queryset `.update()`, bypassing model validation. A test even encodes the "no incident after completion" expectation. Any attendance report can therefore disagree with the roll call as conducted.
-2. **Duplicate roll-call sessions are possible** (AUD-002). The service unconditionally creates a session despite a docstring claiming it finds an existing in-progress one. A double-submit produces two rosters and doubles or splits attendance data.
-3. **The gate can show the wrong pass for a student** (AUD-003). A student with several exeats can return a future Pending or an old returned pass from the "active pass" lookup, depending on ordering. Gate staff may refuse a valid exit or log movement against the wrong pass.
-4. **There is no controlled way to move a departure time** (AUD-004). Early departure is hard-blocked at both the exeat view and the gate terminal; the only edit path is Django admin, which bypasses the workflow. Emergencies will either be handled off-system (record and reality diverge) or by an administrator editing records without a state-machine guard.
-5. **SMS sender identity is effectively hard-coded away from the configured sender ID** (AUD-006), and provisioning seeds a 50-character school-name-derived short name before truncation. Guardian messages may be rejected by the gateway or arrive under an unapproved ID — in a system that depends on SMS as the only guardian channel, this is a pilot-blocking risk.
-6. **Disaster recovery of a live school has no in-place path** (AUD-015). The restore command is deliberately conservative (checksum + TOC verification, refuses registered/existing schemas, never drops) — good safety, but it means a live tenant cannot be restored in place without improvised schema surgery, and the README example does not match that constraint.
-7. **Support access tokens are not wired into the application** (AUD-016). Tokens can be generated and verified only from the CLI. No login, middleware, or authorization path consumes them, so the README claim that engineers use them to troubleshoot a school is not implemented as described.
-8. **Occupancy can be overstated** (AUD-009) because the house list counts boarders without an enrollment-status filter, while the equivalent report and dashboard do filter. Capacity decisions are made from the inconsistent number.
-
-### A.4 What is missing for the product's own goals (verified absence)
-- No guardian portal or student self-service; SMS is the only guardian channel, and it is one-way.
-- No bulk SMS composition UI for announcements, no scheduled report delivery, and no offline/PWA mode despite HTMX forms requiring connectivity at the gate.
-- No controlled correction workflow or comprehensive audit log for exeat/movement corrections; Django admin is the de-facto correction tool (AUD-018).
-
-### A.5 Assessment by audience
-| Audience | Assessment |
+| Label | Meaning |
 |---|---|
-| **Administrator / Headmaster** | Decision-ready dashboards and broad reporting exist, but the two numbers most likely to be quoted — occupancy and approval turnaround — have accuracy defects (AUD-009, AUD-010, AUD-012). Use only after fixes, or with the report caveats stated in Deliverable B. |
-| **Housemasters / House Tutors** | Day-to-day exeat work is well designed. Roll-call integrity gaps (AUD-001, AUD-002) undermine the records they are accountable for. Reasonless quick rejects weaken the audit trail (AUD-005). |
-| **Gate staff** | The gate terminal is fast and the reconciliation feature is valuable. Pass lookup ambiguity (AUD-003) and the early-departure block (AUD-004) are the two operational failure modes to fix before a gate drill. |
-| **Guardians** | Receive event SMS but cannot ask for or verify anything. Entirely dependent on gateway deliverability and corrected sender ID (AUD-006). |
-| **Students** | Depend on staff to create passes; no view of their own status. Acceptable for the era of the school, but a stated product goal (guardian/student access) is absent. |
-| **System administrator** | Tenancy tooling is a strength, but backup encryption/retention (AUD-017), in-place restore (AUD-015), and the unwired support tokens (AUD-016) are the operational gaps to close before scale. |
+| **Verified** | Confirmed by reading the implementation, and where relevant by a passing framework check or by tracing the full UI → view → service → model path. |
+| **Partially verified** | Some layers were confirmed, but a complete end-to-end or device/network test was not possible in this environment. |
+| **Unverified** | The code suggests a behaviour, but it was not executed or cannot be proven without staging infrastructure or school input. |
+| **Not implemented** | No implementation was found in the repository. |
+| **Policy-dependent** | The correct behaviour cannot be decided from the code; school management must approve a rule first. |
+
+**Scope limitation:** The local environment did not have a provisioned PostgreSQL/Redis test stack. `python manage.py check --settings=schoolsystem.settings.development` passes, but the full test suite, live SMS, live backup/restore, and Android device testing were not run. No production data or credentials were accessed.
 
 ---
 
-## Deliverable B — Functionality Matrix
+# 1. Executive summary
 
-Statuses are per section 0.3. "Evidence" is the primary code location audited.
+## 1.1 Overall readiness
 
-| # | Capability | Status | Evidence | Notes |
-|---|---|---|---|---|
-| B1 | Authentication, sessions, login throttling | Verified | `schoolsystem/settings/base.py`, `core/middleware.py` | 30-min sessions, validators, throttling present |
-| B2 | Roles and house scoping | Verified | `core/permissions.py`, `core/models.py` | Superuser bypass explicit; jurisdiction checks on exeat approvals |
-| B3 | Student registry and lifecycle | Verified (core) | `core/models.py`, `core/views.py` | Enrollment statuses enforced in queries; progression feature is new/uncommitted (see D) |
-| B4 | Student promotion / SHS3 phase-out | Partially verified | `core/services/student_progression.py` (untracked), `core/tasks.py`, migrations 0032–0033 | Code and tests exist; never executed in this audit; migration files untracked |
-| B5 | CSV import / export | Verified | `core/services/student_import.py` | Atomic; full-roster validation; formula escaping |
-| B6 | Student ID cards and QR token lifecycle | Verified | `core/views.py`, `core/services/` ID/QR code | Rotation and optional TTL present |
-| B7 | Houses, dormitories, capacity | Partially verified | `core/views.py` `house_list_view` | Occupancy counting defect AUD-009 |
-| B8 | Roll call: session creation | Partially verified | `core/services/roll_call.py:33-130` | No duplicate guard AUD-002; docstring claim of "existing session" is false |
-| B9 | Roll call: marking, completion | Verified | `core/services/roll_call.py`, views | Completion path traced |
-| B10 | Roll call: absence follow-up | Partially verified | `core/services/roll_call.py:401-487` | Closed-session mutation and validation bypass AUD-001 |
-| B11 | Roll call: gate reconciliation | Verified | `core/services/roll_call.py:490+` | Auto-marks unmarked entries On Exeat at gate departure |
-| B12 | Exeat request and approval workflow | Verified | `core/views.py:375+`, `1618+`, `1745+` | Jurisdiction enforced; two-step state machine |
-| B13 | Exeat rejection audit quality | Partially verified | `core/views.py:2162-2177` | Reasonless quick reject allowed AUD-005 |
-| B14 | Exeat cancellation | Verified | `core/views.py:2134+`, templates | Approved-only cancel path present |
-| B15 | Gate verification (QR / number lookup) | Partially verified | `core/views.py:1206-1260` and gate verify view | Wrong-pass risk AUD-003 |
-| B16 | Gate departure / return logging | Verified | `core/views.py:3360-3460` | Admin + Gate Officer only, consistent with UI |
-| B17 | Early departure / leave rescheduling | Not implemented | n/a | No UI path AUD-004 |
-| B18 | Movement reconciliation for missed scans | Verified | `core/views.py:1962+`, `exeat_reconcile_view` | Retrospective; requires reason and outcome |
-| B19 | SMS notifications (submit/approve/reject/depart/return/overdue) | Partially verified | `core/services/sms.py`, `core/tasks.py` | Sender identity AUD-006; quota AUD-007; retry logic present |
-| B20 | Email notifications | Partially verified | settings/backends | Configured but not exercised; no audit evidence of delivery guarantees |
-| B21 | Dashboards (admin, gate, housemaster) | Verified | `core/views.py` | House-list occupancy inconsistency AUD-009 |
-| B22 | Reports (18 types) | Partially verified | `core/services/reports.py` | Breadth strong; accuracy defects AUD-008/010/011/012/013/014 |
-| B23 | Conduct and discipline | Verified | `core/models.py`, `core/views.py` | Normalised-rate report caveat AUD-013 |
-| B24 | Infirmary / welfare watchlist | Partially verified | `core/services/reports.py:2488-2546` | Completed students can appear AUD-014 |
-| B25 | Configuration management + config audit log | Verified | `core/models.py` `ConfigurationAuditLog`, `core/admin.py` | Audit log exists for configuration changes |
-| B26 | Django admin as correction tool | Partially verified | `core/admin.py` | No state-machine guard or movement audit AUD-018 |
-| B27 | Tenant provisioning and domain routing | Verified | `tenancy/` models, provisioning command | Domain hostname routing verified in code |
-| B28 | Entitlements and SMS quota | Partially verified | `tenancy/entitlements.py:59-175` | Stale queue items consume quota AUD-007 |
-| B29 | Backup | Partially verified | `tenancy/management/commands/tenant_backup.py` | No encryption/retention; second-precision names AUD-017 |
-| B30 | Restore | Partially verified | `tenancy/management/commands/tenant_restore.py` | Cannot restore live tenant in place AUD-015 |
-| B31 | Support access | Not implemented as claimed | `tenancy/management/commands/support_access.py` | CLI-only verification AUD-016 |
-| B32 | Scheduled tasks (retries, reminders, expiry, phase-out) | Verified (config) | `core/tasks.py` | Beat schedule present; runtime not exercised |
-| B33 | Guardian portal / student self-service | Not implemented | n/a | AUD-020 (product gap) |
-| B34 | Bulk SMS / announcements / scheduled reports | Not implemented | n/a | AUD-021 |
-| B35 | Offline / PWA operation | Not implemented | n/a | AUD-021; gate depends on connectivity |
-| B36 | Security hardening (HSTS, CSP, CSRF, validators) | Verified (config) | settings, middleware | CSP is report-only; formal pen test not done |
-| B37 | Accessibility / usability | Partially verified | `templates/base.html` | 12px default text, many 10px labels, no skip link AUD-022 |
-| B38 | Automated tests | Partially verified | `core/tests.py`, `core/test_advanced_reports.py`, `core/test_student_*.py` | Suite exists and covers key flows; not executed AUD-023; coverage gaps listed in Deliverable F |
+The repository is a substantial, coherent Django application, not a prototype. It has a credible boarding-domain model, role-aware views, a tenancy layer, security-conscious production settings, and a broad test inventory. The strongest parts are the separation of staff roles, house-scoped access, the exeat/reconciliation model, roll-call follow-up records, configuration auditing, and the amount of automated test code.
+
+It is **not ready for unattended production use**, and it is **not ready for multi-school commercial operation** in its current state. It is suitable for a **supervised, single-school staging/pilot only after the pilot blockers in this report are fixed**, and only after school management resolves the policy questions in section 8.
+
+The most serious problems are not cosmetic:
+
+1. The gate search can return a future, pending, or old pass instead of the student's current pass.
+2. The database permits multiple overlapping active exeats for one student.
+3. Two staff members can create duplicate roll-call sessions for the same house/dormitory/date.
+4. A completed roll call can still be changed through the absence-follow-up service.
+5. Unfinished roll calls are deleted after one hour, destroying attendance evidence.
+6. The configured SMS sender ID is ignored; provisioning seeds the school name, so the approved sender is bypassed.
+7. The documented Render deployment does not start Celery worker/Beat, so SMS, overdue reminders, expiry, and the SHS 3 phase-out silently do not run.
+8. Backups are local, unencrypted, unscheduled, and have no offsite copy or retention policy.
+9. The README's restore example cannot work against a registered live tenant.
+10. Support-access tokens exist only as a CLI verification exercise; there is no supervised support session in the application.
+
+## 1.2 Readiness by area
+
+| Area | Readiness | Evidence summary |
+|---|---|---|
+| Code structure and maintainability | **Good** | Clear app split, services for reports/roll call/SMS, settings split, tenancy layer. Large `views.py` (3,759 lines) and `reports.py` (2,868 lines) are maintainability risks but not correctness defects by themselves. |
+| Authentication and baseline security | **Good, with hardening gaps** | Production settings fail fast on weak secrets, force HTTPS/HSTS/secure cookies, use CSRF trusted origins, and serve private photos through authorised views. No MFA, CSP is report-only, no dependency scanning. |
+| Role-based access and tenant isolation | **Good, with role-model gaps** | House scoping and gate-only roles are consistently applied. No headmaster/assistant-headmaster/medical roles; `ADMIN` means system administrator. |
+| Exeat lifecycle and gate safety | **At risk** | Wrong-pass lookup, multiple active passes, no reschedule workflow, no emergency override, no gate roster, late returns create no incident. |
+| Roll call and attendance integrity | **At risk** | Duplicate sessions, post-closure mutation, destructive expiry, no authorised correction workflow, hard-coded escalation. |
+| Dormitory allocation | **Partial** | Room capacity is enforced; dormitory-level capacity and senior overcapacity exceptions are not. |
+| SMS communication | **Not production-ready** | Sender-ID bug, stale quota rows, no low-credit alerts, no selected-group messaging, event-only messaging, worker not deployed. |
+| Reports and exports | **Partial** | Broad report set and house scoping; several calculation defects; print-to-PDF only; one CSV export; no scheduled email reports. |
+| Backup, restore, disaster recovery | **Not evidenced** | Manual local archives, no encryption, no retention/offsite, no scheduled test, live restore refused. |
+| Remote support | **Not implemented** | CLI token generate/verify/revoke only; no approval, session, scope, or application path. |
+| Accessibility and mobile use | **Partial** | Viewport and 44px mobile navigation exist; gate action buttons are ~30px, base text is small, no skip link, no device test. |
+| Documentation and handover | **Partial** | Very detailed technical README; no role-based quick starts, plain-language manual, or videos. |
+| CI and test execution | **Partial** | Roughly 390 test methods exist, but CI runs only the tenancy provisioning integration test; the core suite is not gated. |
+
+## 1.3 Strongest aspects
+
+- **Domain model depth.** `Student`, `Exeat`, `ExeatMovement`, `ExeatReconciliation`, `RollCallSession`, `RollCallEntry`, `RollCallAbsenceFollowUp`, `DisciplinaryRecord`, `SMSDelivery`, and `ConfigurationAuditLog` model real boarding operations rather than a generic CRUD demo.
+- **Least-privilege intent.** Gate officers cannot create exeats; housemasters are house-scoped; reports are limited to administrators, the Senior Housemaster, and housemasters; private photos require a logged-in record role or a valid public token.
+- **Safety-oriented state rules.** `Exeat.clean()` rejects day students and completed students, enforces date order, and requires an approver for an approved pass. `ExeatMovement.clean()` prevents a return before a departure. `Student.clean()` enforces gender-appropriate dormitories and room capacity with row locking.
+- **Privacy-conscious design.** Student photos are stored under a private root and streamed through authorised views with `X-Content-Type-Options: nosniff` and `X-Robots-Tag: noindex, nofollow`; public photo access uses an expiring token. No `|safe` or `mark_safe` usage was found in the templates and core app.
+- **Security baseline.** Production settings reject short or low-entropy `DJANGO_SECRET_KEY`, set `DEBUG=False`, require explicit hosts outside tenancy mode, enable SSL redirect, secure cookies, HSTS, `SECURE_CONTENT_TYPE_NOSNIFF`, and a report-only CSP with nonce-based scripts.
+- **Tenancy architecture.** Schema-per-tenant with `django-pgschemas`, verified-domain routing, entitlement checks, audited provisioning, quota commands, backup/restore commands, and integration tests.
+- **Reporting breadth.** Seventeen report types cover occupancy, attendance, exeats, discipline, placement exceptions, the attendance league, overdue returns, gate conflicts, approval turnaround, exeat analytics, room allocation, staff activity, welfare, data completeness, movement concerns, conduct normalisation, and intervention effectiveness.
+- **Tests are not an afterthought.** The core app contains dedicated test modules for role authorisation, production settings, private storage, SMS, ID cards, room allocation, progression, registry, throttling, and house access; the tenancy app tests provisioning, isolation, plans, and platform commands.
+
+## 1.4 Major risks
+
+1. **Student safety at the gate.** The search view does not filter by status or active window and uses an unordered `.first()`. Because `Exeat.Meta.ordering` is `-expected_departure`, a future Pending pass can outrank the valid current pass. The verification card then correctly refuses to log movement, so a student with a valid pass can be turned away, or the officer may act on the wrong pass.
+2. **Attendance records can be wrong or destroyed.** Duplicate sessions split the roster; a completed session can be changed through the follow-up service; expired sessions are deleted; there is no authorised post-closure correction record.
+3. **SMS can silently fail.** The configured sender ID is ignored in favour of the school short name, and the documented Render blueprint does not run the worker or Beat. Both failures are silent in normal use.
+4. **Recovery is not demonstrated.** Backups are manual, local, unencrypted, and not covered by retention or offsite controls. A live tenant cannot be restored in place. The 24-hour recovery target is an aspiration, not an evidenced capability.
+5. **Policy gaps are being handled by admin edits or not at all.** Early departure, emergency override, late-return investigation, medical authorization, dormitory overcapacity, and retention have no approved workflow.
+6. **Documentation overstates operational readiness.** The support-token and restore sections describe capabilities that the code does not provide end to end. This is a commercial and trust risk, not only a documentation issue.
+
+## 1.5 What is not a defect
+
+These items may look like gaps but are consistent with the stated requirements and should not be “fixed” without a policy change:
+
+- **No guardian self-service portal.** Requirement C1 says staff create exeat requests; guardians do not submit them. SMS and telephone contact are the intended channels. A guardian portal is a product decision, not an audit finding.
+- **No offline gate mode.** Requirement A9 says gate operations require internet connectivity and offline transactions are not assumed to be permitted. The system is online-only by design. The gap is graceful error handling and operational monitoring, not an offline queue.
+- **No MFA.** The public website already states that two-factor authentication and single sign-on are not provided. MFA is a recommendation for production hardening, not a hidden capability.
+- **No student registry CSV export.** This is privacy-positive. The only bulk exports are the boarding KPI CSV (report roles) and the admin-only student ID image ZIP. Export logging is still missing.
+
+## 1.6 Staging and production recommendation
+
+- **Staging:** Suitable for supervised workflow testing with synthetic data, provided SMS is disabled or pointed at a sandbox and the worker/Beat decision is made explicitly. Do not load real guardian or medical data until the backup and access decisions are settled.
+- **Pilot:** Conditionally suitable after the pilot blockers (section 6) are fixed: gate lookup, one-active-exeat rule, duplicate roll call, closed-session mutation, SMS sender, worker/Beat, and a tested restore runbook.
+- **Production / multi-school:** Not ready. Recovery, support access, retention, monitoring, accessibility, and policy workflows must be completed and drilled first.
 
 ---
 
-## Deliverable B.5 — Detailed Findings Register
+# 2. Repository map
 
-Each finding lists location, evidence, expected vs actual, impact, action, and the test that must prove the fix.
+## 2.1 Top-level structure
 
-### AUD-001 — Attendance follow-ups can mutate completed roll calls
+| Path | Responsibility | Notes |
+|---|---|---|
+| `core/` | Main tenant-facing Django app: students, guardians, houses, dormitories, exeats, gate, roll call, conduct, SMS, reports, dashboards. | `models.py` 1,973 lines; `views.py` 3,759; `forms.py` 836; `admin.py` 558; `permissions.py` 167; `tasks.py` 538. |
+| `core/services/` | Business logic: `reports.py` (2,868 lines), `roll_call.py` (489), `sms.py` (272), `student_import.py`, `student_progression.py`. | Reports and roll call are the highest-risk service modules. |
+| `core/management/commands/` | `import_roster.py` and related operational commands. | Roster import supports CSV/XLSX with a 10 MB cap. |
+| `core/tests.py` and `core/test_*.py` | Core behaviour, security, reports, registry, SMS, ID cards, progression, throttling, house access. | Roughly 300 test methods. |
+| `tenancy/` | Platform layer: tenant registry, domains, plans, subscriptions, invoices, entitlements, support tokens, backups, restores, provisioning. | `models.py` 452 lines; commands are the operational surface. |
+| `website/` | Public marketing site, demo requests, health check. | `/healthz` is served here and bypassed by tenancy middleware. |
+| `schoolsystem/` | Django project: settings split, root URLs, Celery app, WSGI. | `base.py`, `development.py`, `production.py`, `build.py`, `tenancy_test.py`. |
+| `templates/` | Server-rendered templates, including gate terminal, reports, students, exeats, roll call. | Tailwind-based, responsive classes, HTMX partials. |
+| `static/`, `staticfiles/` | Committed CSS/JS and collected assets. | Tailwind output is committed; deployment does not require Node. |
+| `.private/` | Private student photos, ID exports, backup output. | Git-ignored; local-filesystem fallback. |
+| `.github/workflows/tenant-postgres-integration.yml` | CI for tenancy provisioning. | Does not run the core suite. |
+| `render.yaml` | Render Blueprint for the staging web service and external Neon database. | Celery worker/Beat are documented as optional and are not declared. |
+| `Procfile` | Web, worker, and Beat process definitions for platforms that read it. | Render does not use Procfile worker entries. |
+| `requirements.txt`, `pyproject.toml` | Pinned Python dependencies and project metadata. | Django 6.0.9, Celery 5.6.3, django-pgschemas 1.3.2, boto3, openpyxl, qrcode. |
+| `README.md` | Install, configuration, roles, deployment, backups, restore, maintenance. | Detailed and technical; not a plain-language user manual. |
+
+## 2.2 Domain model groups
+
+| Group | Models | Purpose |
+|---|---|---|
+| People and roles | `User`, `UserProfile`, `HouseMaster`, `Guardian`, `Student` | Authentication, staff role, house assignment, guardian contact, student record. |
+| Residence | `House`, `Dormitory`, `DormitoryRoom` | House oversight, dormitory block, room-level bed capacity. |
+| Academic | `AcademicYear`, `AcademicTerm`, `Programme`, `ClassGroup`, `StudentProgressionRecord` | Terms, classes, promotion and SHS 3 phase-out. The progression model and migrations 0032/0033 are now committed in `8c490e0`, but were not executed during this audit. |
+| Movement | `Exeat`, `ExeatMovement`, `ExeatReconciliation`, `MovementConcernReport` | Pass lifecycle, gate departure/return, missed-movement reconciliation, public QR concern. |
+| Attendance | `RollCallSession`, `RollCallEntry`, `RollCallAbsenceFollowUp`, `RollCallNotification` | Session, per-student mark, follow-up, in-app expiry notification. |
+| Conduct | `DisciplinaryRecord` | Incident, severity, sanction, linkage to roll call, correction audit fields. |
+| Configuration and communication | `SchoolConfiguration`, `SMSConfiguration`, `SMSDelivery`, `ConfigurationAuditLog`, `StudentIDExport` | School identity, SMS switch, delivery attempts, config-change audit, ID card exports. |
+| Tenancy | `Tenant`, `Domain`, `SubscriptionPlan`, `TenantSubscription`, `PlatformAuditLog` | School registry, host routing, plan/feature/quota, platform audit. |
+
+## 2.3 Integrations and external services
+
+| Integration | Implementation | Audit note |
+|---|---|---|
+| PostgreSQL | Single database, schema-per-tenant via `django-pgschemas`; Neon-compatible connection settings. | Schema isolation is tested. No user-controlled raw SQL found in core views; tenancy uses controlled cursors for schema operations. |
+| Redis / Celery | Broker for SMS dispatch, overdue reminders, roll-call expiry, SHS 3 phase-out, ID export cleanup. | Worker and Beat are not deployed by `render.yaml`. |
+| SMSOnlineGH | HTTP POST with API key in the request payload, sender ID, timeout, retries, quota guard. | Sender resolution is defective; no delivery receipts or low-credit alerts. |
+| S3-compatible storage | `MEDIA_STORAGE_BACKEND=neon_s3` for durable media; filesystem fallback for local development. | Private photos are streamed through Django, not exposed as public media. |
+| Render | Web service, `/healthz`, external Neon database, optional Redis. | No worker/Beat; no cron backup service; free-plan behaviour may spin down. |
+| Email | Django email backend configured; console backend is the default. | No application code sends email; scheduled email reports are absent. |
+| Whitenoise | Static asset serving. | Committed Tailwind output; no Node at deploy. |
+
+## 2.4 Deployment and operational components
+
+- **Web:** Gunicorn via `render.yaml`, 3 workers × 2 threads, 60-second timeout, health check `/healthz`.
+- **Database:** External Neon PostgreSQL; schema-per-tenant. Migrations are not automatic in the blueprint; `preDeployCommand` is documented as requiring a paid instance.
+- **Cache/rate limits:** `LocMemCache` by default; `CACHE_BACKEND`/`CACHE_LOCATION` can point at Redis. Per-process rate limits are not cluster-wide unless a shared cache is configured.
+- **Media:** Neon S3 in the staging blueprint; filesystem fallback locally.
+- **Background tasks:** `Procfile` defines worker and Beat, but `render.yaml` does not. The blueprint comments explicitly warn that SMS remains queued and cleanup/phase-out tasks do not run without them.
+- **Backups:** CLI commands only; no scheduled job, no cloud upload, no encryption, no retention policy.
+- **Monitoring:** `/healthz` only; no Sentry, no structured logging configuration, no queue-depth alert, no failed-SMS alert.
+
+## 2.5 Baseline caveat
+
+The repository moved during the audit: the previously uncommitted progression work and the earlier audit file were committed as `8c490e0` (`feat(students): add cohort promotion and SHS 3 phase-out`). The code content audited here is the same content that is now in `HEAD`; only this report is modified in the working tree.
+
+That commit includes:
+
+- `core/migrations/0032_academicyear_students_phased_out_at_and_more.py`
+- `core/migrations/0033_alter_studentprogressionrecord_from_class_group_and_more.py`
+- `core/services/student_progression.py`
+- `core/test_student_progression.py`
+- `templates/core/students/promotion.html`
+
+The progression feature is therefore part of the release baseline, but its migrations and tests were still not executed during this audit. A deployment must apply migrations 0032/0033 deliberately and verify the phase-out/promotion path before pilot use. This is a release-verification risk independent of the functional findings.
+
+---
+
+# 3. Evidence-based findings
+
+## 3.1 Severity summary
+
+| Severity | Count | Finding IDs |
+|---|---:|---|
+| High | 13 | F-01, F-02, F-03, F-07, F-09, F-10, F-11, F-13, F-16, F-26, F-27, F-28, F-32 |
+| Medium | 21 | F-04, F-05, F-06, F-08, F-12, F-14, F-15, F-17, F-18, F-20, F-21, F-22, F-23, F-25, F-29, F-30, F-31, F-33, F-34, F-35, F-38 |
+| Low | 4 | F-24, F-36, F-37, F-39 |
+
+High findings are release blockers for a real pilot or production use. Medium findings are operational-correctness or governance gaps that should be scheduled before scale-up. Low findings are documentation or polish issues.
+
+**Verification correction:** Finding IDs are stable. F-19 (an earlier candidate finding that the SMS usage report undercounts quota) was removed after direct re-verification: the page's quota gauge calls `sms_monthly_usage()` tenant-wide and explicitly labels the delivery metrics as filtered. The real quota defect is F-17 (stale queue rows and segment accounting), not the report layout. No other finding was downgraded or removed without an explicit note.
+
+---
+
+## 3.2 Gate, exeat, and student-safety findings
+
+### F-01 — Gate pass search can return the wrong pass
+
 - **Severity:** High
 - **Status:** Verified
-- **Location:** `core/services/roll_call.py:401-487` (`resolve_absence_follow_up`)
-- **Evidence:** The session is locked at line 437 (`select_for_update().get(...)`) but its `status` is never checked. If the resolution is not CONFIRMED, the entry is changed via `RollCallEntry.objects.filter(pk=entry.pk).update(...)` at lines 469-474, bypassing `RollCallEntry.clean()`/`save()`. `core/tests.py::test_authorized_absence_and_recording_error_resolutions_do_not_create_incidents` explicitly encodes resolution after session completion.
-- **Expected:** Follow-ups for sessions that are `COMPLETED` (or auto-expired) cannot be resolved; any exception must be recorded with an audit entry.
-- **Actual:** Closed sessions accept resolutions and the roll-call entry is silently rewritten.
-- **Impact:** Historical attendance is mutable; conduct records, attendance-league and welfare reports can change after the fact; undermines the credibility of the school's attendance evidence.
-- **Action:** Reject resolutions when session status is not `IN_PROGRESS` (or introduce a formal "correction" entity carrying reason, actor, timestamp, and old/new values). Replace `.update()` with a save path that runs validation, or document why validation is intentionally skipped and assert the new invariants.
-- **Test needed:** Integration test resolving before/after completion and after expiry; verify closed sessions reject or audit-log; verify no time-of-check/time-of-use window under concurrency.
+- **Location:** `core/views.py:3461-3485`; `core/models.py:1012-1014`; `templates/core/operations/partials/gate_verification_card.html`
+- **Evidence:** `gate_verify_pass_view` filters by `exeat_number`, admission number, index number, or a partial exeat number, then calls `.first()`. It does not filter by status, active date window, or movement state, and it does not order the queryset. `Exeat.Meta.ordering` is `["-expected_departure"]`, so the pass with the latest expected departure wins. The card template correctly disables actions for non-Approved passes, meaning a future Pending pass can be displayed while the valid current pass is ignored.
+- **Expected vs actual:** Expected: the currently actionable pass, or a disambiguation list. Actual: an arbitrary newest pass, often Pending or future.
+- **Impact:** A student with a valid pass can be denied exit or return; a gate officer can act on the wrong pass; records and SMS become attached to the wrong trip. This is a student-safety and audit-integrity defect.
+- **Recommended action:** Filter to actionable statuses and an explicit active window, rank exact pass number first, then active Approved passes, then recent closed passes; show all matches with status, dates, and movement state; never auto-select when more than one pass matches. Add a query minimum length and a “no current pass” state.
+- **Verification test:** Build a student with (a) an old returned pass, (b) a current Approved pass, and (c) a future Pending pass. Search by admission number and assert the current Approved pass is selected. Search by exact pass number and assert exact match wins over partial matches. Search for a cancelled pass and assert it is not actionable.
 
-### AUD-002 — Duplicate roll-call sessions are possible
+### F-02 — Multiple active or overlapping exeats are allowed for one student
+
 - **Severity:** High
 - **Status:** Verified
-- **Location:** `core/services/roll_call.py:33-130`; callers in `core/views.py` (`start_roll_call` around line 2940)
-- **Evidence:** Line 70 unconditionally calls `RollCallSession.objects.create(...)` inside the transaction; no lookup for an existing in-progress session for `(house, dormitory, date, session_type)`. The docstring at line 60 claims an existing session is reused.
-- **Expected:** One in-progress session per house/dormitory/date/type; repeat submissions reopen it.
-- **Actual:** Each submission creates a new session and a new roster.
-- **Impact:** Double rosters split attendance; totals, absence follow-ups and "unmarked" counts become contradictory; teachers may mark the wrong session.
-- **Action:** Add a transactional guard plus a database-level unique constraint (or unique partial index for in-progress sessions). Reopen instead of recreate.
-- **Test needed:** Concurrency test with two parallel starts; repeated-post test; constraint test at DB level.
+- **Location:** `core/models.py` `Exeat` model and `clean()`; `core/views.py:1646-1656`
+- **Evidence:** `Exeat.clean()` validates day/completed status, date order, approval attribution, and movement constraints, but never checks for another active pass. There is no `UniqueConstraint` for active passes, and `exeat_create_view` does not perform a duplicate check. The public QR page and gate search each choose one pass from a set that can contain several.
+- **Expected vs actual:** Expected: one active exeat per student, as required. Actual: multiple Approved passes with overlapping or adjacent windows are possible.
+- **Impact:** Conflicting departure/return times, duplicate SMS, ambiguous gate decisions, and inconsistent “currently out” counts. It also makes the wrong-pass problem in F-01 more likely.
+- **Recommended action:** School management must first define “active” (Pending + Approved? Approved only? includes overdue unreturned?). Then enforce it in the create and approve paths inside a transaction, and add a PostgreSQL partial unique constraint after cleaning existing data.
+- **Verification test:** Creating a second overlapping Approved pass is rejected; a non-overlapping future pass is allowed; two concurrent create requests result in exactly one active pass.
 
-### AUD-003 — Gate lookup can select the wrong pass for a student
+### F-03 — Early departure and rescheduling have no workflow or history
+
 - **Severity:** High
 - **Status:** Verified
-- **Location:** `core/views.py:1206-1260` (public pass page) and the gate verification lookup (`gate_verify_pass_view`, around line 1550-1650)
-- **Evidence:** Lookup filters to approved passes and then orders by `-expected_departure` and takes `.first()`. A student holding a future Pending/Approved pass and an active current pass can surface the wrong record; an old return-complete pass can also win when ordering ties.
-- **Expected:** The system should resolve the pass that is active now (departed and not returned, or within its departure window today), and when several passes match, show all matches for the gate officer to choose.
-- **Actual:** A single pass is silently chosen by date ordering.
-- **Impact:** A legitimate exit can be refused, or movement logged against the wrong pass, corrupting both records; students are held at the gate.
-- **Action:** Rank by an explicit "actionable now" predicate; never auto-pick when multiple actionable passes exist — present a disambiguation list; add a regression test with three passes (returned, current approved, future pending).
-- **Test needed:** Gate lookup matrix test; UI test showing multiple matches; assertion that movement always attaches to the officer-selected pass.
+- **Location:** `core/views.py:2066-2071`, `core/views.py:3389-3393`; `core/models.py` `Exeat` fields; `core/admin.py:266-290`
+- **Evidence:** Ordinary early departure is explicitly blocked. There is no reschedule action, no `rescheduled_from` link, no schedule-version model, and no reason/actor field for a schedule change. The only way to change an approved pass is a Django admin edit, which overwrites the existing dates without preserving the old schedule.
+- **Expected vs actual:** Expected: a formal reschedule with reason, authorising role, old/new schedule, and audit history; gate screens prioritise the current schedule. Actual: blocked early departure, admin overwrite only.
+- **Impact:** Emergencies are handled outside the system or by untraceable admin edits. The school cannot answer “who changed this pass, when, and why?” This directly conflicts with A1 and A4.
+- **Recommended action:** Add a reschedule workflow and an immutable schedule-change record (or a versioned `ExeatSchedule` table). Keep the original schedule visible on the pass and in reports. Define early-departure authority and emergency handling with school management before implementing.
+- **Verification test:** Rescheduling an Approved pass creates a history row with actor, reason, old and new times; the gate displays the current schedule; an unauthorised user cannot reschedule; the original schedule remains queryable.
 
-### AUD-004 — No controlled workflow for early departure or leave-time change
+### F-04 — Emergency overrides are neither explicit nor reviewed
+
+- **Severity:** Medium
+- **Status:** Not implemented
+- **Location:** `core/models.py` `Exeat`; `core/services/roll_call.py` reconciliation; no override model or field
+- **Evidence:** `ExeatReconciliation` handles missed gate movements retrospectively, but there is no way to authorise a departure outside the normal approval path with an immediate documented reason and a subsequent review.
+- **Expected vs actual:** Expected: emergency override with reason, actor, approver, and post-hoc review. Actual: no override concept.
+- **Impact:** Staff may use admin edits or informal phone approval; the record does not show that an exception occurred.
+- **Recommended action:** Add an explicit override flag and review state, require a reason and an authorised role, and route the event to a review queue. The school must define which roles may override and the review deadline.
+- **Verification test:** An override without a reason is rejected; an authorised override creates a review item; a reviewer can record the outcome; the audit history is immutable.
+
+### F-05 — No gate-duty roster or temporary assignment validity
+
+- **Severity:** Medium
+- **Status:** Not implemented
+- **Location:** `core/models.py:363-371` (`StaffRole.GATE_OFFICER`); no roster model
+- **Evidence:** A user with the Gate Officer role can use gate actions at any time. There is no shift, gate, start time, end time, approving officer, or temporary-assignment record. `can_log_gate_movement()` checks role only.
+- **Expected vs actual:** Expected: authorised duty roster with temporary assignments and start/end times. Actual: role-only access, any time.
+- **Impact:** No shift accountability, no way to prove who was on duty, and no automatic expiry for temporary cover.
+- **Recommended action:** Add a `GateDutyAssignment` model with staff, gate, start/end, approver, and status; enforce an active assignment for gate actions if the school approves that policy; keep a read-only history.
+- **Verification test:** A gate action outside an active assignment is denied; an expired temporary assignment is denied; an approved assignment works and is recorded.
+
+### F-06 — No medical or infirmary authorization path
+
+- **Severity:** Medium (High if after-hours medical movements are in pilot scope)
+- **Status:** Not implemented; policy-dependent
+- **Location:** `core/models.py:363-371`; `core/permissions.py:53-59` (`EXEAT_APPROVAL_ROLES`)
+- **Evidence:** Staff roles are `ADMIN`, `SENIOR_HOUSEMASTER`, `HOUSEMASTER`, `HOUSE_TUTOR`, and `GATE_OFFICER`. There is no medical/infirmary role. Approval is limited to Admin, Senior Housemaster, and Housemaster. A nurse or infirmary lead would need one of those roles, which grants broader access than necessary.
+- **Expected vs actual:** Expected: designated medical staff can authorise medical emergencies, with after-hours review. Actual: no least-privilege role and no after-hours workflow.
+- **Impact:** Least privilege is violated if medical staff are given admin/housemaster rights; otherwise medical emergencies cannot be approved in the system.
+- **Recommended action:** Add a medical/infirmary permission (or role) scoped to medical exeats, with after-hours approval and a review queue. Do not grant broad admin access as a workaround.
+- **Verification test:** Medical staff can approve a medical exeat but not an ordinary leave pass; after-hours approval creates a review item; an unauthorised role is denied.
+
+### F-07 — Late returns do not create an incident and escalation is not configurable
+
 - **Severity:** High
 - **Status:** Verified
-- **Location:** `core/views.py:2066-2071` (`exeat_action_view`) and `core/views.py:3389-3393` (`gate_terminal_action_view`)
-- **Evidence:** Both reject departure when `now < exeat.expected_departure`, with "available at" messaging. No view, form, or route exists to edit or reschedule an approved exeat; the only edit path is Django admin.
-- **Expected:** A defined, permissioned path to move a departure earlier or later, with reason and actor recorded.
-- **Actual:** Hard block; admin edit bypasses the workflow.
-- **Impact:** Real emergencies will be handled off-system, so records diverge from reality; or an admin edits records without state-machine validation.
-- **Action:** Decide school policy first (see Appendix A), then implement a reschedule/early-leave action for approval roles with reason capture and audit trail; keep the gate block for anything not approved.
-- **Test needed:** Reschedule action test; early departure still blocked without approval; audit entry created; SMS reflects the new time.
+- **Location:** `core/tasks.py:236-283`; `core/services/sms.py:139-155`; no `DisciplinaryRecord` creation on return
+- **Evidence:** The overdue task sends SMS to the guardian and the student’s housemaster, deduplicated by an occurrence key. When a return is logged after `expected_return`, `gate_terminal_action_view` records `actual_return` and sends a return SMS. It does not create a `DisciplinaryRecord`, an investigation task, or a late-return event. The reminder cadence is a hard-coded 15-minute Beat schedule with daily deduplication.
+- **Expected vs actual:** Expected: late return recorded, housemaster notified, incident requiring investigation created, escalation configurable. Actual: SMS notification only; no incident; no configurable escalation.
+- **Impact:** There is no investigation trail, no accountable owner, and no escalation if the housemaster misses the SMS. This is a student-welfare and records gap.
+- **Recommended action:** Create a late-return incident on return after the expected time (and optionally at an overdue threshold), with status, owner, and review outcome. Add configurable thresholds and recipient/escalation rules. Add an in-app notification for the housemaster.
+- **Verification test:** A return after `expected_return` creates one incident linked to the pass; duplicate returns do not create duplicates; changing the threshold changes when the incident/escalation is created; the housemaster sees the notification.
 
-### AUD-005 — Quick reject accepts an empty reason
+### F-08 — Gate movement actor is stored as free text
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `core/views.py:2162-2177`
-- **Evidence:** `rejection_reason` may be empty; the code emits a warning message and still rejects. The review page enforces a reason.
-- **Expected:** One policy for both surfaces — either a required reason or a recorded "no reason given" marker.
-- **Actual:** Divergent enforcement; silent audit gap.
-- **Impact:** Guardian/student cannot be told why; appeals and oversight lose evidence.
-- **Action:** Require a reason on both paths, or auto-record a structured "unspecified" reason with the actor and timestamp.
-- **Test needed:** POST reject without reason asserts validation error on both surfaces.
+- **Location:** `core/models.py:1178-1189` (`ExeatMovement.departure_recorded_by`, `return_recorded_by`)
+- **Evidence:** Both fields are `CharField(max_length=100)` and are populated from a display name, not a foreign key to the authenticated user.
+- **Expected vs actual:** Expected: authenticated actor reference plus a display-name snapshot. Actual: free text only.
+- **Impact:** A gate record cannot be reliably attributed; names can be mistyped or spoofed; there is no link to the account for investigation.
+- **Recommended action:** Add `departure_recorded_by_user` and `return_recorded_by_user` foreign keys (nullable for legacy rows), populate from the request, and keep the text snapshot for display. Backfill where possible.
+- **Verification test:** Logging a departure records the logged-in user FK; the display name remains after the user is deactivated; legacy rows with only text still render.
 
-### AUD-006 — SMS sender ID is ignored; provisioning seeds an over-long unapproved short name
+### F-09 — Duplicate roll-call sessions can be created
+
 - **Severity:** High
 - **Status:** Verified
-- **Location:** `core/services/sms.py:22-25` (`_school_short_name`), `core/services/sms.py:272` (sender assembly), `tenancy/management/commands/provision_school.py:80`
-- **Evidence:** `_school_short_name()` returns `configuration.short_name or configuration.name or "ATSEC"`, so it is never empty; therefore the `settings.SMS_SENDER_ID` fallback at line 272 is unreachable. Provisioning assigns `school_name[:50]` as the short name before sanitising/truncating to 11 characters.
-- **Expected:** Sender ID is the approved gateway ID, explicitly configured per tenant and validated at provisioning time.
-- **Actual:** Sender is derived from school name; approved ID setting is dead code; seeded value can exceed the gateway's limit.
-- **Impact:** Guardian messages may be rejected or branded incorrectly — in the only guardian communication channel. This is pilot-blocking.
-- **Action:** Resolve sender as `configuration.sms_sender_id or settings.SMS_SENDER_ID`; validate against the gateway's approved pattern/length at save and provisioning time; add a startup warning if unset.
-- **Test needed:** Unit test for sender resolution precedence; provisioning test asserting a valid sender; sandbox send with the real gateway account.
+- **Location:** `core/services/roll_call.py:70`; `RollCallSession` model has no uniqueness constraint
+- **Evidence:** `create_roll_call_session` calls `RollCallSession.objects.create(...)` unconditionally. Its docstring claims “newly created or existing in-progress session”, but the code does not use `get_or_create` or a lock. There is no `UniqueConstraint` on house, dormitory, session type, date, and status.
+- **Expected vs actual:** Expected: one in-progress session per house/dormitory/type/date. Actual: two staff members, or two requests, create separate sessions and split the roster.
+- **Impact:** Attendance is double-counted or split; one session may be completed while the other is missed; gate reconciliation may update only one; reports become inconsistent.
+- **Recommended action:** Add an application-level guarded create inside a transaction and a PostgreSQL partial unique constraint for in-progress sessions. Decide how to merge or cancel duplicates already created.
+- **Verification test:** Two sequential create calls return the same in-progress session; two concurrent calls produce one session; a new session is allowed after the first is completed.
 
-### AUD-007 — SMS quota counts stale queue items; no segment costing
+### F-10 — Completed roll-call entries can be changed through follow-up resolution
+
+- **Severity:** High
+- **Status:** Verified
+- **Location:** `core/services/roll_call.py:401-487`; `core/views.py:3154-3161`
+- **Evidence:** `roll_call_update_entry_view` explicitly blocks edits when the session is not In Progress. However, `resolve_absence_follow_up` locks the session and follow-up but never checks `session.status` or `session.is_expired`. It then uses `RollCallEntry.objects.filter(pk=...).update(...)` to change the status, source, remarks, and timestamp, bypassing model validation and the view guard.
+- **Expected vs actual:** Expected: completed and expired sessions are immutable except through an authorised correction workflow. Actual: a pending follow-up can mutate a completed session silently.
+- **Impact:** Historical attendance and the linked conduct record can change after closure without a correction record. This undermines the audit trail and any disciplinary decision based on it.
+- **Recommended action:** Reject follow-up mutation unless the session is In Progress and not expired. If post-closure correction is required, route it through a separate correction model with justification, evidence, approver, and immutable history. Stop using `.update()` for audited state changes.
+- **Verification test:** A completed session’s follow-up resolution is rejected; an expired session’s follow-up is rejected; the authorised correction path records old/new status, actor, reason, and timestamp.
+
+### F-11 — Expiry deletes unfinished roll calls and routine unresolved entries cannot remain visible
+
+- **Severity:** High
+- **Status:** Verified
+- **Location:** `core/tasks.py:288-344`; `core/services/roll_call.py:238-265`; `core/models.py:21`
+- **Evidence:** `_expire_unfinished_roll_calls_for_current_tenant` selects In Progress sessions older than `ROLL_CALL_SESSION_TIMEOUT` (one hour), creates a notification, and calls `session.delete()`. `complete_roll_call_session` refuses completion while any entry is Unmarked. There is no Expired/Abandoned status and no partial routine completion.
+- **Expected vs actual:** Expected: routine unresolved entries remain visible for follow-up; emergency roll calls require full resolution; escalation periods are configurable. Actual: all sessions require full resolution, and unfinished sessions are destroyed after one hour.
+- **Impact:** Attendance evidence is lost; unresolved students cannot be followed up from the record; staff are forced to mark everyone or lose the session. This is a records-retention and safeguarding risk.
+- **Recommended action:** Replace deletion with an `EXPIRED`/`ABANDONED` status that preserves entries. Allow routine sessions to close with an explicit unresolved queue, while emergency/special sessions require full resolution. Make the timeout configurable per school.
+- **Verification test:** An expired session remains queryable with its entries; the unresolved queue lists its students; an emergency session cannot close with unmarked students; changing the timeout changes the expiry time.
+
+### F-12 — No authorised post-closure correction workflow
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `tenancy/entitlements.py:153-165` (`sms_monthly_usage`, `quota_limit`)
-- **Evidence:** Usage counts `SENT` this month plus **all** `QUEUED`/`PROCESSING` rows regardless of age. Long-lived stuck outbox items permanently consume quota. Messages are not counted per SMS segment.
-- **Expected:** Usage counts delivered messages in the period, with bounded treatment of stuck items (expiry or reconciliation), and segment-aware cost reporting.
-- **Actual:** Stale items block the tenant indefinitely; costs under-reported for long messages.
-- **Impact:** A school can be unable to send urgent SMS because of dead queue rows; billing/spend data is wrong.
-- **Action:** Age out or fail stale QUEUED/PROCESSING rows via the existing expiry/retry tasks; count segments; expose quota consumption in the SMS report.
-- **Test needed:** Inject a month-old QUEUED row and assert quota is released after the new task; segment-count test with a 3-segment message.
+- **Location:** `core/views.py:3154-3161`; no correction model or reopen action
+- **Evidence:** Completed sessions are blocked from entry updates. There is no correction request, reopen, approval, evidence field, or correction history. The only mutation path is the follow-up bypass in F-10, which is unintended and unaudited.
+- **Expected vs actual:** Expected: authorised staff can correct attendance after closure with written justification and audit; sensitive corrections require extra evidence or approval. Actual: corrections are impossible through the UI, except via the bug.
+- **Impact:** Staff cannot fix genuine errors through a controlled process, which encourages workarounds or falsified in-progress records.
+- **Recommended action:** Add a correction request with reason, evidence, requested status, requester, approver, and decision. Apply the correction as an append-only event; never overwrite the original silently. Define which status changes need a second approver.
+- **Verification test:** A housemaster requests a correction; a senior approver accepts; the original and corrected values are both visible; an unauthorised user cannot approve; a sensitive change without evidence is rejected.
 
-### AUD-008 — SMS usage report excludes non-exeat deliveries when filters are applied
+---
+
+## 3.3 Dormitory and occupancy findings
+
+### F-13 — Dormitory-level capacity is not enforced and there is no senior exception
+
+- **Severity:** High
+- **Status:** Verified
+- **Location:** `core/models.py:295-357` (`DormitoryRoom.clean`); `core/models.py:779-791` (`Student.clean`); `core/models.py:325-348` (`Dormitory.clean`)
+- **Evidence:** Room capacity is enforced when a student is assigned to a room, with `select_for_update`. Dormitory capacity is checked only when the dormitory itself is edited: `Dormitory.clean()` raises if the current occupancy exceeds a newly lowered capacity. Student placement checks `self.room.capacity`, not `self.dormitory.capacity`. There is no overcapacity exception model.
+- **Expected vs actual:** Expected: placements that exceed dormitory capacity are blocked unless an authorised senior administrator approves and records an exception. Actual: students can be assigned to a dormitory beyond its capacity as long as the room (if any) has space; there is no exception workflow.
+- **Impact:** Overcrowding and inaccurate occupancy, with safety and safeguarding implications. House dashboards can show more boarders than beds.
+- **Recommended action:** Add a shared capacity check for both rooms and dormitories inside the placement transaction, with row locking. Add a time-bound exception record with approver, reason, and review. Define the authorising role with the school.
+- **Verification test:** Assigning beyond dormitory capacity is blocked; an authorised exception allows it and records the approver/reason; the exception expires; concurrent placements cannot exceed capacity.
+
+### F-14 — Active-boarder and occupancy definitions are inconsistent
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `core/services/reports.py:2282-2294`
-- **Evidence:** With `term_id` or `house_id` filters, the queryset filters on `exeat__academic_term_id` / `exeat__student__house_id`, dropping every delivery not linked to an exeat.
-- **Expected:** Report totals reconcile with quota usage for the same period, or clearly label the subset being shown.
-- **Actual:** Filtered totals silently undercount; headmaster sees different numbers from quota usage.
-- **Impact:** Trust in reporting degrades; SMS spend oversight is wrong.
-- **Action:** Apply term/house scoping to the exeat-linked subset only and include non-exeat events (e.g., overdue reminders) in totals where mappable; label any residual subset explicitly.
-- **Test needed:** Golden-data test asserting report total equals quota usage for the same month with filters applied.
+- **Location:** `core/views.py:641-651`; `core/services/reports.py:295-346`; `core/models.py:734-740`
+- **Evidence:** `house_list_view` annotates `boarder_count=Count("students", filter=Q(students__residency=BOARDING))` with no status filter, so completed students are counted. The housing report filters to `ENROLLED`, `APPROVED`, and `IN_PROGRESS`. Completing a student does not clear the dormitory or room, and `DormitoryRoom.clean` excludes completed students only for its own capacity check. The result is that the house/dormitory overview and the report can disagree.
+- **Expected vs actual:** Expected: one documented definition of an active boarder, applied consistently; inactive students excluded from current occupancy but available historically. Actual: the house list includes completed boarders; the report excludes them.
+- **Impact:** Occupancy and capacity decisions are made on inconsistent numbers; completed students appear as current boarders; the dashboard loses credibility.
+- **Recommended action:** Create one shared active-boarder queryset and use it in dashboards, reports, capacity checks, and roll-call rosters. School management must confirm whether `APPROVED` and `IN_PROGRESS` count as “currently enrolled” for occupancy. Add a separate historical view.
+- **Verification test:** A completed student is excluded from house/dormitory occupancy but visible in the historical registry; the house list and housing report totals match for the same filters; approved/in-progress students follow the approved policy.
 
-### AUD-009 — House list overstates occupancy versus reports and dashboard
+### F-15 — Escalation periods are hard-coded
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `core/views.py:641-651` compared with `core/services/reports.py:295-346` and `core/views.py:231`
-- **Evidence:** `house_list_view` annotates boarders by residency only, without excluding `COMPLETED` (or withdrawn) students. The housing report and dashboard both filter enrollment status.
-- **Expected:** One definition of "current boarder" across all occupancy surfaces.
-- **Actual:** Completed students inflate house/dorm counts and can trigger false over-capacity alerts.
-- **Impact:** Capacity, placement, and staffing decisions from wrong numbers; unplaced-boarder worklists inaccurate.
-- **Action:** Extract a single `current_boarders()` queryset/manager and use it everywhere.
-- **Test needed:** Seed a completed boarder and assert house list, housing report, and dashboard agree.
+- **Location:** `core/models.py:21` (`ROLL_CALL_SESSION_TIMEOUT = timedelta(hours=1)`); `core/tasks.py:264-281`; `core/tasks.py` Beat schedule
+- **Evidence:** The roll-call timeout is a module constant. Overdue exeat reminders run every 15 minutes with a daily dedupe key. There is no per-school setting for roll-call expiry, late-return thresholds, absence follow-up deadlines, or escalation recipients.
+- **Expected vs actual:** Expected: configurable escalation periods. Actual: one-hour roll-call expiry and fixed reminder cadence for every school.
+- **Impact:** A pilot school cannot tune the system to its own timetable or escalation policy; changes require a code deployment.
+- **Recommended action:** Add tenant-level operational settings with safe defaults, an audit trail for changes, and validation bounds. Use them in tasks and UI labels.
+- **Verification test:** Changing the roll-call timeout changes expiry behaviour; changing the late-return threshold changes incident creation; settings changes are audited.
 
-### AUD-010 — Approval turnaround uses `updated_at` and counts cancellations
+---
+
+## 3.4 SMS and communication findings
+
+### F-16 — SMS sender ID setting is ignored and provisioning bypasses the approved value
+
+- **Severity:** High
+- **Status:** Verified
+- **Location:** `core/services/sms.py:22-25`, `core/services/sms.py:272`; `schoolsystem/settings/base.py:388`; `tenancy/management/commands/provision_school.py:80`
+- **Evidence:** `_school_short_name()` reads the tenant's `SchoolConfiguration.short_name` first, then the school name, then `"ATSEC"`; it strips non-alphanumeric characters and truncates to 11 characters. The gateway payload uses `"sender": _school_short_name() or settings.SMS_SENDER_ID`. Provisioning seeds `short_name` with `school_name[:50].strip()`, so the tenant always has a short name and the configured `SMS_SENDER_ID` is never reached in normal tenant operation. The send path sanitizes the value, so the issue is the wrong sender, not an overlong payload.
+- **Expected vs actual:** Expected: the approved sender ID is used, with validation and clear precedence. Actual: a school-name abbreviation is used; the configured sender is dead code whenever a short name exists.
+- **Impact:** SMS is delivered under a derived abbreviation rather than the sender ID approved by the school and gateway; this can fail sender-ID whitelisting or branding review, and it makes troubleshooting confusing.
+- **Recommended action:** Make the approved sender ID an explicit tenant setting with validation (GSM 03.38 alphanumeric, length limit), define precedence, and seed it from an approved value or a safe fallback. Log the resolved sender ID without logging the API key. Confirm the approved ID with SMSOnlineGH and the school.
+- **Verification test:** With a short name and a configured sender ID, the payload uses the approved sender; a non-alphanumeric or overlong configured value is normalized or rejected at configuration time; the resolved sender is logged; the API key never appears in logs.
+
+### F-17 — SMS quota counts stale queue rows and ignores message segments
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `core/services/reports.py:1820-1871`, caveat text at line 1964
-- **Evidence:** Decision time is `updated_at`; cancellations are counted among decided requests. Any later edit of an approved record shifts its "decision" time.
-- **Expected:** A dedicated `decided_at` timestamp written once by the state transition.
-- **Actual:** Approximation documented in the report but still surfaced as KPI.
-- **Impact:** Headmaster performance metrics can be wrong after unrelated edits.
-- **Action:** Add `decided_at` (and decide whether cancellations are excluded or reported separately); backfill carefully via migration.
-- **Test needed:** Test that approval stamps `decided_at`; later edit does not change it; cancellation reported separately.
+- **Location:** `tenancy/entitlements.py:153-165`
+- **Evidence:** `sms_monthly_usage` counts `SENT` rows from the current month plus all `QUEUED` and `PROCESSING` rows regardless of age. A permanently stuck queue row consumes quota forever. The count is one row per `SMSDelivery`, not per SMS segment, so a long message can consume more gateway credit than the quota records.
+- **Expected vs actual:** Expected: quota reflects billable segments and releases stale reservations. Actual: stale rows leak quota; long messages undercount.
+- **Impact:** The school can be blocked from sending while the provider balance is fine, or can exceed its budget without warning.
+- **Recommended action:** Expire stale Queued/Processing rows, count segments, and reconcile against provider delivery records. Add a repair command and an audit entry.
+- **Verification test:** A week-old Queued row does not block a new send; a three-segment message counts as three; the usage report reconciles to delivery rows and provider data.
 
-### AUD-011 — Staff activity report omits non-housemaster staff and misdates approvals
+### F-18 — No low-credit or failed-message alerts; no selected-group messaging
+
+- **Severity:** Medium
+- **Status:** Not implemented (alerts); Partial (event messaging)
+- **Location:** `core/tasks.py:171-178` (final failure logs only); `core/models.py:1456-1487` (`SMSConfiguration` has only `enabled`); no compose UI
+- **Evidence:** On final failure, the task logs an error and marks the delivery failed. There is no notification to an administrator, no low-balance check, and no UI for composing an approved message to a selected group. SMS is limited to exeat event notifications to guardians and housemasters.
+- **Expected vs actual:** Expected: low-credit and failed-message alerts; approved messages to selected groups. Actual: logs only; event-only messaging.
+- **Impact:** The school discovers SMS failure only when a guardian does not receive a message; staff cannot use the system for approved group communication.
+- **Recommended action:** Add admin alerts on repeated failures and quota thresholds, a provider balance check if the gateway supports it, and a permissioned group-message composer with templates, recipient preview, quota estimate, and approval. Keep message content out of general logs.
+- **Verification test:** A failed delivery generates one alert; a low balance generates one alert; a group message is previewed, quota-checked, approved, and audited; unauthorised staff cannot send.
+
+---
+
+## 3.5 Reporting findings
+
+### F-20 — Approval turnaround uses mutable `updated_at` and includes cancellations
+
+- **Severity:** Medium
+- **Status:** Verified
+- **Location:** `core/services/reports.py:1846-1871`
+- **Evidence:** `decided = exeat["updated_at"]`; the turnaround is calculated for every row, including records later cancelled or edited. `updated_at` changes on any save, so an approval edited later appears slower than it was. The report counts approved, rejected, and cancelled but does not exclude cancelled records from turnaround statistics.
+- **Expected vs actual:** Expected: decision timestamp at approval/rejection, with cancellations separated. Actual: last-modified timestamp for all records.
+- **Impact:** Management decisions about approval performance are based on distorted data.
+- **Recommended action:** Add `decided_at` (or use the approval action timestamp), set it once, and compute turnaround only for decided records. Report cancelled separately.
+- **Verification test:** Approve then edit remarks; turnaround does not change. Cancel a request; it appears in cancellations but not in approval turnaround.
+
+### F-21 — Staff activity report omits most staff and misdates approvals
+
 - **Severity:** Medium
 - **Status:** Verified
 - **Location:** `core/services/reports.py:2372-2429`
-- **Evidence:** Rows iterate `HouseMaster.objects`; gate officers and tutors with recorded actions are absent. Approval dates filter on `updated_at`.
-- **Expected:** Activity attributed to every actor, or the report clearly scoped to housemasters only.
-- **Actual:** Misleading "staff activity" title; invisible work.
-- **Impact:** Oversight and fairness problems; duplicated/masked accounts cannot be spotted.
-- **Action:** Base rows on distinct actors across roll calls/approvals/incidents/resolutions; label scope; use `decided_at` after AUD-010.
-- **Test needed:** Seed a tutor and gate officer action and assert they appear.
+- **Evidence:** The report iterates `HouseMaster` records only. Administrators, gate officers, and house tutors who conduct roll calls, log incidents, or resolve follow-ups are not rows unless they also have a `HouseMaster` record. Approval filters use `updated_at__date`, with the same mutability problem as F-20.
+- **Expected vs actual:** Expected: workload visibility for all staff who act in the system. Actual: only housemaster profiles, with approval dates based on last edit.
+- **Impact:** The headmaster cannot see the real workload distribution; staff who do heavy operational work can appear inactive.
+- **Recommended action:** Build the report from distinct actors in each activity table (roll call conductor, approver, incident logger, follow-up resolver, gate recorder), unioned with active staff, and use decision timestamps.
+- **Verification test:** An admin who approves passes and a tutor who logs incidents appear in the report; a later edit does not change the approval date.
 
-### AUD-012 — "Currently overdue" is constrained by the selected date range
+### F-22 — Overdue register date filters can hide currently overdue students
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `core/services/reports.py:1629-1664, 1703`
-- **Evidence:** The register filters `expected_return__date` by `date_from`/`date_to`, then counts `OVERDUE - still out` within that set and labels it "Currently overdue".
-- **Expected:** "Currently overdue" is a point-in-time count independent of the reporting window; the window applies to "returned late in period".
-- **Actual:** A range ending yesterday can report zero currently overdue.
-- **Impact:** Safety-relevant number can read falsely clean.
-- **Action:** Compute overdue-now from an unfiltered (scoped by house/term only) queryset; keep the range for late returns.
-- **Test needed:** Test with a currently-overdue student outside the range; assert count is 1.
+- **Location:** `core/services/reports.py:1626-1664`
+- **Evidence:** The report filters `expected_return__date__gte=date_from` and `__lte=date_to`. A student who was expected back before the selected range but is still out is excluded, even though they are currently overdue. The “currently overdue” count is therefore range-dependent.
+- **Expected vs actual:** Expected: “currently outside/overdue now” independent of the period, plus a period view for late returns. Actual: a single period filter can hide the most serious cases.
+- **Impact:** A daily operational report can show zero overdue students while a student is still missing.
+- **Recommended action:** Split the report into “overdue now” (no period restriction) and “late returns in period” (return date in range). Label both clearly.
+- **Verification test:** A pass expected back last month and still out appears in “overdue now” for a this-week filter; a returned-late pass appears only in the period section when its return is in range.
 
-### AUD-013 — Conduct-normalised rates divide historical incidents by current boarders
+### F-23 — Conduct-normalized report compares incidents against a different population
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `core/services/reports.py:2726+` (`_conduct_normalized_report`)
-- **Evidence:** Incident counts come from records in the period; denominators use current boarder counts.
-- **Expected:** Denominators use the population of the same period (or the report states the approximation).
-- **Actual:** Rates rise/fall with roster changes unrelated to conduct.
-- **Impact:** Term-over-term comparisons and interventions are misleading.
-- **Action:** Store or derive per-period population; or relabel with an explicit "per current boarder" note.
-- **Test needed:** Golden test with roster change mid-period.
+- **Location:** `core/services/reports.py:2730-2790`
+- **Evidence:** The denominator counts boarding students in `ENROLLED`, `APPROVED`, and `IN_PROGRESS`. The numerator counts all active `DisciplinaryRecord` rows for the house and period, without filtering by residency or enrollment status. Day students and completed students can therefore contribute incidents to a rate per boarding student.
+- **Expected vs actual:** Expected: numerator and denominator use the same population. Actual: unmatched populations.
+- **Impact:** House comparisons are unfair and can mislead pastoral decisions.
+- **Recommended action:** Apply the same residency/status filter to the numerator, or report day and boarding rates separately. State the population in the report header.
+- **Verification test:** A day student’s incident does not change the boarding rate; a completed student’s historical incident is excluded from the current rate; totals reconcile.
 
-### AUD-014 — Welfare/infirmary watchlist includes completed students
+### F-24 — Welfare report includes completed students
+
 - **Severity:** Low
 - **Status:** Verified
-- **Location:** `core/services/reports.py:2520`
-- **Evidence:** Student rows are fetched by ID with no enrollment-status filter.
-- **Expected:** Active students only, unless explicitly including alumni.
-- **Actual:** Completed students can appear on a welfare watchlist.
-- **Impact:** Noise; possible follow-up on departed students.
-- **Action:** Filter to active statuses, aligned with AUD-009's single queryset.
-- **Test needed:** Seed completed student with infirmary mark; assert exclusion.
+- **Location:** `core/services/reports.py:2518-2528`
+- **Evidence:** The report collects student IDs from infirmary and medical exeat rows, then loads `Student.objects.filter(pk__in=student_ids)` without a status filter. Completed students with historical records appear in a current operational welfare report.
+- **Expected vs actual:** Expected: current welfare list, with historical access separate. Actual: completed students included.
+- **Impact:** The current caseload looks larger than it is; staff may follow up on students who have left.
+- **Recommended action:** Filter to active statuses by default, with an explicit “include historical” option and a label.
+- **Verification test:** A completed student with an old infirmary visit is excluded by default and appears when history is requested.
 
-### AUD-015 — Live-tenant restore cannot be done in place
+### F-25 — No server-side PDF/XLSX exports and no scheduled email reports
+
+- **Severity:** Medium
+- **Status:** Partial (print and one CSV); Not implemented (scheduled email)
+- **Location:** `core/views.py:3514-3521` (print view); `core/views.py:3671-3698` (KPI CSV); `core/tasks.py` (no report-email task); `core/urls.py:136-150`
+- **Evidence:** Detailed reports render an HTML print view; the browser can “Save as PDF”, but the server does not generate a PDF. Only the boarding KPI pack has a CSV export. There is no XLSX export and no scheduled report email task. `openpyxl` is used for roster import and tests, not report export.
+- **Expected vs actual:** Expected: downloadable PDF and spreadsheet reports, plus scheduled email reports. Actual: browser print and one CSV; no schedule.
+- **Impact:** Office staff cannot reliably produce the required daily/weekly packs without manual browser steps; there is no automated delivery.
+- **Recommended action:** Add CSV/XLSX export endpoints for every report with the same filters and permissions, add a server-side PDF renderer if the school needs consistent output, and add an opt-in scheduled email task with recipient management and audit.
+- **Verification test:** Every report exports CSV/XLSX with matching totals; a scheduled daily/weekly report is delivered to an authorised recipient; an unauthorised user cannot export.
+
+---
+
+## 3.6 Recovery, support, and platform findings
+
+### F-26 — Backups are local, unencrypted, unscheduled, and lack retention/offsite controls
+
 - **Severity:** High
 - **Status:** Verified
-- **Location:** `tenancy/management/commands/tenant_restore.py` (safety checks in header lines; refuses registered/existing schemas; never drops/cleans); `README.md` example
-- **Evidence:** The command verifies checksum and TOC, refuses reserved/registered/existing schemas, and avoids `--clean`/`--if-exists` by design. A failed live tenant therefore cannot be recovered into its own schema by the tool; the README example conflicts with this constraint.
-- **Expected:** A documented, rehearsed recovery path for an active school (e.g., restore into a spare schema, verify, then swap; or a guarded in-place mode).
-- **Actual:** Manual/improvised recovery only.
-- **Impact:** Extended downtime during the worst incident; the moment a school most needs the tool is the moment it cannot be used safely.
-- **Action:** Write the runbook now (spare-schema restore + verification + swap), add a `--target-schema` override guarded by typed confirmation, and rehearse quarterly. Fix the README.
-- **Test needed:** Scheduled disaster-recovery drill in Deliverable F: backup a seeded tenant, restore into a scratch schema, verify row counts and spot-check records, then document elapsed time.
+- **Location:** `tenancy/management/commands/tenant_backup.py:115-120`, `251-254`, `277`, `298-320`; `render.yaml` (no backup service)
+- **Evidence:** `tenant_backup` writes `pg_dump` output and optional media archives to a local output directory (default under `.private/backups`). It computes a SHA-256 checksum and writes an audit row, but does not encrypt the dump, upload it to cloud/offsite storage, apply a retention schedule, or run on a schedule. On Render's ephemeral filesystem, a local backup can be lost on redeploy. The audit metadata stores the local path.
+- **Expected vs actual:** Expected: encrypted, access-controlled backups in cloud storage and a separate location, with retention and monitoring. Actual: manual local plaintext archives.
+- **Impact:** A server loss can destroy both the database and its backups; student/guardian data at rest is unprotected; there is no evidence for the 24-hour recovery target.
+- **Recommended action:** Encrypt archives with keys under documented custody, upload to an offsite bucket with object lock/versioning, define retention and deletion rules, schedule and monitor the job, and record restore drills. Do not store encryption keys beside the archives.
+- **Verification test:** A scheduled backup lands offsite and is encrypted; a restore from the offsite copy succeeds in staging; retention deletes only expired archives; the key is not present in the backup bucket; a failed job alerts.
 
-### AUD-016 — Support access tokens are CLI-only
+### F-27 — A live tenant cannot be restored in place; the README example contradicts the command
+
 - **Severity:** High
 - **Status:** Verified
-- **Location:** `tenancy/management/commands/support_access.py:114-115, 211+`; `README.md`
-- **Evidence:** Generate/verify/revoke operate on stored bcrypt hashes and expiry, but no login, middleware, session, or request authorization path consumes a token. Verification is available only via the CLI.
-- **Expected:** Either a real, auditable support-access mechanism, or the README truthfully states tokens are a CLI verification aid only.
-- **Actual:** Claimed capability does not exist in the application.
-- **Impact:** False confidence about how remote support is performed and monitored; a future hasty wiring could create an unaudited backdoor.
-- **Action:** Decide: (a) remove the claim and keep the CLI as a bookkeeping tool, or (b) implement scoped support sessions with expiry, IP binding, read/limited-write permissions, and full platform audit logging. Option (a) is the safer near-term choice.
-- **Test needed:** Documentation test (claim matches code) or, if implemented, an authorization test suite for expiry, scope, revocation, and audit logging.
+- **Location:** `tenancy/management/commands/tenant_restore.py` (registered-tenant and nonempty-schema refusals); `README.md:1177-1179`
+- **Evidence:** The restore command refuses if `Tenant.objects.filter(schema_name=schema_name).exists()`, and refuses if the target schema exists and is nonempty. The README tells operators to run `tenant_restore --schema=atebubu_shs --dry-run` and then restore from the newest archive for that same registered schema. That path cannot succeed.
+- **Expected vs actual:** Expected: a documented, tested restore procedure for a live tenant within the 24-hour target. Actual: restore is only possible into a new/unregistered empty schema; the README example is invalid.
+- **Impact:** In an incident, staff may discover the documented procedure does not work. Recovery time is unpredictable, and ad hoc manual intervention increases data-loss risk.
+- **Recommended action:** Choose and document a real procedure: restore into a spare schema, validate, then switch the tenant mapping (or a controlled decommission/reprovision flow). Update the README, add a runbook with roles and approvals, and drill it quarterly.
+- **Verification test:** A staging tenant is restored from backup into a spare schema, validated, and switched with minimal downtime; the runbook is followed by someone who did not write it; the old schema is retained for rollback.
 
-### AUD-017 — Backups are unencrypted, retained without policy, and second-precision named
+### F-28 — Support-access tokens have no application wiring
+
+- **Severity:** High
+- **Status:** Verified
+- **Location:** `tenancy/management/commands/support_access.py`; `tenancy/models.py:251-292`; no URL or view consumes the token
+- **Evidence:** The command generates, verifies, revokes, and reports bcrypt-hashed time-bound tokens and writes platform audit rows. No view, middleware, or login path accepts a support token or creates a supervised support session. The README describes support tokens as enabling engineer access, but the application has no such access path.
+- **Expected vs actual:** Expected: supervised, time-limited, approved support sessions with scope and action logging, or no such claim. Actual: a CLI token utility with no session integration.
+- **Impact:** The documented remote-support control is not real. If engineers rely on ordinary admin accounts instead, there is no approval, scope, or session record.
+- **Recommended action:** For the near term, remove the claim from the README and define support as a supervised screen-share/on-site process with the school. If remote access is later required, implement headmaster + ICT approval, a scoped session, action logging, and automatic expiry.
+- **Verification test:** If implemented: an unapproved token cannot access a tenant; an approved session expires; every action is logged; revocation is immediate. If not implemented: the documentation no longer claims it.
+
+### F-29 — Django admin can bypass exeat and movement workflow controls
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `tenancy/management/commands/tenant_backup.py:181, 251-254, 277`
-- **Evidence:** `pg_dump` output and media tar archives are written without encryption; no retention/pruning policy exists in the command; filenames use `%Y%m%d_%H%M%S`, so a second backup within the same second collides.
-- **Expected:** Encrypted backups (or encrypted storage), a retention policy with pruning, and collision-safe naming.
-- **Actual:** Student PII and media sit in plaintext archives indefinitely.
-- **Impact:** Data-protection exposure; disk exhaustion; silent overwrite risk.
-- **Action:** Encrypt at rest or require an encrypted destination; implement retention (e.g., keep N daily + M weekly) with an audit log; add a random suffix to filenames; document the key custody procedure.
-- **Test needed:** Restore-from-encrypted-archive test; retention pruning test with dry-run; collision test.
+- **Location:** `core/admin.py:266-290`
+- **Evidence:** `ExeatAdmin` and `ExeatMovementAdmin` register the models without `readonly_fields`, custom form validation, or audit hooks. A staff user with admin model permission can change status, dates, approver, and movement times directly. `Model.save()` runs `full_clean()`, but there is no requirement for a reason, no state-transition guard, and no configuration audit entry.
+- **Expected vs actual:** Expected: administrative corrections are controlled and audited. Actual: direct edits are possible with ordinary model validation only.
+- **Impact:** An insider can rewrite gate/attendance history without a trace; the admin becomes a bypass around the workflow.
+- **Recommended action:** Limit admin edit fields, require a reason for sensitive changes, route corrections through the same audited service as the UI, and log before/after values. Restrict admin access to a named platform administrator.
+- **Verification test:** A status/date change in admin creates an audit record with actor, reason, and old/new values; an invalid transition is rejected; a read-only admin cannot edit.
 
-### AUD-018 — Django admin is an unguarded correction path for exeats and movements
+### F-30 — No export or sensitive-access audit log; no dispute-review workflow
+
+- **Severity:** Medium
+- **Status:** Partial (configuration audit only); Not implemented (dispute review)
+- **Location:** `core/models.py:1526+` (`ConfigurationAuditLog`); `core/views.py:3671-3698`; no dispute model
+- **Evidence:** `ConfigurationAuditLog` covers staff role, housemaster assignment, academic term, school identity, and SMS enablement changes. The KPI CSV export is not logged; student ID exports record `requested_by` but there is no general export log. There is no model or UI for a complaint/dispute, reviewer, decision, or resulting correction.
+- **Expected vs actual:** Expected: log bulk exports and sensitive access; support a formal dispute process for exeats, gate records, and attendance. Actual: partial config audit; no export log; no dispute workflow.
+- **Impact:** The school cannot reconstruct who exported sensitive data or resolve a disagreement with a documented decision.
+- **Recommended action:** Add an append-only access/export audit event (actor, time, report, filters, row count, purpose) and a dispute case model with complainant, record under dispute, reviewer, decision, and linked corrections. Restrict access to the case.
+- **Verification test:** Exporting a report creates an audit row; a dispute is opened, reviewed, decided, and linked to a correction; unauthorised staff cannot see the case.
+
+### F-31 — No retention or secure-disposal policy or code
+
+- **Severity:** Medium
+- **Status:** Policy-dependent; Not implemented
+- **Location:** No retention fields, archival job, or disposal command; backups and records are retained indefinitely by default
+- **Evidence:** There is no retention schedule, archive flag, anonymisation job, or secure-deletion command. The prompt contains conflicting proposed requirements (archive indefinitely vs approved retention and disposal). The code does not resolve that conflict, which is correct, but it also has no mechanism to apply a decision once made.
+- **Expected vs actual:** Expected: school-approved retention schedule with archival access and secure disposal. Actual: no policy and no implementation.
+- **Impact:** Data is kept longer than necessary, increasing privacy and storage risk; a future disposal request cannot be executed consistently.
+- **Recommended action:** Do not implement disposal until the school approves a written schedule. Then add retention categories, archive/read-only access, export-before-disposal, dual approval for destruction, and audit logs.
+- **Verification test:** A dry-run retention job lists eligible records without deleting; disposal requires two approvers; archived records remain readable; audit rows survive disposal.
+
+---
+
+## 3.7 Deployment, testing, accessibility, and documentation findings
+
+### F-32 — The Render blueprint does not deploy Celery worker or Beat
+
+- **Severity:** High
+- **Status:** Verified
+- **Location:** `render.yaml:200-211`; `Procfile`
+- **Evidence:** The blueprint declares only the web service. Worker and Beat definitions are in comments, and the comment warns that without them SMS deliveries remain queued and beat-scheduled cleanup tasks do not run. Render does not use the `Procfile` worker/beat entries. Beat tasks include SMS dispatch, overdue reminders, roll-call expiry, SHS 3 phase-out, and ID export cleanup.
+- **Expected vs actual:** Expected: background jobs run, or the deployment explicitly disables dependent features. Actual: the documented staging deployment silently leaves them unexecuted.
+- **Impact:** SMS stays Queued; guardians and housemasters receive nothing; overdue escalations do not run; roll calls never expire; the SHS 3 phase-out does not complete. These are silent failures, not visible errors.
+- **Recommended action:** Deploy worker and Beat with the same environment as the web service (requires Redis and a paid worker), or explicitly disable SMS and document manual runs for phase-out/cleanup. Add queue-depth and last-run monitoring.
+- **Verification test:** In staging, a queued SMS moves to Sent; an overdue exeat produces a reminder; an expired roll call is processed; a Beat heartbeat is visible; stopping the worker raises an alert.
+
+### F-33 — CI runs only tenancy tests; the core suite is not gated
+
 - **Severity:** Medium
 - **Status:** Verified
-- **Location:** `core/admin.py` (`Exeat`, `ExeatMovement` registrations)
-- **Evidence:** Records are editable through admin without the state-machine checks used by application views, and without a comprehensive movement-correction audit entry.
-- **Expected:** Admin edits restricted to break-glass with a recorded reason and immutable audit trail, or admin made read-only for state fields.
-- **Actual:** Silent edits possible; QR pass state and reconciliation can desync.
-- **Impact:** Audit integrity; disputes cannot be resolved from logs.
-- **Action:** Make status/movement fields read-only in admin; add a controlled correction action (reuse reconciliation); log all overrides to the platform audit log.
-- **Test needed:** Admin test asserting protected fields cannot be saved directly; correction workflow test.
+- **Location:** `.github/workflows/tenant-postgres-integration.yml:48-49`
+- **Evidence:** The workflow provisions PostgreSQL and runs a single tenancy provisioning integration test. It does not run `core.tests`, the security/report/SMS/roll-call test modules, or the progression tests. `manage.py check` passes, but that does not exercise business logic. The full suite was not run in this audit because PostgreSQL/Redis was not provisioned locally.
+- **Expected vs actual:** Expected: the full suite and security checks gate changes. Actual: one integration test gates CI.
+- **Impact:** Regressions in gate, roll call, reports, and permissions can merge unnoticed. The large test inventory gives less protection than it appears to.
+- **Recommended action:** Add a CI job with PostgreSQL and Redis that runs the full Django test suite, coverage, `manage.py check --deploy`, and a dependency/security scan. Keep the tenancy integration job.
+- **Verification test:** CI runs all test modules on a clean database; a deliberately broken gate/roll-call test fails the build; the deploy check has no high-severity warnings.
 
-### AUD-019 — Gate-action permission wording diverges from enforcement
-- **Severity:** Low
-- **Status:** Verified
-- **Location:** `core/views.py:2028-2055` vs `core/permissions.py:187-200` and `core/models.py:465-469`
-- **Evidence:** `exeat_action_view` is decorated with `EXEAT_ROLES` and its docstring claims departure/return handling, but `can_log_gate_check` allows only Admin/Gate Officer. Templates consistently show gate actions only when `can_access_gate`.
-- **Expected:** One documented permission table.
-- **Actual:** Housemaster POSTs to departure/return are denied with a generic message; dead branches in the view.
-- **Impact:** Maintenance risk and occasional confusing denials; not a security hole.
-- **Action:** Split gate actions into a gate-only endpoint or align decorators; update the docstring; add a permissions-matrix test.
-- **Test needed:** Permission matrix test across all six roles and all actions.
+### F-34 — Accessibility and mobile operability are partial
 
-### AUD-020 — No guardian portal or student self-service
-- **Severity:** Medium (product gap)
-- **Status:** Not implemented
-- **Evidence:** No guardian/student authentication paths exist; SMS is the only guardian channel; `Exeat` creation is staff-only (`EXEAT_CREATE_ROLES`).
-- **Expected:** Per product goals: guardian status visibility and possibly request submission; student pass visibility.
-- **Actual:** Absent.
-- **Impact:** Office staff absorb all status calls; guardians remain uncertain; adoption depends on SMS quality.
-- **Action:** Validate demand with the school before building (Appendix A). If built, start read-only status + receipt pages rather than full submission.
-- **Test needed:** Product discovery before any engineering test.
-
-### AUD-021 — No bulk SMS, scheduled reports, or offline gate mode
-- **Severity:** Medium (product gap)
-- **Status:** Not implemented
-- **Evidence:** SMS is event-driven only; reports are on-demand HTML/print; templates are HTMX server-rendered with no service worker.
-- **Expected:** At minimum, a resilience plan for connectivity loss at the gate (printed active-pass list / cached last-known list).
-- **Actual:** Gate verification stops when connectivity stops.
-- **Impact:** Gate backlog during network outages — a routine risk in the pilot environment.
-- **Action:** Near-term: printable "currently out" and "approved today" lists from the gate terminal. Later: queue-and-sync offline mode only if drills show real outages.
-- **Test needed:** Offline drill as part of UAT; printed-list accuracy test against live data.
-
-### AUD-022 — Accessibility and legibility risks
-- **Severity:** Low
+- **Severity:** Medium
 - **Status:** Partially verified
-- **Location:** `templates/base.html` and report/gate templates
-- **Evidence:** Global `text-xs` (12px) base and numerous 10px labels/uppercase micro-text; no skip link found; touch targets in gate controls are adequate (44px). Contrast was not formally measured.
-- **Expected:** WCAG 2.1 AA-aligned legibility for office, gate, and older staff; keyboard navigability.
-- **Actual:** Dense micro-typography increases error rates, especially at the gate at night.
-- **Impact:** Slower data entry; more mis-taps in a safety workflow.
-- **Action:** Accessibility pass: minimum 14px body at gate surfaces, larger critical values, focus states, skip link, contrast audit; verify on the actual tablet used at the gate.
-- **Test needed:** Axe/Lighthouse plus a task-based usability test with 5 staff users.
+- **Location:** `templates/base.html:6` (viewport); `templates/base.html:513-522` (44px mobile quick actions); `templates/core/operations/partials/gate_verification_card.html` (small action buttons); `templates/base.html` (17 `text-xs`/10px labels)
+- **Evidence:** The viewport meta tag is present and the mobile navigation uses `min-h-11` (44px) for quick actions. Gate verification/action buttons use `px-3 py-1.5 text-xs` (roughly 30px high), and status labels use 10px text. No skip link was found. Focus styles exist on some custom controls but not consistently. No Android phone/tablet test was run.
+- **Expected vs actual:** Expected: large touch targets, clear status labels, larger text, high contrast, keyboard navigation. Actual: partial responsive support with undersized gate controls and small labels.
+- **Impact:** Gate staff using phones in sunlight or at a busy gate can mis-tap or misread status; keyboard and screen-reader users have a harder path.
+- **Recommended action:** Raise gate action targets to at least 44×44px, increase base operational text to 14px+, use larger status badges, add a skip link and visible focus styles, verify contrast, and test on representative Android devices.
+- **Verification test:** Automated accessibility scan (axe or equivalent) has no critical issues on gate, roll call, and exeat pages; a keyboard-only user can complete gate departure/return; a phone test records tap-target sizes.
 
-### AUD-023 — The full test suite was not executed during this audit
+### F-35 — Training and handover materials are not present
+
+- **Severity:** Medium
+- **Status:** Not implemented
+- **Location:** `README.md` only; no `docs/` directory, quick-start guides, user manual, or videos
+- **Evidence:** The README is a detailed technical installation/deployment/operations document. It is not a role-based user guide, and there are no short quick-start guides or demonstration videos for housemasters, gate officers, or administrators.
+- **Expected vs actual:** Expected: joint Eden Sys/school training with quick starts, plain-language manual, and videos. Actual: technical README only.
+- **Impact:** Training depends on the vendor walking staff through the system; handover is weak; staff may use unsafe workarounds.
+- **Recommended action:** Produce one-page quick starts per role, a plain-language manual with screenshots, and short videos for gate, roll call, exeat approval, and reports. Run a joint training session and record attendance/questions.
+- **Verification test:** A new gate officer can complete a departure/return using only the quick start; a housemaster can complete roll call and resolve an absence; staff feedback is recorded.
+
+### F-36 — Production hardening and monitoring are incomplete
+
+- **Severity:** Low
+- **Status:** Partial
+- **Location:** `schoolsystem/settings/production.py` (CSP report-only); no `LOGGING` configuration; no Sentry/monitoring; no dependency scan; no MFA
+- **Evidence:** CSP is enforced only in report-only mode. There is no structured logging configuration, error-reporting integration, queue-depth alert, or failed-SMS alert. `pip-audit` is not installed, and no SAST/dependency scan is configured. MFA is absent (and the public site acknowledges it).
+- **Expected vs actual:** Expected: enforced CSP after a report-only period, alerting, dependency scanning, and stronger admin authentication. Actual: good baseline settings, but no operational feedback loop.
+- **Impact:** Security regressions and silent failures are discovered by users rather than operators.
+- **Recommended action:** Run CSP report-only in staging, fix violations, then enforce. Add Sentry or equivalent, structured logs with sensitive-data redaction, uptime/queue alerts, `pip-audit`/Dependabot, and TOTP MFA for admin/superuser accounts.
+- **Verification test:** CSP violations are reviewed and the policy is enforced; a failed SMS/queue backlog triggers an alert; a dependency scan runs in CI; admin login requires a second factor.
+
+### F-37 — Rejection reason is optional
+
+- **Severity:** Low
+- **Status:** Verified
+- **Location:** `core/views.py:2161-2173`
+- **Evidence:** If `approval_remarks` is empty on rejection, the view only shows a warning (“no rejection reason was captured”) and proceeds. The form documentation says remarks are required for rejection, but the quick action path does not enforce it.
+- **Expected vs actual:** Expected: a written reason for rejection to support the student/guardian record. Actual: optional warning.
+- **Impact:** Rejected requests can lack an explanation, weakening the audit trail and communication.
+- **Recommended action:** Require a reason on rejection, or use a structured reason code plus optional notes. Enforce it in the form and the view.
+- **Verification test:** A rejection without a reason is rejected; a reason is stored and visible; the SMS/record includes the reason where appropriate.
+
+### F-38 — Newly committed progression/phase-out feature is unverified
+
 - **Severity:** Medium
 - **Status:** Unverified
-- **Location:** `core/tests.py`, `core/test_advanced_reports.py`, `core/test_student_registry.py`, `core/test_student_progression.py`, `core/test_student_import.py`-style modules
-- **Evidence:** `manage.py check` passes. Test execution requires PostgreSQL/Redis; the environment was not provisioned, and the working tree contains untracked migrations.
-- **Expected:** CI runs the suite on every change with a seeded Postgres.
-- **Actual:** Unknown pass rate; the new progression feature is entirely unexercised.
-- **Impact:** Regression risk exactly where the working tree changed most.
-- **Action:** Make the suite a required CI gate; run the Deliverable F tests; record results in the repository.
-- **Test needed:** The entire Deliverable F plan.
+- **Location:** `core/services/student_progression.py`; `core/migrations/0032...`, `0033...`; `core/test_student_progression.py`; `templates/core/students/promotion.html`
+- **Evidence:** The progression work was committed as `8c490e0` during the audit. Migration 0032 includes a `RunPython` backfill. The feature's tests and migrations were not executed in this environment, and the phase-out path changes student completion records.
+- **Expected vs actual:** Expected: a reviewed migration and test run before release. Actual: committed feature with unexecuted migration/tests.
+- **Impact:** A deployment could apply an unverified data backfill or phase-out flow to student records.
+- **Recommended action:** Treat the progression work as its own release gate: review the migration, run the full suite against PostgreSQL, test phase-out and promotion on synthetic data, and confirm rollback/backup before the pilot.
+- **Verification test:** Migration applies cleanly on a copy of staging; phase-out creates progression records and completion fields; promotion preserves history; the full suite passes.
 
-### AUD-024 — README claims exceed code behaviour
+### F-39 — Permission documentation diverges from enforced roles
+
 - **Severity:** Low
 - **Status:** Verified
-- **Location:** `README.md` (backup/restore example; support-access description)
-- **Evidence:** Restore example conflicts with restore command constraints; support tokens described as a troubleshooting path not present in application code.
-- **Expected:** Operator documentation that a tired engineer can follow during an incident.
-- **Actual:** Documentation leads to failed or improvised procedures.
-- **Impact:** Longer outages; risky ad-hoc recovery.
-- **Action:** Rewrite README sections after the AUD-015/AUD-016 decisions; add runbook links; date-stamp operational docs.
-- **Test needed:** Dry-run the documented runbook on staging and correct every step that fails.
+- **Location:** `core/models.py:465-470` (`can_log_gate_movement` docstring); `core/permissions.py` role sets
+- **Evidence:** The `can_log_gate_movement` docstring says “Only system administrators and assigned Gate Officers can log gate movements.” The enforced check also requires the gate feature entitlement and uses the `GATE_ROLES` tuple. The UI and enforcement are consistent, but the phrase “assigned Gate Officers” suggests a shift assignment that does not exist (see F-05).
+- **Expected vs actual:** Expected: documentation matches the role model. Actual: “assigned” overstates the control.
+- **Impact:** Readers may believe a roster exists when it does not.
+- **Recommended action:** Correct the docstring now; implement the roster if the school requires shift control.
+- **Verification test:** Documentation review; no functional test needed.
 
 ---
 
-## Deliverable C — User Workflow Assessment
+# 4. Requirements traceability matrix
 
-Legend: **[OK]** verified end-to-end, **[Friction]** works but with identified issues, **[Broken/absent]** not functional as intended.
+Legend: **Implemented** = the requirement is met by the current code path; **Partial** = some layers exist but a required behaviour is missing or unverified; **Missing** = no implementation; **Defective** = implemented but demonstrably wrong; **Policy-dependent** = cannot be completed without a school decision; **Unverified** = code exists but was not executed.
 
-### C.1 Administrator / Headmaster
-- **Workflow traced:** login → dashboard (students, boarders, day students, occupancy, overdue exeats) → students registry → reports hub → configuration → audit log.
-- **Assessment:** The dashboard and 18-report suite give a real command picture. Approval hub, exeat register and conduct tools are decision-ready. **[Friction]**: two headline numbers are unreliable (occupancy AUD-009, current-overdue AUD-012), and approval turnaround can shift after edits (AUD-010). If the headmaster quotes these in assembly or to the board, the system can be wrong.
-- **Efficiency:** High — most daily questions are answerable without exporting to Excel.
-- **Trust requirement:** fix the reporting defects before presenting numbers officially.
+## A. Exeat, departures, returns, and gate operations
 
-### C.2 Senior Housemaster / Housemaster
-- **Workflow traced:** login → house roll call (start, mark, complete) → absence follow-ups → exeat approvals (approvals hub / exeat register) → reconcile missed movement → conduct records → house reports.
-- **Assessment:** This is the best-designed part of the system. Jurisdiction rules are enforced (`can_approve_exeat_check`), the two-step approve/reject state machine is coherent, and reconciliation rescues the common "student left without a gate scan" case. **[Friction]**: roll-call duplicates (AUD-002) and closed-session mutations (AUD-001) put the records they are accountable for at risk. Quick reject without a reason (AUD-005) weakens the audit trail a housemaster will need in a dispute. Early-leave emergencies force them toward admin (AUD-004).
-- **Efficiency:** High for the normal case; the gaps above are trust issues, not speed issues.
-
-### C.3 House Tutor
-- **Workflow traced:** login → conduct recording → exeat request creation → view exeats in assigned house.
-- **Assessment:** **[OK]** for intended duties. Correctly excluded from roll call and gate logging (permission model is deliberate and consistent here). No report access — appropriate.
-- **Friction:** cannot see approval outcome beyond what housemasters tell them; SMS/notification coverage for tutors is unverified.
-
-### C.4 Gate staff (Gate Officer)
-- **Workflow traced:** login → gate security terminal → QR/number verification → one-click departure/return → automatic roll-call reconciliation → active-out list.
-- **Assessment:** The fastest and most safety-relevant surface in the system; one-click actions and the active-out list are good design. **[Friction]**: wrong-pass selection risk (AUD-003) can cause a valid student to be stopped or a record to attach to the wrong pass; early-departure block (AUD-004) has no approved workaround; connectivity loss halts verification (AUD-021). The terminal depends on the officer correctly interpreting status labels — AUD-022's legibility concerns matter most here, at night, under time pressure.
-- **Reliability:** Depends on network and gateway; needs an offline fallback before unsupervised night shifts.
-
-### C.5 Guardians
-- **Workflow traced:** receive SMS on request/approval/rejection/departure/return/overdue. That is the whole experience.
-- **Assessment:** **[Broken/absent]** as a product channel until AUD-006 is fixed: sender identity can be wrong or messages rejected. Even when working, guardians cannot confirm receipt, request a pass, or check status; every question routes through the school office or through the student. In Ghanaian SHS practice, guardians often live away from campus and rely entirely on the telephone — SMS quality is therefore adoption-critical.
-- **Efficiency:** zero self-service.
-
-### C.6 Students
-- **Workflow traced:** receive approved pass (printed slip with QR) → present at gate → return logged. No login exists.
-- **Assessment:** **[OK]** for the pilot's scope. Sensible privacy: the public QR page exposes only pass-relevant facts. Students cannot check their own exeat status, so they depend on housemasters saying "it is approved".
-- **Friction:** if SMS to guardians fails, the student may still depart with a valid pass — acceptable — but any dispute over timing is settled by staff records only.
-
-### C.7 System Administrator
-- **Workflow traced:** provision tenant → configure school → manage users/roles → run backup → monitor tasks → generate support token → inspect platform audit log.
-- **Assessment:** Provisioning, domain routing, entitlements and platform logs are a genuine strength. **[Friction/Broken]**: restore of a live tenant is not feasible in place (AUD-015) and the README misleads (AUD-024); backups are unencrypted and unreleased (AUD-017); support tokens verify only in the CLI (AUD-016). Day-to-day administration is solid; incident-day administration is where the risk sits.
-- **Maintainability:** Python/Django + Celery + Postgres + Redis stack is affordable and mainstream for Ghana; no exotic dependencies. Deployment configuration exists for Render with Celery workers.
-
-### C.8 Cross-cutting workflow observations
-1. **Notification dependency:** exeat submission, approval and gate events all trigger SMS; with AUD-006/AUD-007 outstanding, the whole guardian communication layer is fragile.
-2. **Correction workflows are the weakest seam:** workarounds for real-world exceptions (early leave, missed scan) are split between a well-built reconciliation feature and an unguarded admin.
-3. **Connectivity assumption:** every workflow except printing assumes the server is reachable. Gate and roll call are the two places where an outage has immediate safety impact.
-4. **Consistency of definitions:** "boarder", "decided", and "currently overdue" mean slightly different things on different screens — a systemic fix (shared querysets, explicit timestamps) would prevent the entire class of AUD-009/010/011/012/014 findings.
-
----
-
-## Deliverable D — Prioritized Backlog
-
-Priority key: **P0** pilot-blocking (fix before any live gate/roll-call/SMS use), **P1** fix before scaling beyond the pilot, **P2** product growth, **P3** cleanup.
-Effort key: S (≤1 day), M (2-5 days), L (1-3 weeks).
-
-| Pri | Item | Findings | Effort | Owner | Exit criteria |
-|---|---|---|---|---|---|
-| P0 | Gate pass selection: rank actionable pass and present disambiguation on multiple matches | AUD-003 | M | Backend | Regression suite with returned/current/future passes passes; gate drill shows correct pass 20/20 |
-| P0 | Roll-call duplicate prevention: transactional guard + DB constraint, reopen instead of recreate | AUD-002 | M | Backend | Concurrency test passes; repeated-post shows one session |
-| P0 | Roll-call integrity: block/audit resolutions on non-in-progress sessions; stop raw `.update()` bypass | AUD-001 | M | Backend | New tests pass; closed-session resolution rejected or audited; existing assertion updated with product sign-off |
-| P0 | SMS sender identity: approved-ID resolution precedence, provisioning validation, gateway sandbox test | AUD-006 | S-M | Backend/DevOps | Real sandbox SMS received from the approved sender ID; unit precedence test |
-| P0 | Recovery: documented spare-schema restore runbook + staged drill; fix README | AUD-015, AUD-024 | M | DevOps | Drill restores seeded tenant to a scratch schema with verified row counts, within an agreed RTO |
-| P0 | Support access decision: remove claim or implement scoped, audited sessions | AUD-016 | S (remove) or L (implement) | Product/Backend | README matches code; if implemented, expiry/scope/revocation tests pass |
-| P1 | Early-leave / reschedule workflow with reason + audit, or documented approved exception policy | AUD-004 | M | Product/Backend | Approved reschedule reflected in gate, SMS and audit log; unapproved early exit still blocked |
-| P1 | SMS quota lifecycle: expire/fail stale queue rows, segment-aware counting | AUD-007 | M | Backend | Month-old QUEUED row no longer blocks; segment test passes |
-| P1 | SMS report reconciliation with quota; include non-exeat events | AUD-008 | S-M | Backend | Golden test: report total = quota usage for same month |
-| P1 | Shared "current boarder" queryset across views and reports | AUD-009, AUD-014 | S-M | Backend | Seeded completed student excluded everywhere; three surfaces agree |
-| P1 | Add `decided_at`; exclude/report cancellations separately; update staff activity to all actors | AUD-010, AUD-011 | M | Backend/Data | Migration + backfill test; later edits do not shift decision time; tutor/gate-officer actions appear |
-| P1 | Overdue register: point-in-time "currently overdue" independent of range | AUD-012 | S | Backend | Test with overdue student outside selected range |
-| P1 | Conduct-normalised denominators: period population or explicit relabel | AUD-013 | M | Backend | Golden test with mid-period roster change |
-| P1 | Backup encryption at rest, retention/pruning with dry-run, collision-safe filenames | AUD-017 | M | DevOps | Restore from encrypted archive test; pruning dry-run; collision test |
-| P1 | Admin hardening: read-only state fields, controlled correction action, audit logging | AUD-018 | M | Backend | Admin protected-field test; correction action writes audit entry |
-| P1 | Require rejection reason on all surfaces | AUD-005 | S | Backend/UX | Validation tests on both surfaces |
-| P1 | CI gate: Postgres + Redis suite on every push; publish results | AUD-023 | M | DevOps | Green pipeline required to merge; coverage report archived |
-| P2 | Connectivity resilience: printable "approved today" and "currently out" lists; outage drill | AUD-021 | M | Product | Drill: gate continues on paper and reconciles after restoration with no lost movements |
-| P2 | Guardian/student read-only status and receipts (after school validation) | AUD-020 | L | Product | Discovery sign-off; if built, privacy/security review passes |
-| P2 | Bulk SMS / announcements and scheduled report delivery | AUD-021 | L | Product | Pilot school confirms need; quota/cost controls in place |
-| P2 | Accessibility pass on gate/office surfaces with real devices | AUD-022 | M | UX/Frontend | Axe/Lighthouse clean on target screens; task test with 5 staff |
-| P3 | Permission docstring/dedup cleanup and permissions-matrix test | AUD-019 | S | Backend | Matrix test across six roles |
-| P3 | README/runbook overhaul and date-stamping | AUD-024 | S | Docs | Runbook dry-run passes step by step |
-
-**Sequencing rule:** P0 items block the pilot; P1 items block end-of-pilot sign-off and scaling; P2 requires product validation; P3 rides along with related changes.
-
----
-
-## Deliverable E — Risk Register
-
-Likelihood (L) and Impact (I) scored 1-5; Score = L × I. Residual risk assumes the existing controls only (no new fixes).
-
-| Risk ID | Risk | L | I | Score | Existing controls | Residual exposure | Treatment |
-|---|---|---|---|---|---|---|---|
-| R-01 | Student exits with an invalid/unverified pass because gate lookup surfaced the wrong pass | 3 | 5 | 15 | QR token, approval state machine, reconciliation | High — safety and trust | AUD-003 P0 |
-| R-02 | Attendance records (and derived conduct/attendance reports) proved unreliable because closed sessions were edited | 3 | 4 | 12 | Session locks, follow-up state, some tests | High — disciplinary fairness and audits | AUD-001 P0 |
-| R-03 | Guardian never learns about approval/departure because SMS was rejected under the wrong sender | 4 | 4 | 16 | Retry with backoff, delivery status | High — the only guardian channel | AUD-006 P0 |
-| R-04 | School cannot send SMS mid-term because stale queue rows consumed quota | 3 | 3 | 9 | Quota limits, entitlements | Medium | AUD-007 P1 |
-| R-05 | Prolonged outage after data loss because live-tenant restore cannot be performed in place | 2 | 5 | 10 | Checksums, TOC verification, conservative restore | High tail risk | AUD-015 P0 (runbook + drill) |
-| R-06 | Student PII exposed via unencrypted backup archives or retained indefinitely | 2 | 4 | 8 | Filesystem permissions on server/object store | Medium-high | AUD-017 P1 |
-| R-07 | Staff or admin silently alters exeat/movement records, undermining disputes | 3 | 3 | 9 | Role checks, reconciliation, admin audit log (incomplete) | Medium | AUD-018 P1 |
-| R-08 | Roll-call duplicate sessions split attendance and hide absentees | 3 | 4 | 12 | House scoping, completion flow | High — student supervision | AUD-002 P0 |
-| R-09 | Emergency early departure is handled off-system, so records diverge from reality | 4 | 3 | 12 | Reconciliation captures retrospective movement | Medium-high | AUD-004 P1 (plus school policy) |
-| R-10 | Occupancy/capacity decisions made on inflated counts | 3 | 3 | 9 | Reports filtered correctly, dashboard filtered | Medium | AUD-009 P1 |
-| R-11 | Night gate operations degrade due to dense micro-typography or connectivity loss | 3 | 3 | 9 | 44px targets, offline nothing | Medium | AUD-021/022 P2 |
-| R-12 | False confidence in remote support controls because tokens are unwired | 2 | 3 | 6 | CLI verification + platform logs | Low-medium | AUD-016 P0 |
-| R-13 | Regression shipped in the uncommitted progression feature because it was never executed | 3 | 4 | 12 | Unit tests exist but unrun | High for the changed area | AUD-023 P1 (run suite + review migration files) |
-| R-14 | Headmaster quotes wrong approval/overdue KPIs | 3 | 2 | 6 | Report caveats in text | Low-medium | AUD-010/012 P1 |
-| R-15 | Tenant operator follows README and performs an unsupported restore | 2 | 4 | 8 | Restore refusals prevent the worst case | Medium | AUD-024 P0 doc fix |
-
----
-
-## Deliverable F — Testing Plan
-
-### F.1 Environment and data prerequisites
-| Requirement | Detail |
-|---|---|
-| Database | PostgreSQL 15+ with a dedicated test database; no production connection strings |
-| Services | Redis available; Celery worker + beat running for task tests |
-| External | SMS pointed at a sandbox/fake gateway for automated runs; one controlled real-sender test in UAT |
-| Fixtures | "Atebubu golden dataset": 2 houses, 3 dormitories, ~60 students across all enrollment statuses, 6 staff accounts (one per role), ≥3 exeat scenarios per student type, one completed student |
-| Version control | Test against a feature branch that first commits the five untracked files (see Appendix D) so results are reproducible |
-
-### F.2 Test levels
-1. **Unit** — services (`roll_call.py`, `sms.py`, `reports.py`, `student_import.py`, `student_progression.py`).
-2. **Integration** — view → service → database, including permissions and state transitions.
-3. **Regression** — full suite as a required CI gate (closes AUD-023).
-4. **UAT** — task-based scripts for each role at the school (Deliverable C workflows).
-5. **Operational drills** — gate, roll call, SMS, backup/restore (below).
-6. **Non-functional** — security checks, performance smoke, accessibility.
-
-### F.3 Core test cases (mapped to findings)
-| Test ID | Objective | Steps sketch | Expected result | Finding |
+| ID | Requirement | Status | Evidence and gap | Proposed test |
 |---|---|---|---|---|
-| T-01 | Closed roll call cannot be silently changed | Complete a session; attempt follow-up resolution | Rejected with error, or an audited correction record is created; original entry history preserved | AUD-001 |
-| T-02 | Expired session behaviour | Let expiry task expire a session; attempt resolution via UI and service | Same as T-01; no conduct record created incorrectly | AUD-001 |
-| T-03 | Duplicate session prevention | Submit start twice simultaneously (two threads) and sequentially | Exactly one in-progress session; entries not duplicated; second request reopens | AUD-002 |
-| T-04 | Gate pass disambiguation | Student with returned pass, active pass, future pending pass; run lookup | Active pass prioritized; multiple actionable matches listed, none auto-selected | AUD-003 |
-| T-05 | Departure logged against selected pass | From lookup with multiple matches, log departure | Movement attaches to selected pass only | AUD-003 |
-| T-06 | Early departure policy | Attempt gate departure before expected time without approval | Blocked with clear message; no record change | AUD-004 |
-| T-07 | Approved reschedule | Approve, reschedule, then depart | Departure allowed at new time; SMS reflects new time; audit entry records actor/reason | AUD-004 |
-| T-08 | Reject without reason | POST quick reject with empty reason | Validation error, or structured "unspecified" record with actor | AUD-005 |
-| T-09 | Sender resolution precedence | Configure tenant sender; override setting; send sandbox message | Tenant-approved sender used; never a 50-char name; fallback only when configured | AUD-006 |
-| T-10 | Provisioning validation | Provision a school with a long name | Stored short name valid for gateway; provisioning fails loudly if invalid | AUD-006 |
-| T-11 | Stale queue quota release | Insert month-old QUEUED row; run lifecycle task; attempt send | Quota reflects only legitimate in-flight items; send succeeds | AUD-007 |
-| T-12 | Segment counting | Send a 3-segment message | Usage counts 3 segments; report and quota agree | AUD-007 |
-| T-13 | SMS report reconciliation | Mixed exeat and non-exeat deliveries in a month; run report with/without filters | Filtered and unfiltered totals reconcile with quota usage | AUD-008 |
-| T-14 | Boarder definition consistency | Completed student with dormitory assigned | Excluded from house list, reports, dashboard, welfare watchlist consistently | AUD-009, AUD-014 |
-| T-15 | Decision timestamp | Approve; edit the record a week later; run turnaround report | Duration unchanged; cancellation reported separately | AUD-010 |
-| T-16 | Staff activity completeness | Tutor records incident; gate officer logs movement; run report | Both actors appear, or the report is explicitly titled as housemaster-only | AUD-011 |
-| T-17 | Overdue point-in-time count | Currently-overdue student outside selected date range | "Currently overdue" count includes them; range only affects late-returns-in-period | AUD-012 |
-| T-18 | Conduct denominator | Roster change mid-term; run normalised report | Denominator matches period population (or explicit relabel present) | AUD-013 |
-| T-19 | Restore contract | Restore dump into existing/registered schema | Refused with safe error unless `--target-schema` break-glass used with confirmation | AUD-015 |
-| T-20 | Support claim audit | Grep README claims against code paths | Every claim has an implementation or is removed | AUD-016 |
-| T-21 | Backup lifecycle | Back up twice in the same second; apply retention dry-run | Distinct files, no overwrite; pruning plan lists correct archives | AUD-017 |
-| T-22 | Admin protection | Attempt to edit status/movement fields in admin | Blocked or routed through audited correction workflow | AUD-018 |
-| T-23 | Permission matrix | For each of 6 roles × 12 key actions, assert allow/deny | Matches the documented matrix; no UI link leads to a denied POST | AUD-019 |
-| T-24 | Offline gate drill | Disconnect network at the gate after printing lists | Movements continue on paper; reconciliation after reconnection loses nothing | AUD-021 |
-| T-25 | Progression feature suite | Run `test_student_progression.py` and migration forward/backward on a copy | Tests pass; migration reversible; no orphaned records | AUD-023 |
+| A1 | Ordinary early departure requires formal rescheduling | **Missing** | No reschedule model/action; early departure blocked (`views.py:2066-2071`); admin edit only. F-03. | Reschedule creates history; early departure requires approved exception. |
+| A2 | Approval roles: headmaster/admin, assistant head/senior admin, housemaster, medical staff | **Partial** | `EXEAT_APPROVAL_ROLES` = Admin, Senior HM, HM (`permissions.py:53-59`). No assistant-head or medical role. F-06, F-38. | Role matrix: each role can approve only its scope. |
+| A3 | Emergency override allowed with immediate documentation | **Missing** | No override field/flow; reconciliation is retrospective. F-04. | Override requires reason; review item created. |
+| A4 | Preserve reschedule history; gate prioritises current schedule | **Missing / Defective** | No history; gate search unordered and unfiltered. F-01, F-03. | Gate returns current pass; old schedules remain queryable. |
+| A5 | One active exeat per student | **Missing** | No constraint or create check. F-02. | Second active pass rejected; sequential allowed. |
+| A6 | Late returns recorded, notify housemaster, create incident, configurable escalation | **Partial** | Return recorded; SMS to guardian + HM; no incident; fixed cadence. F-07, F-15. | Late return creates incident; threshold changes behaviour. |
+| A7 | After-hours medical emergencies approved by designated staff, followed by review | **Missing** | No medical role or after-hours review. F-06. | Medical role approves medical pass; review recorded. |
+| A8 | Gate duty roster; temporary assignments with start/end | **Missing** | No roster model. F-05. | Outside-shift/expired assignment denied. |
+| A9 | Gate requires internet; no offline transactions assumed | **Aligned (policy)** | Online-only implementation; no offline queue. | Connectivity-loss state is clear; no offline write path. |
+| A10 | Support Android phones/tablets | **Partial / Unverified** | Responsive viewport and breakpoints; no device test. F-34. | Gate and roll call tasks on representative Android devices. |
+| A11 | Large touch targets, labels, larger text, contrast, keyboard | **Partial** | Mobile nav 44px; gate buttons ~30px; 10-12px labels; no skip link. F-34. | Axe scan; keyboard-only task completion; tap-size measurement. |
+| A12 | Prevent unauthorised gate/approval/record access | **Implemented, minor divergence** | Role decorators, house scoping, gate check; free-text actor and admin bypass remain. F-08, F-29, F-39. | Role matrix and IDOR tests. |
 
-### F.4 Operational drills (must be scheduled, not optional)
-1. **Gate drill (half day, UAT phase):** 20 scripted students, including one with multiple passes, one early-departure request, one unapproved exit attempt, one QR-scan failure. Success = every movement attributed correctly, zero wrong-pass selections, all exceptions handled by policy.
-2. **Roll-call drill (half day):** two simultaneous sessions, one interrupted completion, one absence follow-up on a completed session (must be rejected/audited). Success = counts reconcile with the physical roster.
-3. **Disaster-recovery drill (one day):** back up the seeded tenant, destroy the scratch schema, restore via the new runbook, verify row counts, latest exeat movement, attendance entries, and media sample. Success = documented RTO met and signed off by the school's data owner.
-4. **SMS pilot batch (controlled):** 10 messages to opt-in staff numbers through the real sender ID; confirm delivery and sender display, then release guardian traffic.
-5. **Connectivity drill:** simulate a 2-hour outage; run gate on paper; reconcile; verify no orphan movements.
+## B. Attendance, roll call, and dormitory allocation
 
-### F.5 Security and non-functional checks
-- Verify every mutating endpoint has `@require_POST`/CSRF where applicable (spot-check shows this is generally true).
-- Confirm CSP report-only is promoted to enforce after a clean staging week; collect violation reports first.
-- Session expiry (30 minutes) tested idle during roll call and gate flows.
-- Rate limiting tested on login and public report page.
-- Performance smoke: dashboard and gate terminal on the golden dataset with 2,000 generated movements; target < 2s server render.
-- Accessibility: axe-core on gate terminal, roll-call marking, dashboard, reports; task test with five staff including one over 50.
+| ID | Requirement | Status | Evidence and gap | Proposed test |
+|---|---|---|---|---|
+| B1 | Authorised staff may correct attendance after closure with justification and audit | **Missing** | Completed sessions blocked; no correction model. F-12. | Correction requires reason/approver; history retained. |
+| B2 | Sensitive corrections require additional evidence or approval | **Missing** | No evidence/approval rule. F-12; open decision D4. | High-risk change without evidence rejected. |
+| B3 | Emergency roll calls require full resolution; routine unresolved entries remain visible | **Defective** | All sessions require full resolution; expiry deletes. F-11. | Emergency cannot close unmarked; routine unresolved queue visible. |
+| B4 | Escalation periods configurable | **Missing** | One-hour constant; fixed reminder cadence. F-15. | Settings change expiry/escalation. |
+| B5 | Block dormitory placements over capacity unless senior approval recorded | **Partial** | Room capacity enforced; dormitory capacity not; no exception. F-13. | Over-capacity blocked; exception audited. |
+| B6 | Exclude inactive students from current lists; allow historical access | **Partial** | Most lists exclude COMPLETED; house list does not. F-14. | Completed student excluded from current occupancy, visible historically. |
+| B7 | Boarders on approved exeat still count as active | **Implemented** | Roll-call roster includes them as ON_EXEAT; occupancy counts them. | Exeat student remains in active boarder count. |
+| B8 | Active-boarder definition = currently enrolled + boarding | **Ambiguous / Defective** | Code uses “not COMPLETED”, includes APPROVED/IN_PROGRESS; definitions differ by view. F-14; open decision D5. | Approved definition matches every report. |
+| B9 | Preserve historical records subject to retention policy | **Partial** | Records retained, but expiry deletes sessions; no retention policy. F-11, F-31. | Expired session retained; retention dry-run. |
 
-### F.6 Entry / exit criteria for the pilot
-- **Entry:** P0 backlog items closed with passing tests; suite green in CI; staging seeded; school policy questions in Appendix A answered; staff trained on the drill scripts.
-- **Exit (pilot success):** zero unresolved safety-severity findings; drill results archived; attendance and gate records reconcile with physical counts for four consecutive weeks; SMS delivery rate ≥95% with correct sender; headmaster confirms report numbers match manual counts.
+## C. Guardian communication and SMS
+
+| ID | Requirement | Status | Evidence and gap | Proposed test |
+|---|---|---|---|---|
+| C1 | Staff create exeats; guardians do not submit directly | **Implemented** | Exeat creation is role-gated to staff; no guardian submission path. | Guardian cannot create; staff can. |
+| C2 | SMS and telephone calls; SMS replies handled elsewhere | **Partial** | SMS implemented; no call log; replies are outside the system by design. | Call contact can be recorded (if school requires). |
+| C3 | Approved SMS to selected groups | **Missing** | Event-only guardian/HM messages; no composer. F-18. | Group message preview/approval/audit. |
+| C4 | Eden Sys maintains sender ID; ID not yet decided | **Partial / Policy-dependent** | Env setting exists but is ignored; provisioning seeds school name. F-16; decision D6. | Approved sender used and validated. |
+| C5 | SMS expenditure approval by headmaster/bursar/ICT within budget | **Missing** | Quota exists; no approval/budget workflow. | Budget request/approval before bulk send. |
+| C6 | Low-credit and failed-message alerts | **Missing** | Final failure logs only; no balance check. F-18. | Failure/low-balance alert. |
+| C7 | Audit status, failures, retries without unnecessary content exposure | **Partial** | `SMSDelivery` stores status and content; retries tracked; no separate access audit. | Audit report without guardian content in logs. |
+| C8 | Provider credentials, API security, rate limits, error handling, recipient validation, cost controls | **Partial** | Env key, timeout, retries, phone validation, quota; no delivery receipts/rate-per-recipient/low-credit. F-16, F-17, F-18. | Credential rotation; invalid recipient; provider timeout; cost cap. |
+
+## D. Reports and operational visibility
+
+| ID | Requirement | Status | Evidence and gap | Proposed test |
+|---|---|---|---|---|
+| D1 | Students currently outside school | **Implemented** | Gate dashboard active-out list. | Count matches open movements. |
+| D2 | Overdue exeats and outstanding returns | **Implemented, range defect** | Overdue register exists; date filter can hide current cases. F-22. | Overdue-now independent of period. |
+| D3 | Departures and returns over a selected period | **Implemented** | Exeat/gate compliance report. | Period totals reconcile to movement rows. |
+| D4 | Medical and emergency movements | **Partial** | Welfare report and exeat analytics; no dedicated emergency filter. | Medical/emergency report filters correctly. |
+| D5 | Attendance and movement incidents | **Implemented** | Attendance, gate conflicts, movement concerns. | Incident totals match source records. |
+| D6 | Downloadable PDF and spreadsheet reports | **Partial** | Browser print; KPI CSV only. F-25. | Every report exports CSV/XLSX; PDF consistent. |
+| D7 | Dashboard summaries | **Implemented** | Admin and gate dashboards. | Dashboard totals match reports. |
+| D8 | Selected scheduled reports by email | **Missing** | No report-email task. F-25. | Daily/weekly email delivered to authorised recipients. |
+| D9 | Daily operational summary and weekly report cadence | **Missing** | No scheduler/report subscription. | Schedule runs and is audited. |
+| D10 | Report permissions, filters, dates, totals, exports correct and tested | **Partial / Defective** | Report roles and filters exist; F-20–F-24 show calculation defects. | Report-by-report reconciliation suite. |
+
+## E. Recovery, backups, and continuity
+
+| ID | Requirement | Status | Evidence and gap | Proposed test |
+|---|---|---|---|---|
+| E1 | Target recovery within 24 hours | **Unverified** | No drill evidence; manual local backups. F-26, F-27. | Timed restore drill. |
+| E2 | No data loss where technically achievable; document RPO | **Unverified** | No documented RPO; Neon PITR not evidenced. | RPO stated and measured. |
+| E3 | Backups in cloud and a separate location | **Missing** | Local output only. F-26. | Offsite object exists and restores. |
+| E4 | Eden Sys controls encryption keys under documented controls | **Missing** | Archives are unencrypted; no key custody. F-26. | Encrypted archive; key access audited. |
+| E5 | School and Eden Sys can restore, subject to permissions/audit | **Partial** | CLI restore is audited; no role-based app workflow; live restore refused. F-27. | Authorised operator restores; audit row. |
+| E6 | Test restoration quarterly and document results | **Missing** | No schedule or evidence. | Quarterly drill record. |
+| E7 | Encryption, access, retention, monitoring, procedures, deletion protection | **Partial** | Checksums and audit; no encryption/retention/offsite/monitoring. F-26. | Control checklist and evidence. |
+| E8 | Verify the 24-hour target against actual architecture | **Unverified** | No measurement; Render/Neon plan not validated. F-26, F-27. | Drill measures actual RTO. |
+
+## F. Remote support
+
+| ID | Requirement | Status | Evidence and gap | Proposed test |
+|---|---|---|---|---|
+| F1 | Supervised, time-limited support | **Missing** | CLI token only; no session. F-28. | Session expires; supervisor sees actions. |
+| F2 | Headmaster and ICT administrator approval per session | **Missing** | No approval workflow. | Unapproved session denied. |
+| F3 | Record requester, approvers, personnel, times, scope, actions | **Partial** | CLI audit has operator/reason; no approvers/scope/actions. | Session record is complete. |
+| F4 | Least privilege, revocable, securely authenticated, logged | **Partial** | bcrypt token, TTL, revoke; no application path/scope. | Token scope and revocation tested. |
+| F5 | No hidden support accounts or unrestricted vendor access | **Verified** | No hidden accounts found. | Access review of all staff/superusers. |
+
+## G. Access control, privacy, and record governance
+
+| ID | Requirement | Status | Evidence and gap | Proposed test |
+|---|---|---|---|---|
+| G1 | Role-based access and least privilege | **Implemented, role gaps** | Role decorators and house scoping; no medical/assistant-head role. F-06. | Role matrix across all views. |
+| G2 | Restrict sensitive student/medical/guardian/attendance/movement records | **Implemented, minor exposure** | Role gates and house scoping; gate sees destination/type; free-text actor. F-08. | IDOR and field-level access tests. |
+| G3 | Exports only to authorised users; log bulk exports | **Partial** | Admin ID ZIP, report-role CSV; no export audit. F-30. | Export audit row and denial test. |
+| G4 | Audit approvals, corrections, overrides, admin changes, sensitive actions | **Partial** | Config audit and model fields; no correction/override log; admin bypass. F-08, F-29, F-30. | Immutable audit for each action. |
+| G5 | Formal dispute review for exeats, gate records, attendance | **Missing** | No dispute model/UI. F-30. | Open/review/decide/link correction. |
+| G6 | School confirms data ownership, access, retention | **Policy-dependent** | No written schedule; school/vendor roles undocumented. Decision D1/D8. | Signed data schedule. |
+| G7 | Apply retention periods and secure disposal after policy | **Missing** | No retention/disposal code. F-31. | Dry-run, dual approval, audit. |
+
+## H. Training and handover
+
+| ID | Requirement | Status | Evidence and gap | Proposed test |
+|---|---|---|---|---|
+| H1 | Eden Sys and school ICT jointly support training | **Missing** | No training plan/record. F-35. | Training session and attendance record. |
+| H2 | Short quick-start guides | **Missing** | No role-based guides. F-35. | New user completes task from guide. |
+| H3 | Plain-language user manual | **Partial** | Technical README only. F-35. | Manual reviewed by non-technical staff. |
+| H4 | Short demonstration videos | **Missing** | None. F-35. | Video covers gate/roll call/exeat. |
+| H5 | Documentation covers install, config, roles, operations, backup, restore, troubleshooting, security, deployment, maintenance | **Partial** | Strong technical coverage; gaps in role guides, security ops, and troubleshooting. F-35, F-36. | Documentation checklist review. |
 
 ---
 
-## Deliverable G — Implementation Roadmap
+# 5. Security and production-readiness assessment
 
-No dates are promised; durations are indicative for one experienced full-stack developer with school-staff availability for decisions.
+## 5.1 Confirmed vulnerabilities and integrity defects
 
-### Phase 0 — Verification and decisions (1-2 weeks)
-- Commit or shelve the untracked progression/profession work so the baseline is reproducible (Appendix D).
-- Stand up staging with Postgres/Redis; run the full suite; publish the first CI result (AUD-023).
-- Answer Appendix A with school leadership; write down the early-departure, late-return, and reconciliation policies.
-- **Exit:** green (or explicitly triaged) test suite; signed policy answers; approved P0 scope.
+These are confirmed from the code path. “Vulnerability” is used only where an actor can exploit the behaviour; otherwise the item is an integrity or safety defect.
 
-### Phase 1 — Safety and integrity (2-3 weeks)
-- AUD-003, AUD-002, AUD-001, AUD-006; plus the AUD-015 runbook and first DR drill.
-- Add regression tests T-01–T-05, T-09, T-10, T-19 as part of each fix.
-- **Exit:** P0 tests green; gate and roll-call drills pass on staging; approved sender ID demonstrated.
+| ID | Issue | Type | Why it matters |
+|---|---|---|---|
+| F-01 | Gate lookup returns wrong pass | Safety / integrity | A valid student can be denied movement; wrong record can be actioned. |
+| F-02 | Multiple active exeats | Integrity / policy bypass | Conflicting passes and duplicate notifications. |
+| F-03 | Admin-only reschedule overwrites history | Audit / integrity | No answer to “who changed the schedule and why.” |
+| F-07 | Late return creates no incident | Safeguarding / records | No investigation trail or escalation. |
+| F-08 | Free-text gate actor | Repudiation | Cannot reliably attribute a movement. |
+| F-09 | Duplicate roll calls | Integrity | Split/double attendance. |
+| F-10 | Completed roll call mutation | Authorization bypass / integrity | Historical attendance can change silently. |
+| F-11 | Destructive roll-call expiry | Data loss | Attendance evidence deleted. |
+| F-13 | Dorm overcapacity | Safety / integrity | Overcrowding; inaccurate occupancy. |
+| F-16 | SMS sender misconfiguration | Delivery / compliance | Messages may be sent under an unapproved sender or fail branding/whitelist review. |
+| F-26 | Plaintext local backups | Data protection | Sensitive data at rest; loss on redeploy. |
+| F-27 | No live restore path | Availability | Documented recovery procedure fails. |
+| F-28 | Support token unwired | Access-control claim | No supervised vendor access control in the app. |
+| F-29 | Admin bypass | Insider integrity | Direct edits without reason/audit. |
+| F-32 | Worker/Beat absent | Availability / silent failure | SMS and scheduled jobs do not run. |
 
-### Phase 2 — Reporting, operations, and control (2-3 weeks)
-- AUD-004, AUD-005, AUD-007–AUD-014, AUD-017, AUD-018, AUD-023.
-- Golden-dataset report tests; backup encryption/retention; admin hardening.
-- **Exit:** P1 tests green; reporting reconciliation signed off by the headmaster on paper vs system.
+## 5.2 Security controls verified as present
 
-### Phase 3 — Supervised pilot at Atebubu SHS (3-4 weeks)
-- Deploy to the pilot tenant; train roles using Deliverable C; run all five drills.
-- Weekly review of gate conflicts, roll-call discrepancies, SMS delivery, and support tickets.
-- **Exit:** Deliverable F.6 exit criteria met; go/no-go decision documented.
+These are strengths and should be preserved:
 
-### Phase 4 — Productisation (6-8 weeks, only after pilot sign-off)
-- Guardian/student read-only access decision and implementation (AUD-020), bulk SMS and scheduled reports (AUD-021), accessibility pass (AUD-022).
-- Commercial readiness: pricing/entitlement review, onboarding documentation, multi-tenant operational runbooks, quarterly DR drill cadence.
-- **Exit:** two-school onboarding rehearsed end-to-end on staging with a named support owner.
+- **Production fail-fast settings:** `DJANGO_SECRET_KEY` length/entropy check, `DEBUG=False`, explicit `ALLOWED_HOSTS` outside tenancy, `SECURE_SSL_REDIRECT`, secure session/CSRF cookies, HSTS with validation, `SECURE_CONTENT_TYPE_NOSNIFF`, `SECURE_REFERRER_POLICY`, and `SECURE_PROXY_SSL_HEADER`.
+- **Tenant host validation:** `VerifiedDomainRoutingMiddleware` validates hosts against the `Domain` table; `ALLOWED_HOSTS=["*"]` in tenancy mode is intentional and gated by that middleware.
+- **CSRF:** Django CSRF middleware (or the dynamic tenant-aware replacement), with trusted origins from the environment. No `@csrf_exempt` was found in the audited core paths.
+- **Authorization:** Role decorators, house-scoped querysets (`filter_queryset_by_house`), gate-specific checks, and admin-only ID exports. `download_student_id_export_view` filters by `requested_by`.
+- **IDOR resistance:** Student records, exeats, roll calls, follow-ups, and photos use scoped querysets. The gate role is intentionally school-wide.
+- **Private media:** Student photos are served through authenticated views or an expiring public token; `X-Content-Type-Options` and `X-Robots-Tag` are set.
+- **Upload validation:** Student photo type/size validators; roster import accepts only CSV/XLSX and caps at 10 MB.
+- **No obvious XSS sink:** No `|safe`, `mark_safe`, or autoescape-disabling usage was found in the audited templates/core app. Django autoescaping is the default.
+- **No obvious SQL injection sink:** Core views use the ORM; no user-controlled raw SQL was found. Tenancy schema operations use controlled cursors and quoting.
+- **Safe redirect:** The login flow uses `url_has_allowed_host_and_scheme` for the `next`/referer redirect.
+- **Rate limiting:** Login, public report, and demo-request throttles exist; a shared cache is needed for multi-worker correctness.
+- **Session hygiene:** 30-minute session age, refresh on activity, expire at browser close.
+- **Audit:** `ConfigurationAuditLog` for role, housemaster, term, school identity, and SMS changes; `PlatformAuditLog` for provisioning, backup, restore, and support-token actions.
+- **Health check:** `/healthz` exists and is exempted from tenant resolution.
 
-**Effort guardrail:** none of the P0/P1 fixes require new services or paid tiers; they are code, configuration, tests, and documentation. This preserves the affordability goal for a Ghanaian SHS.
+## 5.3 Recommendations (not confirmed vulnerabilities)
+
+1. **MFA for admin and superuser accounts.** TOTP is sufficient; enforce it before production. The public site already discloses its absence.
+2. **Enforce CSP after a report-only period.** The nonce-based policy is well-formed; collect reports in staging, fix violations, then switch from `Content-Security-Policy-Report-Only` to the enforcing header.
+3. **Add structured logging and error reporting.** Configure `LOGGING` with redaction for phone numbers, message bodies, tokens, and passwords. Add Sentry or an equivalent, plus uptime and queue-depth alerts.
+4. **Run dependency and static analysis in CI.** `pip-audit`, `bandit`/Semgrep, and Dependabot/Renovate. `pip-audit` is not installed locally; no vulnerability scan was performed in this audit.
+5. **Use a shared cache for rate limits.** `LocMemCache` is per-process; configure Redis so limits hold across Gunicorn workers.
+6. **Restrict Django admin.** Limit admin access to named platform administrators; add readonly fields and audited correction paths for exeat/movement.
+7. **Protect backups.** Encrypt, offsite, version, object-lock, and alert on failure; keep keys separate from archives.
+8. **Review superuser and staff accounts.** Remove unused accounts; require named accounts; prohibit shared logins; review quarterly.
+9. **Add a data-processing/ownership schedule.** Define school ownership, vendor access, retention, and deletion in writing (see D1/D8).
+10. **Test the production security settings.** The existing production-settings tests are a good start; add a deployment check in CI.
+
+## 5.4 Policy questions separated from technical defects
+
+The following cannot be fixed by code alone and must not be silently decided:
+
+- Which roles may authorise early departure, emergency override, and after-hours medical movement, and with what limits?
+- What is the escalation sequence and timing for late returns and unresolved roll calls?
+- Which attendance corrections need evidence or a second approver?
+- Who may approve dormitory overcapacity, and what justification is required?
+- What is the approved SMS sender ID, recipient groups, templates, budget, and approval chain?
+- What retention schedule applies to student, medical, disciplinary, attendance, gate, audit, SMS, and backup records?
+- What RPO/RTO is realistic and contractually promised?
+- Who controls encryption keys, who can restore, and how is remote support approved and revoked?
 
 ---
 
-## Deliverable H — Final Product Verdict
+# 6. Prioritized improvement roadmap
 
-### H.1 Ratings (out of 5)
-| Dimension | Rating | Reasoning |
+Effort is expressed as engineering effort, not calendar time: **S** (small, local change and tests), **M** (multi-file change, migration, or workflow), **L** (schema/workflow/operational change with rollout).
+
+## 6.1 P0 — Pilot blockers (fix before real student data or SMS)
+
+| Order | Item | Findings | Effort | Dependency |
+|---:|---|---|---|---|
+| 1 | Add failing regression tests for gate lookup, duplicate roll call, closed-session mutation | F-01, F-09, F-10 | S | Test DB with PostgreSQL |
+| 2 | Gate lookup filtering, ranking, and disambiguation | F-01 | S | Test 1 |
+| 3 | Duplicate roll-call guard and unique constraint | F-09 | S–M | Test 1; migration review |
+| 4 | Block follow-up mutation of completed/expired sessions | F-10 | S | Test 1 |
+| 5 | Resolve and validate SMS sender ID; stop deriving it from the school name | F-16 | S | School confirms sender ID |
+| 6 | Deploy worker + Beat or explicitly disable dependent jobs | F-32 | M | Redis + Render plan decision |
+| 7 | Correct README restore/support claims or implement the claims | F-27, F-28 | S (docs) / L (implementation) | School/vendor decision |
+| 8 | Add a tested restore runbook and one timed drill | F-26, F-27 | M | Staging + backup target |
+
+## 6.2 P1 — Operational correctness and governance (before scale-up)
+
+| Item | Findings | Effort | Dependency |
+|---|---|---|---|
+| One-active-exeat rule (app + DB constraint) | F-02 | M | Policy definition of “active” |
+| Reschedule/early-departure workflow with history | F-03 | M | D2 decision |
+| Emergency override with review | F-04 | M | D2 decision |
+| Late-return incident and configurable escalation | F-07, F-15 | M | D3 decision |
+| Gate-duty roster and temporary assignments | F-05 | M | D2/D8 decision |
+| Medical/infirmary authorization | F-06 | M | D2 decision |
+| Dormitory capacity + senior exception | F-13 | M | D5 decision |
+| Post-closure attendance correction with audit | F-12 | M | D4 decision |
+| Preserve expired roll calls / unresolved queue | F-11 | M | D4 decision |
+| Active-boarder definition consistency | F-14 | S–M | D5 decision |
+| Audit log for exports, corrections, overrides, admin edits | F-08, F-29, F-30 | M | Audit schema |
+| Dispute-review workflow | F-30 | M | D8 decision |
+| Report calculation fixes (turnaround, staff activity, overdue, conduct, welfare) | F-20–F-24 | S–M | None |
+| PDF/XLSX exports and scheduled email reports | F-25 | M | Report infrastructure |
+| Full-suite CI with PostgreSQL/Redis | F-33 | M | CI budget |
+| Accessibility fixes and Android device test | F-34 | S–M | Device access |
+| Retention/disposal policy and implementation | F-31 | L | D1 decision |
+
+## 6.3 P2 — Hardening, usability, and longer-term improvements
+
+| Item | Findings | Effort | Dependency |
+|---|---|---|---|
+| SMS group messaging, templates, cost approval | F-18 | M | D6 decision |
+| Low-credit/failure alerts | F-18 | S–M | Provider API |
+| Encrypted offsite backups with retention | F-26 | M–L | Key custody, cloud budget |
+| Monitoring/alerting and enforced CSP | F-36 | M | Ops access |
+| MFA for admins | F-36 | S | User enrolment |
+| Role model: headmaster, assistant head, medical, bursar/finance | A2, F-06 | M | D2/D8 |
+| Training materials and joint training | F-35 | M | School staff time |
+| Admin correction controls | F-29 | S–M | Audit schema |
+| Rejection reason required | F-37 | S | None |
+| Permission documentation cleanup | F-39 | S | None |
+
+## 6.4 Dependencies and sequencing
+
+1. **Policy first for schema-changing work.** One-active-exeat, reschedule, dormitory exception, late-return incident, correction approval, and retention all need school decisions before migration design.
+2. **Test environment first for verification.** Provision PostgreSQL and Redis in staging; run the full suite and the new regression tests before claiming a fix.
+3. **Worker/Beat before SMS pilot.** Otherwise the SMS fixes cannot be observed end to end.
+4. **Backup/restore before real data.** A pilot with real guardians and medical notes requires a tested offsite restore.
+5. **Training before gate rollout.** Gate staff need the quick start and a supervised drill; the system’s current touch targets and labels should be fixed first.
+
+---
+
+# 7. Test plan
+
+## 7.1 Test levels and environment
+
+| Level | Scope | Environment |
 |---|---|---|
-| Functional coverage | 4.0 | Genuinely broad: lifecycle, exeats, gate, roll call, reports, SMS, tenancy. Missing guardian access and bulk comms are acknowledged gaps, not oversights. |
-| Student safety and gate integrity | 3.0 | Strong concepts (one-click terminal, reconciliation) undermined by wrong-pass lookup (AUD-003) and no approved early-leave path (AUD-004). |
-| Records and reporting accuracy | 3.0 | Broadest in class for this market, but six report defects and mutable roll-call history mean numbers cannot yet be trusted unconditionally. |
-| Reliability and recoverability | 2.5 | Celery retries, checksums and conservative restore are good; no in-place live restore, unencrypted backups, no offline mode. |
-| Security and auditability | 3.5 | Solid baseline and role model; admin bypass, CLI-only support claims, and quiet attendance mutation pull it down. |
-| Usability | 3.5 | Fast workflows; dense 12px/10px typography and no offline gate experience are real operational risks. |
-| Ghanaian SHS suitability | 4.0 | House/dorm model, exeat-with-guardian-SMS, and SMS-first comms match reality; affordability of stack is a strong fit. Only SMS sender correctness and connectivity resilience stand in the way. |
-| Commercial readiness | 2.5 | Multi-tenant plumbing exists and is good; recovery, support process, documentation, and product gaps prevent unattended scale. |
+| Unit | Model validation, report calculations, SMS payload/sender, permission helpers, roll-call service | Local/staging PostgreSQL |
+| Integration | UI → view → service → model, gate/exeat/roll-call workflows, tenant scoping | Staging PostgreSQL + Redis |
+| Authorization | Role × object × action matrix, house scoping, IDOR | Staging with seeded users |
+| Concurrency | Duplicate roll calls, overlapping exeats, room/dorm capacity, SMS quota | PostgreSQL with transactions |
+| Accessibility | Gate, roll call, exeat, reports | Browser + Android device/emulator |
+| Recovery | Backup, offsite restore, live-tenant switch, timed drill | Staging copy, no production data |
+| Deployment | Migrations, worker/Beat, health check, static/media, security headers | Render staging + Neon |
+| Regression | Full suite in CI on every change | CI PostgreSQL + Redis |
 
-### H.2 Verdict statement
-**Conditionally approved for a supervised single-school pilot at Atebubu SHS, subject to closing all P0 items and passing the gate, roll-call, SMS and disaster-recovery drills.** The system should **not** be sold or operated as an unattended multi-school commercial service until the P1 items are closed and the Phase 4 readiness work is done. Nothing found in this audit requires abandoning the architecture; every problem identified is fixable within the existing Django/Celery/Postgres stack by one competent developer with school-side policy decisions.
+**Test data:** synthetic students, guardians, staff, and phone numbers only. Never use real guardian numbers or production data. SMS tests must mock the HTTP client; no real SMS is sent.
 
-### H.3 Conditions for a green light
-1. All P0 backlog items closed with the specified tests passing in CI.
-2. School policy questions in Appendix A answered and written down.
-3. Gate, roll-call, SMS-sandbox and disaster-recovery drills passed and archived.
-4. Reporting reconciliation (headmaster manual count vs system) passed for one full week on staging data.
-5. The untracked working-tree work either committed with passing tests or removed from the deployment baseline.
+## 7.2 Required test cases
 
-### H.4 What would change the verdict to "not suitable"
-- Evidence that the school cannot obtain an approved SMS sender ID; guardian communication is the product's backbone.
-- Discovery during drills that gate staff cannot reliably operate the terminal under real night/network conditions even after accessibility and offline-list fixes.
-- A decision to operate multiple schools before per-tenant restore, backup encryption, and support-access controls exist.
+| ID | Test | Expected result | Covers |
+|---|---|---|---|
+| T-01 | Gate search with old, current, future passes | Current Approved pass selected; disambiguation shown if multiple | F-01 |
+| T-02 | Gate search by exact pass number vs partial number | Exact match wins; partial matches are listed, not auto-selected | F-01 |
+| T-03 | Create second overlapping active exeat | Rejected; sequential pass allowed | F-02 |
+| T-04 | Reschedule an Approved pass | History row with actor, reason, old/new times; gate shows current | F-03 |
+| T-05 | Emergency override without reason | Rejected; with reason creates review item | F-04 |
+| T-06 | Gate action outside duty roster / expired temporary assignment | Denied; valid assignment allowed | F-05 |
+| T-07 | Medical staff approve medical exeat; ordinary pass denied | Scoped permission works | F-06 |
+| T-08 | Return after expected time | One incident, HM notification, no duplicate on repeat save | F-07 |
+| T-09 | Departure/return actor | User FK recorded; display name preserved | F-08 |
+| T-10 | Two sequential/concurrent roll-call creates | One in-progress session | F-09 |
+| T-11 | Resolve follow-up on completed/expired session | Rejected; no entry mutation | F-10 |
+| T-12 | Expire unfinished session | Status retained; entries queryable; unresolved queue visible | F-11 |
+| T-13 | Post-closure correction request and approval | Original + corrected values; audit; unauthorised denied | F-12 |
+| T-14 | Dormitory capacity placement and exception | Blocked without exception; allowed and audited with approval | F-13 |
+| T-15 | Completed student in house list and housing report | Both exclude; registry history retains | F-14 |
+| T-16 | Change roll-call timeout and late-return threshold | Behaviour follows setting; change audited | F-15 |
+| T-17 | SMS sender resolution and validation | Approved sender used; invalid value normalized or rejected; key not logged | F-16 |
+| T-18 | Stale queue row and long message | Stale row released; segments counted | F-17 |
+| T-19 | Failed SMS / low balance | Admin alert generated once | F-18 |
+| T-20 | SMS report reconciliation | Tenant-wide gauge uses quota; filtered deliveries are labelled | F-17 |
+| T-21 | Approval turnaround after later edit | Decision time unchanged; cancellations separated | F-20 |
+| T-22 | Staff activity with admin/tutor actions | All actors appear; decision date used | F-21 |
+| T-23 | Overdue-now vs period filter | Currently overdue student remains visible | F-22 |
+| T-24 | Conduct rate with day/completed student incidents | Same population; rate unchanged | F-23 |
+| T-25 | Welfare report with completed student | Excluded by default; included on history toggle | F-24 |
+| T-26 | Every report CSV/XLSX and scheduled email | Totals match; recipient authorised; audit row | F-25 |
+| T-27 | Backup encryption/offsite/retention | Encrypted object offsite; restore works; expired archives deleted | F-26 |
+| T-28 | Restore live tenant via runbook | Spare schema restore, validation, switch, rollback | F-27 |
+| T-29 | Support access claim | Either no claim or approved/expiring/logged session | F-28 |
+| T-30 | Admin edit of exeat/movement | Audit row with actor, reason, old/new; invalid transition rejected | F-29 |
+| T-31 | Export and dispute audit | Export logged; dispute decision linked to correction | F-30 |
+| T-32 | Retention dry-run and disposal | No deletion in dry-run; dual approval for disposal; audit | F-31 |
+| T-33 | Worker/Beat staging test | SMS drains; reminders run; expiry runs; heartbeat visible | F-32 |
+| T-34 | Full-suite CI and deploy check | All tests pass; no high-severity deploy warnings | F-33 |
+| T-35 | Accessibility and Android tasks | Axe criticals zero; 44px targets; keyboard-only completion | F-34 |
+| T-36 | Training quick start usability | New staff complete tasks without vendor help | F-35 |
+| T-37 | CSP/monitoring/MFA | Enforced header; alert on failure; second factor required | F-36 |
+| T-38 | Rejection without reason | Rejected by form/view | F-37 |
+| T-39 | Progression migration and phase-out | Clean migration; history preserved; full suite passes | F-38 |
 
----
+## 7.3 Authorization matrix tests
 
-## Appendix A — Questions Requiring School Staff Input
+For every role (Admin, Senior Housemaster, Housemaster, House Tutor, Gate Officer, unauthenticated), test:
 
-These are not code questions; the answers change what the correct implementation is. Each should be answered in writing by the headmaster or delegated owner before Phase 1 completes.
+- View, create, edit, approve, reject, cancel, delete on `Exeat`.
+- Departure/return logging and pass search.
+- Roll-call create, mark, complete, correct, resolve follow-up.
+- Student record, photo, ID card, export.
+- Reports and exports.
+- SMS configuration and send.
+- Platform commands (not exposed via HTTP).
 
-1. Who may authorize a student leaving before the scheduled departure time, and by what channel (phone, written note, in person)? Should the system allow it at all, or always require a formal reschedule?
-2. When a pass is rescheduled, should the old time be preserved in history and shown to the gate? For how long?
-3. What is the school's rule when a student returns after the expected time: automatic incident, housemaster discretion, or both? At what delay does escalation occur?
-4. Are gate officers permitted to refuse a departure if the pass exists but the schedule has not started? What is the current unwritten practice?
-5. Should students with multiple active passes exist at all, or is one active pass per student the intended policy?
-6. Who approves medical exeats outside working hours, and how is that captured today?
-7. Does the school use SMS alone to contact guardians, or are phone calls/letters also expected? Should guardians be able to reply?
-8. Is there demand for guardians to submit exeat requests themselves, or would that create more work for staff?
-9. Which staff roles actually man the gate at night and on weekends? Is it always a designated Gate Officer?
-10. What is the expected reporting cadence for the headmaster (daily, weekly, termly) and which five numbers matter most?
-11. Should attendance corrections be allowed after a roll call closes? If yes, who may do it and what evidence must be recorded?
-12. What are the real student supervision expectations during roll call — must every unmarked entry be resolved before the next session starts?
-13. What is the school's capacity rule when dormitories exceed capacity: alert only, or block placement?
-14. Are completed/withdrawn students ever expected to appear on welfare or infirmary lists (e.g., residual medical follow-up)?
-15. How much network downtime does the gate realistically experience in a term, and what do staff do today during outages?
-16. What device will the gate use (tablet, phone, desktop)? Screen size, brightness, and whether staff use reading glasses materially affect the accessibility fix.
-17. What is the acceptable recovery time after data loss (hours), and who owns the data at the school?
-18. Where should backups physically live (on-premises, cloud bucket), and who holds the encryption keys — school or vendor?
-19. What is the school's policy on vendor remote support access: forbidden, supervised, or time-boxed? Who approves and who reviews logs?
-20. What SMS sender ID is approved by the gateway, and who at the school/vendor owns keeping it valid?
-21. Which report definitions does the school already use in its paper records (e.g., "boarder" excludes which statuses)?
-22. Is there an existing conduct/attendance appeal process the system must support with evidence?
-23. Who trains new staff, and how often does staff turnover occur? (Affects usability and documentation priorities.)
-24. Does the school want to send whole-school SMS announcements through this system, and who approves the cost?
-25. What are the data-protection expectations for guardian phone numbers and student records (who may export, who may view)?
+Assertions: allowed actions succeed; denied actions return 403/redirect without leaking existence; house-scoped users cannot access another house's object by ID; a gate officer cannot approve an exeat; a tutor cannot view a student record outside their permitted scope.
 
-## Appendix B — Technical Findings vs Assumptions About School Operations
+## 7.4 Concurrency tests
 
-**Technically verified (code is the evidence):** AUD-001 to AUD-019, AUD-023, AUD-024 and all strengths in A.2.
+- Two simultaneous roll-call creates for the same house/dorm/date/type.
+- Two simultaneous exeat approvals for the same student.
+- Two simultaneous room/dorm placements at the capacity boundary.
+- Two simultaneous SMS sends that would exceed the monthly quota.
+- Backup running while a restore/dry-run is attempted (lock/refusal).
 
-**Assumptions that need school confirmation:** that early departures occur and matter (AUD-004 impact); that guardians depend on SMS and will notice sender identity (AUD-006 severity); that gate connectivity fails often enough to justify offline capability (AUD-021); that the three report definitions the school actually uses match the code (AUD-010 to AUD-014); that admin-only correction is not an accepted practice (AUD-018); that staff will accept a 12px interface (AUD-022); that guardians want a portal (AUD-020).
+## 7.5 Recovery and deployment drills
 
-**Partially verified:** SMS delivery behaviour (code verified, gateway not called); Celery task execution (configuration verified, runtime unobserved); email notifications; the uncommitted progression feature; migration files 0032/0033.
+1. Take a backup of a staging tenant; encrypt and upload offsite.
+2. Restore into a spare schema; run row-count and checksum validation.
+3. Switch a staging tenant to the restored schema; verify login, gate, roll call, and reports.
+4. Measure elapsed time and data loss window; record against RTO/RPO.
+5. Repeat quarterly; keep the signed drill record.
+6. Deploy to Render staging with worker/Beat; verify `/healthz`, SMS queue drain, overdue reminder, roll-call expiry, and static/media.
+7. Run `manage.py check --deploy` and the full suite against the staging database.
 
-## Appendix C — Verification Log (what the audit actually did)
+## 7.6 Test execution status
 
-| Activity | Result |
+| Check | Result |
 |---|---|
-| Repository mapping and file inventory | Complete |
-| Models, views, forms, permissions, admin, services, tasks, settings, middleware review | Complete |
-| Template and UI review (base, gate, exeat, roll-call, reports, registry) | Complete |
-| Tenancy layer review (provisioning, domains, backup, restore, support access, entitlements, platform audit) | Complete |
-| Test suite structure and gap review | Complete; suite not executed |
-| `python manage.py check --settings=schoolsystem.settings.development` | Passed, no issues |
-| External calls, migrations, production data changes, SMS/email sends | None (prohibited) |
-| Source modifications during audit | None; this report is the only file created |
-
-**Test coverage gaps identified for Phase 0:** no test resolves a follow-up against an expired session; no concurrency test for session creation; no gate test with multiple passes for one student; no sender-ID precedence test; no quota staleness test; no report-vs-quota reconciliation test; no admin field-protection test; no performance test; the progression tests are new and unexecuted.
-
-## Appendix D — Baseline Warning: Uncommitted Working Tree
-
-The working tree contains substantial user work beyond `HEAD` (`24afc5c`):
-
-- **Modified (15):** `README.md`, `core/admin.py`, `core/forms.py`, `core/models.py`, `core/services/reports.py`, `core/services/roll_call.py`, `core/services/student_import.py`, `core/tasks.py`, `core/test_student_registry.py`, `core/urls.py`, `core/views.py`, `render.yaml`, `schoolsystem/settings/base.py`, `templates/core/students/record.html`, `templates/core/students/registry.html`
-- **Untracked (5):** `core/migrations/0032_academicyear_students_phased_out_at_and_more.py`, `core/migrations/0033_alter_studentprogressionrecord_from_class_group_and_more.py`, `core/services/student_progression.py`, `core/test_student_progression.py`, `templates/core/students/promotion.html`
-
-Consequences: findings describe this working tree, not a released revision; the progression feature is unexercised; deployment of this tree would carry uncommitted migrations. Phase 0 must commit (with passing tests) or set aside this work before pilot fixes begin, so every finding and fix can be tied to an immutable revision.
+| `python manage.py check --settings=schoolsystem.settings.development` | Passed: no issues |
+| Full Django test suite | Not run: PostgreSQL/Redis not provisioned locally |
+| Live SMS | Not run: no real messages authorised |
+| Live backup/restore | Not run: no staging backup target |
+| Android device test | Not run: no device access |
+| Dependency vulnerability scan | Not run: `pip-audit` not installed |
 
 ---
 
-*End of report. Awaiting review and approval before any implementation begins.*
+# 8. Open decisions for school management
 
+Each decision must be recorded in writing with the approving role. Until then, the related feature must not be treated as approved policy.
 
+## D1. Historical retention vs secure disposal
 
+- **Conflict:** One proposal says archive historical student records indefinitely; another says adopt approved retention periods and secure disposal. These cannot both be the default.
+- **Implications:** Indefinite retention increases privacy, storage, and breach-impact risk. Aggressive disposal can destroy records needed for transcripts, disputes, or legal requests. Backups complicate deletion because old copies persist.
+- **Decision needed:** A written retention schedule by record class (student registry, medical, disciplinary, attendance, gate, exeat, audit, SMS metadata, backups), with retention periods, archive access rules, legal/privacy review, and disposal method. Address backup expiry and legal holds.
+- **Responsible:** Headmaster and school management, with legal/privacy advice; Eden Sys implements.
+- **Recommendation:** Do not dispose of anything until the schedule is approved. Start with a conservative schedule and a read-only archive.
+
+## D2. Emergency authorization
+
+- **Decision needed:** Which roles may authorise emergency departures and after-hours medical movements? What are their limits? Who reviews afterward, and by when?
+- **Options:** (a) Headmaster only; (b) Headmaster, assistant head, and delegated senior housemaster; (c) add medical/infirmary lead for medical cases; (d) any admin with post-hoc review.
+- **Implications:** Broader authority is faster but increases misuse risk; narrower authority may delay urgent medical care.
+- **Responsible:** Headmaster, with input from the Senior Housemaster and medical staff.
+- **Recommendation:** Named roles with scope limits, a required reason, immediate SMS/record, and review within 24 hours. Add a medical-only permission rather than granting full admin rights.
+
+## D3. Late-return escalation
+
+- **Decision needed:** Who is notified, in what order, at what thresholds, and what counts as an incident requiring investigation?
+- **Options:** Guardian + housemaster at expected return; Senior Housemaster after 2 hours; Headmaster after 6–24 hours; police/guardian escalation per school policy.
+- **Implications:** Too many alerts cause fatigue; too few leave a student unaccounted for. Escalation must work without internet at the gate? (The system is online-only, so the process must define a phone fallback.)
+- **Responsible:** Headmaster and Senior Housemaster.
+- **Recommendation:** Start with guardian + housemaster at return time, Senior Housemaster at 2 hours, Headmaster at 6 hours, and a written incident at the first threshold. Make thresholds configurable.
+
+## D4. Sensitive attendance corrections
+
+- **Decision needed:** Which changes require evidence, a second approval, or escalation? Examples: ABSENT↔PRESENT after closure, changing ON_EXEAT to ABSENT, correcting a conduct-linked entry.
+- **Options:** All post-closure changes need a reason; status reversals need a second approver; only the Senior Housemaster can correct a completed session.
+- **Implications:** Strong controls protect records but slow genuine fixes; weak controls invite tampering.
+- **Responsible:** Headmaster and Senior Housemaster.
+- **Recommendation:** Require a reason for every post-closure change; require evidence + Senior Housemaster approval for ABSENT↔PRESENT and conduct-linked changes; keep an append-only correction history.
+
+## D5. Dormitory overcapacity
+
+- **Decision needed:** Which senior role may approve an exception, for how long, and what evidence/justification is required?
+- **Options:** No exceptions; Senior Housemaster; Headmaster; a named crisis team.
+- **Implications:** Strict blocking can leave a student without a bed during an emergency; exceptions can become routine overcrowding.
+- **Responsible:** Headmaster and Senior Housemaster, with health/safety input.
+- **Recommendation:** Block by default; allow a time-bound exception approved by the Headmaster or Senior Housemaster with a written reason and review date; report all exceptions weekly.
+
+## D6. SMS configuration and budget
+
+- **Decision needed:** Approved sender ID, recipient groups, message templates, monthly budget, approval chain, and opt-out/reply handling.
+- **Implications:** An unapproved sender ID may be rejected or spoofed; uncontrolled group messaging can exhaust the budget; message content may include sensitive information.
+- **Responsible:** Headmaster, bursar/finance officer, ICT administrator, and Eden Sys for sender-ID maintenance.
+- **Recommendation:** For the pilot, restrict SMS to guardian/housemaster exeat and late-return events, use a short approved sender ID, set a monthly cap, and require headmaster/bursar approval for group sends. Do not send medical details in SMS.
+
+## D7. Recovery expectations
+
+- **Decision needed:** Confirm the 24-hour RTO, the achievable RPO, who may request a restore, and what downtime is acceptable.
+- **Implications:** A 24-hour RTO with manual local backups is not credible. Neon point-in-time recovery may provide a low RPO, but it must be tested and included in the contract.
+- **Responsible:** Eden Sys and Headmaster/ICT administrator.
+- **Recommendation:** Document the actual RPO/RTO by drill; do not promise 24 hours until a timed restore succeeds. Aim for encrypted offsite backups and a spare-schema restore with a tested switch.
+
+## D8. School/vendor responsibilities and remote support
+
+- **Decision needed:** Who owns the data, who holds encryption keys, who can restore, how remote support is approved and revoked, and what audit records are shared.
+- **Implications:** Unclear ownership creates privacy and accountability gaps; unsupervised vendor access is unacceptable for student data.
+- **Responsible:** Headmaster, ICT administrator, and Eden Sys management.
+- **Recommendation:** A written data-processing/operations schedule: school owns the data; Eden Sys holds keys under split custody; restores require school authorisation; support sessions require headmaster + ICT approval, are time-limited, scoped, logged, and revocable; no shared or hidden accounts.
+
+## Related role-model decision
+
+Confirm how the school maps real roles to the system:
+
+- Is the Headmaster an `ADMIN`, or does the school need a separate Headmaster role?
+- Who is the “assistant headmaster/designated senior administrator”?
+- Which medical/infirmary staff need access, and to what?
+- Who is the bursar/finance approver for SMS spend?
+- Are house tutors expected to view student records, or only conduct roll call and create exeats?
+
+The current role set cannot express all of these without granting broader access than least privilege allows.
+
+---
+
+# 9. Approval checkpoint
+
+## 9.1 Statement of no changes
+
+No source code, model, migration, template, setting, database record, or external service was changed during the audit phase. The only file written during the audit was this report. `manage.py check` was run read-only and passed. No SMS or email was sent. No production data or credentials were accessed.
+
+> **Post-approval update (20 Oct 2026):** Batch 1 was implemented after the approval checkpoint. The statement above describes the audit phase only. See `BATCH1_IMPLEMENTATION.md` for the change log, verification evidence, and residual limitations.
+
+## 9.2 Proposed first safe implementation batch
+
+I propose **Batch 1** as a small, test-first, low-risk change set that does not require a school policy decision and does not change the database schema:
+
+1. **Add regression tests only** for F-01, F-09, and F-10. Run them against a provisioned PostgreSQL test database and confirm they fail for the documented reasons.
+2. **Fix the gate lookup** (F-01): filter actionable statuses, rank exact matches, show a disambiguation list, and add a clear “no current pass” state. No schema change.
+3. **Add the duplicate roll-call guard** (F-09): transactional check and a friendly conflict response. The database unique constraint is deferred to Batch 2 because it needs a migration and a review of any existing duplicates.
+4. **Block follow-up mutation of completed/expired sessions** (F-10): status check and a clear error; no silent `.update()` on closed records.
+5. **Fix SMS sender resolution** (F-16): use the approved tenant sender, validate it, and log the resolved sender without the API key. Unit tests mock the HTTP call; no live SMS.
+6. **Add the core suite to CI** (F-33): PostgreSQL + Redis service, full test run, `manage.py check --deploy`.
+7. **Correct the README** for restore and support access (F-27, F-28), or mark those sections as “not yet available” until the workflows are implemented. This is documentation-only and does not change behaviour.
+
+**Why this batch is safe:** It changes no schema, no student data, no SMS behaviour in production (tests only), and no policy. It fixes the highest-risk gate/attendance defects and makes the test gap visible. Each item has a failing test first.
+
+**Explicitly excluded from Batch 1:** one-active-exeat constraint, reschedule/emergency/medical workflows, late-return incidents, dormitory exceptions, correction approval, audit/dispute schema, retention, group SMS, scheduled reports, backup encryption/offsite, and support-session implementation. These need decisions D1–D8 and larger migrations.
+
+## 9.3 Prerequisites for Batch 1
+
+- A staging PostgreSQL database and Redis instance (not production).
+- Synthetic fixtures for gate, roll call, and SMS tests.
+- Agreement that no real SMS will be sent; the provider call is mocked.
+- A short confirmation that the proposed sender ID is the one Eden Sys will maintain (or that tests should use a placeholder).
+
+## 9.4 Questions for approval
+
+1. Do you approve Batch 1 as scoped above?
+2. Should the README restore/support claims be corrected now, or after the school chooses a support model?
+3. Who will answer D1–D8, and by when? In particular, I need the “active exeat” definition (D2), late-return escalation (D3), and attendance-correction rules (D4) before Batch 2.
+4. Is the pilot expected to send real SMS, or should SMS remain disabled until the sender ID and worker/Beat are confirmed?
+5. Will the pilot use real student/guardian data? If yes, the backup/restore drill (F-26/F-27) must precede it.
+
+I will not modify source code until this checkpoint is approved.
+
+---
+
+# Appendix A — Verification log
+
+## A.1 Inspected
+
+- `core/models.py`, `core/views.py`, `core/forms.py`, `core/admin.py`, `core/permissions.py`, `core/tasks.py`, `core/urls.py`.
+- `core/services/reports.py`, `core/services/roll_call.py`, `core/services/sms.py`, `core/services/student_import.py`, `core/services/student_progression.py`.
+- `tenancy/models.py`, `tenancy/entitlements.py`, `tenancy/middleware.py`, `tenancy/management/commands/tenant_backup.py`, `tenant_restore.py`, `support_access.py`, `provision_school.py`.
+- `schoolsystem/settings/base.py`, `development.py`, `production.py`; `schoolsystem/urls.py`.
+- `templates/base.html`, gate verification/terminal templates, report templates, student registry/record templates.
+- `.github/workflows/tenant-postgres-integration.yml`, `render.yaml`, `Procfile`, `requirements.txt`, `README.md`.
+- Test modules in `core/` and `tenancy/` (inventory and targeted reads; Batch 1 modules executed as recorded in A.2).
+
+## A.2 Executed
+
+| Command | Result |
+|---|---|
+| `python manage.py check --settings=schoolsystem.settings.development` | Passed: no issues |
+| `git status --short` | Only the audit report modified; `HEAD 8c490e0` |
+| `pip-audit --version` | Not installed; no dependency scan run |
+
+## A.3 Not executed
+
+- Full Django test suite (PostgreSQL/Redis not provisioned).
+- Live SMS or email.
+- Live backup/restore or offsite upload.
+- Android/phone accessibility testing.
+- Load, concurrency, or penetration testing.
+- `manage.py check --deploy` against production settings (requires production-like environment variables; do not use real secrets in a local shell).
+
+## A.4 Unverified items
+
+- Android rendering and touch behaviour on the school's actual devices.
+- Real SMSOnlineGH sender-ID acceptance, delivery receipts, and balance API behaviour.
+- Neon point-in-time recovery window and actual restore time.
+- Render free/paid plan behaviour for workers, disk, and sleep.
+- Whether the newly committed progression feature and migrations 0032/0033 are correct.
+- Whether existing production data contains duplicate active exeats, duplicate roll calls, or stale queued SMS rows.
+
+---
+
+# Appendix B — Document history
+
+| Version | Date | Change |
+|---|---|---|
+| 1.0 | 19 Oct 2026 | Initial audit report (earlier structure). |
+| 2.0 | 19 Oct 2026 | Restructured to the current brief; added full A–H traceability, expanded gate/roll-call/SMS/recovery findings, and the approval checkpoint. |
+
+---
+
+*End of report.*

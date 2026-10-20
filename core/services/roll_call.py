@@ -67,6 +67,38 @@ def create_roll_call_session(
         academic_term = AcademicTerm.objects.filter(is_current=True).first()
 
     with transaction.atomic():
+        # Serialize concurrent starts for this house. Locking the house row is
+        # a stable, schema-free guard until the partial unique constraint is
+        # introduced in the next batch.
+        House.objects.select_for_update().get(pk=house.pk)
+
+        existing_sessions = list(
+            RollCallSession.objects.select_for_update()
+            .filter(
+                house=house,
+                dormitory=dormitory,
+                session_type=session_type,
+                date=inspection_date,
+                status=RollCallSession.Status.IN_PROGRESS,
+            )
+            .order_by("created_at")
+        )
+        existing_session = next(
+            (
+                candidate
+                for candidate in existing_sessions
+                if not candidate.is_expired
+            ),
+            None,
+        )
+        if existing_session is not None:
+            # The view uses this transient flag to explain that an already-open
+            # muster was reused instead of implying that a new one was started.
+            existing_session.reused_existing = True
+            return existing_session
+
+        # Expired in-progress sessions are left to the scheduled cleanup task;
+        # they must not block a fresh muster or be silently reused.
         session = RollCallSession.objects.create(
             house=house,
             dormitory=dormitory,
@@ -434,7 +466,22 @@ def resolve_absence_follow_up(
             )
 
     with transaction.atomic():
-        RollCallSession.objects.select_for_update().get(pk=follow_up.entry.session_id)
+        locked_session = RollCallSession.objects.select_for_update().get(
+            pk=follow_up.entry.session_id
+        )
+        # Completed and expired records are immutable in this batch. A separate
+        # audited post-closure correction workflow is required before reopening
+        # either state (F-12 in the audit report).
+        if locked_session.status == RollCallSession.Status.COMPLETED:
+            raise ValueError(
+                "Cannot resolve an absence on a completed roll call session; "
+                "records are locked for audit integrity."
+            )
+        if locked_session.is_expired:
+            raise ValueError(
+                "Cannot resolve an absence on an expired roll call session; "
+                "attendance records are locked for audit integrity."
+            )
         locked_follow_up = (
             RollCallAbsenceFollowUp.objects.select_for_update()
             .select_related("entry__session", "entry__student")

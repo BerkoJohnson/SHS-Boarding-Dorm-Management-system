@@ -1005,7 +1005,7 @@ Quick reference:
 .\.venv\Scripts\python.exe .\manage.py tenant_features --schema=<schema> --list
 .\.venv\Scripts\python.exe .\manage.py support_access --schema=<schema> --status
 .\.venv\Scripts\python.exe .\manage.py tenant_subscription --schema=<schema> --show
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<schema> --dry-run
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=<new-schema> --dry-run
 ```
 
 #### 1. `tenant_list` — school inventory
@@ -1107,10 +1107,14 @@ deliverability) and manages invoice records. `--generate-pdf` uses ReportLab and
 SMS requires **both** the platform `sms_dispatch` entitlement and the school's own SMS switch.
 Monthly SMS quotas count sent messages plus outstanding queued/processing deliveries.
 
-#### 6. `support_access` — time-bound support tokens
+#### 6. `support_access` — time-bound support approval tokens
 
-Generates/verifies/revokes 256-bit support tokens (hashed with bcrypt, cost 12) so an engineer can
-troubleshoot one school. The plaintext is shown once and never stored. **Writes audit records.**
+Generates/verifies/revokes 256-bit support approval tokens (hashed with bcrypt, cost 12). The
+plaintext is shown once and never stored. **Writes audit records.**
+
+> **Current limitation:** this is a CLI-only audit/approval utility. It does **not** create a remote
+> support session or grant access to the application. Do not rely on it as a remote-access mechanism
+> until an application-side support-session workflow is implemented and tested.
 
 | Option | Meaning |
 | :--- | :--- |
@@ -1156,11 +1160,15 @@ Standard tiers referenced in the code: Free/Trial (GH₵0), Starter (GH₵500/te
 Standard (GH₵1,000/term, GH₵0.65/student/mo), Premium (GH₵2,000/term, GH₵0.80/student/mo),
 Pilot (flat GH₵2,500/term), Enterprise (custom). Confirm current pricing with the vendor.
 
-#### 8. `tenant_restore` — verified, non-destructive restore
+#### 8. `tenant_restore` — verified restore into a new schema
 
 Restores a schema from a `tenant_backup` archive. It verifies the SHA-256 checksum and the dump's
 table of contents, refuses reserved/registered/existing schemas and schema-name mismatches, and
 never issues `DROP`, `--clean` or `--if-exists`.
+
+The command therefore restores into a **new, unregistered, empty schema**. It is not an in-place
+live-tenant restore. To recover a live school, restore into a spare schema, verify it, and switch
+the tenant through an approved maintenance procedure; that switch is not performed by this command.
 
 | Option | Meaning |
 | :--- | :--- |
@@ -1173,15 +1181,15 @@ never issues `DROP`, `--clean` or `--if-exists`.
 | `--json`, `--operator NAME` | As above. |
 
 ```powershell
-# Always validate first
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs --dry-run
-# Then restore from the newest archive
-.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs
+# Always validate first against a new, unregistered target
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs_restore_20261020 --dry-run
+# Then restore into that new schema
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --schema=atebubu_shs_restore_20261020
 ```
 
-> **Warning:** restoring overwrites/installs data. Validating with `--dry-run` first is strongly
-> recommended, and restoring into a live school requires authorisation. Existing media files are
-> never overwritten.
+> **Warning:** restoring creates data in the target schema; it does not overwrite an existing
+> schema, and it cannot restore into a registered live school. Validating with `--dry-run` first is
+> strongly recommended. Existing media files are never overwritten.
 
 ### 7.9 Which commands to run when
 
@@ -1191,7 +1199,7 @@ never issues `DROP`, `--clean` or `--if-exists`.
 | **Every code update** | `pip install -r requirements.txt` (or `uv sync`), `migrate`, `collectstatic` (production only), restart services |
 | **New school (multi-school)** | `provision_school`, `add_school_domain` (optional), `runschema createsuperuser`, `set_school_status --activate` |
 | **Recurring operations** | `tenant_list`, `tenant_usage`, `tenant_invoice`, `tenant_backup` |
-| **Suspicious/emergency** | `support_access --generate`, then `--revoke` |
+| **Suspicious/emergency** | Follow the incident process, preserve logs and rotate credentials. `support_access` records a time-bound approval token only; it does not open remote access. |
 
 ---
 
@@ -1630,7 +1638,9 @@ Never paste the password into a script that is committed.
 
 ### 10.3 Restoring
 
-- **Per-school:** `tenant_restore --schema <name> --dry-run` first, then without `--dry-run`.
+- **Per-school:** `tenant_restore --schema <new-unregistered-schema> --dry-run` first, then without
+  `--dry-run`. The command restores into a new schema only; it does not replace a live tenant in
+  place. Verify the spare schema and switch the tenant through an approved maintenance procedure.
 - **Whole database / public schema:** use `pg_restore` into a database. For the public schema in
   multi-school mode this is dangerous — the schema registry (`tenancy_tenant`, `tenancy_domain`) is
   what prevents a hostname resolving to the wrong school.

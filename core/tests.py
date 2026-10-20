@@ -2436,7 +2436,6 @@ class RollCallAndGateTests(TestCase):
             remarks=entry.remarks,
             updated_by=self.user_hm,
         )
-        complete_roll_call_session(session)
         response = self.client.post(
             reverse('core:roll_call_resolve_absence_follow_up', args=[correction.id]),
             {
@@ -2454,6 +2453,10 @@ class RollCallAndGateTests(TestCase):
         self.assertFalse(
             DisciplinaryRecord.objects.filter(roll_call_entry=other_entry).exists()
         )
+
+        complete_roll_call_session(session)
+        session.refresh_from_db()
+        self.assertEqual(session.status, RollCallSession.Status.COMPLETED)
 
     def test_changing_pending_absence_to_authorized_status_resolves_as_excused(self):
         session = create_roll_call_session(
@@ -3266,8 +3269,12 @@ class HouseScopedAccessTests(TestCase):
         self.assertContains(attendance_response, 'Amber House')
         self.assertNotContains(attendance_response, 'Cobalt House')
         self.assertEqual(attendance_response.context['report']['record_count'], 1)
+        # Use a distinct session type: two separate musters on the same day
+        # count as two absences for the report. Starting a duplicate evening
+        # session for the same house/date is now deliberately prevented.
         additional_session = create_roll_call_session(
             house=self.house_a,
+            session_type=RollCallSession.SessionType.MORNING,
             conducted_by=self.hm_a,
         )
         self.session_a.entries.filter(student=self.student_a).update(
