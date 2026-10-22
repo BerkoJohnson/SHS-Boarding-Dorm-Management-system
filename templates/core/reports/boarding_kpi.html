@@ -21,9 +21,17 @@
       {% include "core/reports/partials/report_filter_bar.html" with filter_url_name="core:boarding_kpi" %}
       <div class="ml-auto flex flex-wrap items-center gap-2">
         {% if report_filters_valid %}
-          <a href="{% url 'core:boarding_kpi_export' %}?{{ print_query }}"
+          <a href="{% url 'core:boarding_kpi_export' %}?{{ print_query }}{% if print_query %}&{% endif %}format=csv"
              class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
             Export CSV
+          </a>
+          <a href="{% url 'core:boarding_kpi_export' %}?{{ print_query }}{% if print_query %}&{% endif %}format=xlsx"
+             class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            Export XLSX
+          </a>
+          <a href="{% url 'core:boarding_kpi_export' %}?{{ print_query }}{% if print_query %}&{% endif %}format=pdf"
+             class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+            Export PDF
           </a>
           <a href="{% url 'core:boarding_kpi' %}?print=1{% if print_query %}&{{ print_query }}{% endif %}"
              target="_blank" rel="noopener"

@@ -29,6 +29,26 @@ urlpatterns = [
         views.exeat_reconcile_view,
         name="exeat_reconcile",
     ),
+    path(
+        "exeats/<uuid:pk>/reschedule/",
+        views.exeat_reschedule_view,
+        name="exeat_reschedule",
+    ),
+    path(
+        "exeats/<uuid:pk>/override/",
+        views.exeat_override_view,
+        name="exeat_override",
+    ),
+    path(
+        "exeats/reviews/",
+        views.exeat_review_queue_view,
+        name="exeat_review_queue",
+    ),
+    path(
+        "exeats/reviews/<uuid:review_pk>/",
+        views.exeat_review_decision_view,
+        name="exeat_review_decision",
+    ),
     path("exeats/search-students/", views.student_search_view, name="student_search"),
     path("houses/", views.house_list_view, name="house_list"),
     path("students/", views.student_registry_view, name="student_registry"),
@@ -49,11 +69,6 @@ urlpatterns = [
         "verify/student/<uuid:token>/",
         views.public_student_exeat_view,
         name="public_student_exeat",
-    ),
-    path(
-        "verify/student/<uuid:token>/photo/",
-        views.public_student_photo_view,
-        name="public_student_photo",
     ),
     path(
         "students/<uuid:student_pk>/photo/",
@@ -132,9 +147,64 @@ urlpatterns = [
     path(
         "operations/gate/verify/", views.gate_verify_pass_view, name="gate_verify_pass"
     ),
+    path(
+        "operations/gate-duty/",
+        views.gate_duty_assignments_view,
+        name="gate_duty_assignments",
+    ),
+    path(
+        "operations/gate-duty/<uuid:assignment_pk>/cancel/",
+        views.gate_duty_cancel_view,
+        name="gate_duty_cancel",
+    ),
+    path(
+        "operations/late-returns/",
+        views.late_return_incidents_view,
+        name="late_return_incidents",
+    ),
+    path(
+        "operations/late-returns/<uuid:incident_pk>/",
+        views.late_return_incident_resolve_view,
+        name="late_return_incident_resolve",
+    ),
+    path(
+        "operations/roll-call/corrections/",
+        views.roll_call_corrections_view,
+        name="roll_call_corrections",
+    ),
+    path(
+        "operations/roll-call/entry/<uuid:entry_pk>/correction/",
+        views.roll_call_correction_request_view,
+        name="roll_call_correction_request",
+    ),
+    path(
+        "operations/roll-call/corrections/<uuid:correction_pk>/",
+        views.roll_call_correction_review_view,
+        name="roll_call_correction_review",
+    ),
+    path(
+        "operations/capacity-exceptions/",
+        views.dormitory_capacity_exceptions_view,
+        name="dormitory_capacity_exceptions",
+    ),
+    path(
+        "operations/settings/",
+        views.operational_settings_view,
+        name="operational_settings",
+    ),
+    path("notifications/", views.notifications_view, name="notifications"),
+    path(
+        "notifications/<uuid:notification_pk>/read/",
+        views.notification_read_view,
+        name="notification_read",
+    ),
+    path("disputes/", views.dispute_cases_view, name="dispute_cases"),
+    path("disputes/new/", views.dispute_create_view, name="dispute_create"),
+    path("disputes/<uuid:pk>/", views.dispute_detail_view, name="dispute_detail"),
     path("search/", views.global_search_view, name="global_search"),
     path("reports/", views.reports_dashboard_view, name="reports"),
     path("reports/print/", views.reports_print_view, name="reports_print"),
+    path("reports/export/", views.report_export_view, name="report_export"),
     path("reports/boarding-kpi/", views.boarding_kpi_view, name="boarding_kpi"),
     path(
         "reports/boarding-kpi/export/",

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Dormitory Capacity Exceptions | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <header class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+    <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Housing safeguards</p>
+    <h1 class="mt-1 text-base font-bold text-slate-900">Dormitory capacity exceptions</h1>
+    <p class="mt-1 max-w-3xl text-xs text-slate-500">
+      Capacity is enforced by default. A Headmaster or Senior Housemaster may
+      approve a written, time-bound exception for at most seven days.
+    </p>
+  </header>
+
+  <div class="grid gap-4 lg:grid-cols-5">
+    <form method="post" class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs lg:col-span-2">
+      {% csrf_token %}
+      <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+        <h2 class="text-sm font-bold text-slate-900">Record exception</h2>
+        <p class="mt-1 text-xs text-slate-500">Document the reason and effective period.</p>
+      </div>
+      <div class="space-y-4 p-4">
+        {% include "core/partials/form_fields.html" with form=form %}
+        <button type="submit" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800">
+          Approve exception
+        </button>
+      </div>
+    </form>
+
+    <div class="space-y-4 lg:col-span-3">
+      <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+        <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3"><h2 class="text-sm font-bold text-slate-900">Active now</h2></div>
+        <div class="divide-y divide-slate-100">
+          {% for exception in active_exceptions %}
+          <div class="px-4 py-3 text-xs">
+            <p class="font-semibold text-slate-900">{{ exception.dormitory }} <span class="font-normal text-slate-500">+{{ exception.additional_capacity }} places</span></p>
+            <p class="mt-1 text-[11px] text-slate-500">Until {{ exception.ends_at|date:"d M Y, H:i" }} · approved by {{ exception.approved_by.get_full_name|default:exception.approved_by.username }}</p>
+            <p class="mt-1 text-slate-600">{{ exception.reason }}</p>
+          </div>
+          {% empty %}
+          <p class="px-4 py-8 text-center text-xs text-slate-500">No active exceptions.</p>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+        <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3"><h2 class="text-sm font-bold text-slate-900">Upcoming and recent</h2></div>
+        <div class="divide-y divide-slate-100">
+          {% for exception in upcoming_exceptions %}
+          <div class="px-4 py-3 text-xs">
+            <p class="font-semibold text-slate-900">{{ exception.dormitory }} <span class="font-normal text-slate-500">+{{ exception.additional_capacity }}</span></p>
+            <p class="mt-1 text-[11px] text-slate-500">{{ exception.starts_at|date:"d M Y, H:i" }} – {{ exception.ends_at|date:"d M Y, H:i" }}</p>
+          </div>
+          {% endfor %}
+          {% for exception in recent_exceptions %}
+          <div class="px-4 py-3 text-xs">
+            <p class="font-semibold text-slate-900">{{ exception.dormitory }} <span class="font-normal text-slate-500">+{{ exception.additional_capacity }}</span></p>
+            <p class="mt-1 text-[11px] text-slate-500">{{ exception.starts_at|date:"d M Y, H:i" }} – {{ exception.ends_at|date:"d M Y, H:i" }} · {% if exception.cancelled_at %}cancelled{% elif exception.is_active %}active{% else %}ended{% endif %}</p>
+          </div>
+          {% empty %}
+          <p class="px-4 py-8 text-center text-xs text-slate-500">No capacity exceptions recorded.</p>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}

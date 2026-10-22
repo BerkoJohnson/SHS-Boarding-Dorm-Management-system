@@ -31,6 +31,13 @@
             <span>+ New Exeat</span>
         </a>
         {% endif %}
+        {% if can_approve_exeat %}
+        <a href="{% url 'core:exeat_approvals' %}"
+           class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 transition hover:bg-amber-100">
+            <span>Pending Approvals</span>
+            <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px]">{{ count_pending_approvals }}</span>
+        </a>
+        {% endif %}
     </div>
 
     <!-- SEARCH & FILTER CONTROLS BAR -->

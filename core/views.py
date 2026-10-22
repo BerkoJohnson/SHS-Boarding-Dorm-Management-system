@@ -1,4 +1,3 @@
-import csv
 import json
 import mimetypes
 import uuid
@@ -58,16 +57,36 @@ from .models import (
     RollCallEntry,
     RollCallAbsenceFollowUp,
     RollCallNotification,
+    RollCallCorrection,
     SchoolConfiguration,
     ConfigurationAuditLog,
     StudentIDExport,
     MovementConcernReport,
     DORMITORY_GENDER_BY_STUDENT_GENDER,
+    DormitoryCapacityException,
+    ExeatReview,
+    GateDutyAssignment,
+    LateReturnIncident,
+    OperationalSettings,
+    StaffNotification,
+    DataExportLog,
+    AuditEvent,
+    DisputeCase,
 )
 from .forms import (
     ExeatCreateForm,
     ExeatApprovalForm,
     ExeatReconciliationForm,
+    ExeatRescheduleForm,
+    EmergencyOverrideForm,
+    ExeatReviewDecisionForm,
+    GateDutyAssignmentForm,
+    LateReturnIncidentResolutionForm,
+    RollCallCorrectionRequestForm,
+    DormitoryCapacityExceptionForm,
+    OperationalSettingsForm,
+    DisputeCaseForm,
+    DisputeDecisionForm,
     DisciplinaryRecordForm,
     ReportFilterForm,
     report_uses_period_filters,
@@ -92,6 +111,7 @@ from .permissions import (
     STUDENT_MANAGEMENT_ROLES,
     STUDENT_RECORD_ROLES,
     filter_queryset_by_house,
+    filter_exeats_for_user,
     get_house_scope,
     get_gate_house_scope,
 )
@@ -102,13 +122,43 @@ from .services.roll_call import (
     complete_roll_call_session,
     mark_all_present,
     resolve_absence_follow_up,
-    reconcile_gate_departure_with_roll_calls,
 )
 from .services.sms import enqueue_exeat_event_sms
-from .services.student_import import import_student_roster
+from .services.student_import import (
+    commit_student_roster,
+    validate_student_roster,
+)
 from .services.student_id import make_qr_data_uri
+from .services.exeat_workflow import (
+    approve_with_override,
+    cancel_exeat,
+    decide_exeat_review,
+    reschedule_exeat,
+)
+from .services.gate_movements import record_gate_departure, record_gate_return
+from .services.late_returns import (
+    open_late_return_incident,
+    resolve_late_return_incident,
+)
+from .services.roll_call_corrections import (
+    request_roll_call_correction,
+    review_roll_call_correction,
+)
+from .services.disputes import decide_dispute, open_dispute
+from .services.operational import (
+    active_gate_assignment,
+    gate_duty_enforcement_enabled,
+    get_operational_settings,
+)
+from .services.occupancy import (
+    ACTIVE_ENROLLMENT_STATUSES,
+    active_boarders,
+    active_boarders_for_dormitory,
+    active_boarders_for_house,
+    active_students,
+)
 from .tasks import generate_student_id_export
-from .throttling import client_ip, is_rate_limited
+from .throttling import RateLimitUnavailable, client_ip, is_rate_limited
 
 STUDENT_ID_LAYOUTS = {
     "classic": "Classic",
@@ -122,12 +172,19 @@ class StaffLoginView(auth_views.LoginView):
     redirect_authenticated_user = True
 
     def post(self, request, *args, **kwargs):
-        if is_rate_limited(
-            "login",
-            client_ip(request),
-            settings.LOGIN_RATE_LIMIT,
-            settings.LOGIN_RATE_WINDOW,
-        ):
+        try:
+            rate_limited = is_rate_limited(
+                "login",
+                client_ip(request),
+                settings.LOGIN_RATE_LIMIT,
+                settings.LOGIN_RATE_WINDOW,
+            )
+        except RateLimitUnavailable:
+            return HttpResponse(
+                "Login is temporarily unavailable. Please try again shortly.",
+                status=503,
+            )
+        if rate_limited:
             return HttpResponse(
                 "Too many login attempts. Please wait and try again.",
                 status=429,
@@ -223,13 +280,23 @@ def dashboard_view(request):
     profile = get_user_profile(request.user)
     if profile and profile.role == StaffRole.GATE_OFFICER:
         return redirect("core:gate_security")
+    if profile and profile.role == StaffRole.MEDICAL:
+        return redirect("core:exeat_list")
+    housemaster = getattr(request.user, "housemaster", None)
+    has_dashboard_scope = bool(
+        request.user.is_superuser
+        or (profile and profile.role in ADMIN_ROLES)
+        or (housemaster and housemaster.house_id)
+    )
+    if not has_dashboard_scope:
+        return render(request, "core/access_pending.html")
 
     now = timezone.now()
     house_scope = get_house_scope(request.user)
     active_terms = AcademicTerm.objects.filter(is_current=True)
 
     # 1. Core Boarding & Cohort Metrics
-    students = Student.objects.exclude(status=Student.EnrollmentStatus.COMPLETED)
+    students = active_students()
     dormitories = Dormitory.objects.all()
     if house_scope is not None:
         students = students.filter(house_id=house_scope.pk)
@@ -330,6 +397,12 @@ def dashboard_view(request):
         )
 
     recent_exeats = list(exeats_qs[:5])
+    for exeat in recent_exeats:
+        exeat.user_can_approve_exeat = can_approve_exeat_check(
+            request.user,
+            exeat,
+            profile=profile,
+        )
     total_matching_exeats = max(exeats_qs.count(), len(recent_exeats))
 
     context = {
@@ -398,7 +471,7 @@ def exeat_list_view(request):
         .all()
         .order_by("-created_at")
     )
-    exeats = filter_queryset_by_house(request.user, exeats, "student__house_id")
+    exeats = filter_exeats_for_user(request.user, exeats)
 
     # 1. Text Search Filter
     if query:
@@ -468,16 +541,19 @@ def exeat_list_view(request):
         exeats = exeats.filter(status=status_filter)
 
     houses = House.objects.all().order_by("display_order", "name")
-    house_scope = get_house_scope(request.user)
+    profile = get_user_profile(request.user)
+    # Medical/Infirmary Leads have no house assignment by design. Their exeat
+    # queryset is already limited to medical passes by filter_exeats_for_user(),
+    # so do not call get_house_scope() for them.
+    is_medical = bool(profile and profile.role == StaffRole.MEDICAL)
+    house_scope = None if is_medical else get_house_scope(request.user)
     if house_scope is not None:
         houses = houses.filter(pk=house_scope.pk)
     active_filters_count = sum(1 for v in [exeat_type, status_filter, house_id] if v)
 
     # Quick chip counts (two-step workflow chips in list header). Uses base counts
     # (before text/type/house filters apply) so chips always reflect stable totals.
-    base_qs = filter_queryset_by_house(
-        request.user, Exeat.objects.all(), "student__house_id"
-    )
+    base_qs = filter_exeats_for_user(request.user, Exeat.objects.all())
     count_pending_approvals = get_approvable_pending_for_user(request.user).count()
     count_my_drafts = (
         base_qs.filter(created_by=request.user).count()
@@ -507,6 +583,12 @@ def exeat_list_view(request):
     ).count()
 
     exeats_page, pagination_query = paginate_queryset(exeats, request)
+    for exeat in exeats_page:
+        exeat.user_can_approve_exeat = can_approve_exeat_check(
+            request.user,
+            exeat,
+            profile=profile,
+        )
 
     context = {
         "exeats": exeats_page,
@@ -565,7 +647,12 @@ def exeat_approvals_hub_view(request):
     """
     query = request.GET.get("q", "").strip()
     house_id = request.GET.get("house", "").strip()
-    house_scope = get_house_scope(request.user)
+    profile = get_user_profile(request.user)
+    house_scope = (
+        None
+        if profile and profile.role == StaffRole.MEDICAL
+        else get_house_scope(request.user)
+    )
 
     # Step 1: Start from jurisdiction-scoped PENDING queue (single source of truth)
     exeats = get_approvable_pending_for_user(request.user).select_related(
@@ -638,15 +725,56 @@ def exeat_approvals_hub_view(request):
 def house_list_view(request):
     """Show school-wide residential occupancy and placement oversight to admins."""
     boarding = Student.ResidencyStatus.BOARDING
+    now = timezone.now()
+    active_statuses = ACTIVE_ENROLLMENT_STATUSES
+    active_exceptions = DormitoryCapacityException.objects.filter(
+        cancelled_at__isnull=True,
+        starts_at__lte=now,
+        ends_at__gte=now,
+    )
+    rooms = DormitoryRoom.objects.annotate(
+        boarder_count=Count(
+            "students",
+            filter=Q(
+                students__residency=boarding,
+                students__status__in=active_statuses,
+            ),
+        )
+    )
     house_scope = get_house_scope(request.user)
     dormitories = Dormitory.objects.annotate(
-        boarder_count=Count("boarders", filter=Q(boarders__residency=boarding))
+        boarder_count=Count(
+            "boarders",
+            filter=Q(
+                boarders__residency=boarding,
+                boarders__status__in=active_statuses,
+            ),
+        ),
+        unassigned_room_boarders=Count(
+            "boarders",
+            filter=Q(
+                boarders__residency=boarding,
+                boarders__status__in=active_statuses,
+                boarders__room__isnull=True,
+            ),
+            distinct=True,
+        ),
+    ).prefetch_related(
+        Prefetch("rooms", queryset=rooms),
+        Prefetch(
+            "capacity_exceptions",
+            queryset=active_exceptions,
+            to_attr="active_capacity_exceptions",
+        ),
     )
     houses_qs = (
         House.objects.annotate(
             boarder_count=Count(
                 "students",
-                filter=Q(students__residency=boarding),
+                filter=Q(
+                    students__residency=boarding,
+                    students__status__in=ACTIVE_ENROLLMENT_STATUSES,
+                ),
                 distinct=True,
             )
         )
@@ -662,34 +790,61 @@ def house_list_view(request):
 
     for house in houses:
         house_dormitories = list(house.dormitories.all())
-        house_capacity = sum(dorm.capacity for dorm in house_dormitories)
+        house_normal_capacity = sum(dorm.capacity for dorm in house_dormitories)
+        house_capacity = 0
         housed_boarders = 0
         over_capacity_dormitories = []
         near_capacity_dormitories = []
+        house.attention_items = []
 
         for dorm in house_dormitories:
+            dorm.active_exception_places = sum(
+                exception.additional_capacity
+                for exception in dorm.active_capacity_exceptions
+            )
+            dorm.authorized_capacity = dorm.capacity + dorm.active_exception_places
             dorm.occupancy_rate = (
-                round(dorm.boarder_count / dorm.capacity * 100, 1)
-                if dorm.capacity
+                round(dorm.boarder_count / dorm.authorized_capacity * 100, 1)
+                if dorm.authorized_capacity
                 else 0
             )
-            dorm.remaining_capacity = max(dorm.capacity - dorm.boarder_count, 0)
-            dorm.over_capacity_count = max(dorm.boarder_count - dorm.capacity, 0)
-            dorm.is_over_capacity = dorm.boarder_count > dorm.capacity
+            dorm.remaining_capacity = max(
+                dorm.authorized_capacity - dorm.boarder_count, 0
+            )
+            dorm.over_capacity_count = max(
+                dorm.boarder_count - dorm.authorized_capacity, 0
+            )
+            dorm.is_over_capacity = dorm.boarder_count > dorm.authorized_capacity
+            dorm.uses_capacity_exception = (
+                dorm.active_exception_places > 0
+                and dorm.boarder_count > dorm.capacity
+            )
+            for room in dorm.rooms.all():
+                room.occupancy_rate = (
+                    round(room.boarder_count / room.capacity * 100, 1)
+                    if room.capacity
+                    else 0
+                )
             housed_boarders += dorm.boarder_count
+            house_capacity += dorm.authorized_capacity
+            if dorm.uses_capacity_exception:
+                house.attention_items.append(
+                    f"Using temporary capacity: {dorm.name}"
+                )
             if dorm.is_over_capacity:
                 over_capacity_dormitories.append(dorm.name)
-            elif dorm.capacity and dorm.occupancy_rate >= 90:
+            elif dorm.authorized_capacity and dorm.occupancy_rate >= 90:
                 near_capacity_dormitories.append(dorm.name)
 
+        house.normal_capacity = house_normal_capacity
         house.capacity = house_capacity
+        house.exception_capacity = house_capacity - house_normal_capacity
         house.housed_boarders = housed_boarders
         house.unplaced_boarders = max(house.boarder_count - housed_boarders, 0)
         house.occupancy_rate = (
             round(housed_boarders / house_capacity * 100, 1) if house_capacity else 0
         )
         house.has_housemaster = bool(house.housemasters.all())
-        house.attention_items = []
 
         if not house.has_housemaster:
             house.attention_items.append("No housemaster assigned")
@@ -715,20 +870,30 @@ def house_list_view(request):
             else "Needs attention" if house.attention_items else "Healthy"
         )
 
-    boarders = Student.objects.exclude(
-        status=Student.EnrollmentStatus.COMPLETED
-    ).filter(residency=boarding)
+    boarders = active_boarders()
     capacity_qs = Dormitory.objects.all()
     if house_scope is not None:
         boarders = boarders.filter(house_id=house_scope.pk)
-        unassigned_boarders = boarders.filter(dormitory__isnull=True).count()
+        unassigned_boarders = boarders.filter(
+            Q(dormitory__isnull=True)
+            | ~Q(dormitory__house_id=F("house_id"))
+        ).count()
         capacity_qs = capacity_qs.filter(house_id=house_scope.pk)
     else:
         unassigned_boarders = boarders.filter(
-            Q(house__isnull=True) | Q(dormitory__isnull=True)
+            Q(house__isnull=True)
+            | Q(dormitory__isnull=True)
+            | ~Q(dormitory__house_id=F("house_id"))
         ).count()
     total_boarders = boarders.count()
-    total_capacity = capacity_qs.aggregate(total=Sum("capacity"))["total"] or 0
+    total_normal_capacity = capacity_qs.aggregate(total=Sum("capacity"))["total"] or 0
+    total_exception_capacity = sum(
+        exception.additional_capacity
+        for exception in active_exceptions.filter(
+            dormitory__in=capacity_qs.values("pk")
+        )
+    )
+    total_capacity = total_normal_capacity + total_exception_capacity
     housed_boarders = max(total_boarders - unassigned_boarders, 0)
     overall_occupancy_rate = (
         round(housed_boarders / total_capacity * 100, 1) if total_capacity else 0
@@ -740,6 +905,7 @@ def house_list_view(request):
         "total_boarders": total_boarders,
         "unassigned_boarders": unassigned_boarders,
         "total_capacity": total_capacity,
+        "total_normal_capacity": total_normal_capacity,
         "overall_occupancy_rate": overall_occupancy_rate,
         "attention_houses": attention_houses,
     }
@@ -761,6 +927,7 @@ def student_registry_view(request):
             "room",
             "programme",
             "class_group",
+            "placement",
         )
     }
     students = Student.objects.select_related(
@@ -786,6 +953,23 @@ def student_registry_view(request):
         students = students.filter(gender=filter_values["gender"])
     if filter_values["status"] in Student.EnrollmentStatus.values:
         students = students.filter(status=filter_values["status"])
+    if filter_values["placement"] == "missing_dormitory":
+        students = students.filter(
+            residency=Student.ResidencyStatus.BOARDING,
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
+        ).filter(
+            Q(house__isnull=True)
+            | Q(dormitory__isnull=True)
+            | ~Q(dormitory__house_id=F("house_id"))
+        )
+    elif filter_values["placement"] == "missing_room":
+        students = students.filter(
+            residency=Student.ResidencyStatus.BOARDING,
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
+            room__isnull=True,
+        )
+    else:
+        filter_values["placement"] = ""
 
     relation_filters = {
         "house": ("house_id", House.objects.all()),
@@ -821,6 +1005,10 @@ def student_registry_view(request):
         "gender_choices": Student.Gender.choices,
         "residency_choices": Student.ResidencyStatus.choices,
         "status_choices": Student.EnrollmentStatus.choices,
+        "placement_choices": (
+            ("missing_dormitory", "Missing house or dormitory"),
+            ("missing_room", "Missing room"),
+        ),
         "search_too_short": 0 < len(query) < 2,
         "active_filters_count": sum(bool(value) for value in filter_values.values()),
     }
@@ -1004,15 +1192,63 @@ def student_roster_import_view(request):
     errors = []
     error_count = 0
     imported_count = 0
+    preview = None
+    is_json_request = (
+        request.headers.get("x-requested-with") == "XMLHttpRequest"
+        and "application/json" in request.headers.get("accept", "")
+    )
     if request.method == "POST" and form.is_valid():
-        imported_count, errors = import_student_roster(form.cleaned_data["roster_file"])
+        preview = validate_student_roster(form.cleaned_data["roster_file"])
+        errors = preview.errors
+        if request.POST.get("intent", "import") == "import" and preview.is_valid:
+            imported_count, errors = commit_student_roster(preview)
         error_count = len(errors)
         if imported_count:
             messages.success(
                 request,
                 f"Imported {imported_count} student record(s) successfully.",
             )
+            if is_json_request:
+                return JsonResponse(
+                    {
+                        "success": True,
+                        "imported_count": imported_count,
+                        "redirect_url": reverse("core:student_registry"),
+                    }
+                )
             return redirect("core:student_registry")
+        if is_json_request:
+            return JsonResponse(
+                {
+                    "success": False,
+                    "valid": preview.is_valid and not errors,
+                    "row_count": preview.row_count,
+                    "headers": preview.headers,
+                    "sample_rows": preview.sample_rows,
+                    "errors": errors[:200],
+                    "error_count": error_count,
+                    "omitted_error_count": max(error_count - 200, 0),
+                }
+            )
+    elif request.method == "POST" and is_json_request:
+        errors = [
+            error
+            for field_errors in form.errors.values()
+            for error in field_errors
+        ]
+        return JsonResponse(
+            {
+                "success": False,
+                "valid": False,
+                "row_count": 0,
+                "headers": [],
+                "sample_rows": [],
+                "errors": errors,
+                "error_count": len(errors),
+                "omitted_error_count": 0,
+            },
+            status=400,
+        )
     return render(
         request,
         "core/students/import.html",
@@ -1022,6 +1258,7 @@ def student_roster_import_view(request):
             "error_count": error_count,
             "omitted_error_count": max(error_count - 200, 0),
             "imported_count": imported_count,
+            "preview": preview,
         },
     )
 
@@ -1127,17 +1364,6 @@ def student_photo_view(request, student_pk):
         filter_queryset_by_house(request.user, Student.objects.all(), "house_id"),
         pk=student_pk,
     )
-    if not student.photo:
-        raise Http404("No student photo is available.")
-    return _student_photo_response(student)
-
-
-@never_cache
-@tenant_feature_required("student_id_cards")
-def public_student_photo_view(request, token):
-    student = get_object_or_404(Student, public_token=token)
-    if student.public_token_expired:
-        raise Http404("This student ID link has expired.")
     if not student.photo:
         raise Http404("No student photo is available.")
     return _student_photo_response(student)
@@ -1260,12 +1486,19 @@ def public_student_exeat_view(request, token):
         )
     )
     if request.method == "POST":
-        if is_rate_limited(
-            "public-report",
-            client_ip(request),
-            settings.PUBLIC_REPORT_RATE_LIMIT,
-            settings.PUBLIC_REPORT_RATE_WINDOW,
-        ):
+        try:
+            rate_limited = is_rate_limited(
+                "public-report",
+                client_ip(request),
+                settings.PUBLIC_REPORT_RATE_LIMIT,
+                settings.PUBLIC_REPORT_RATE_WINDOW,
+            )
+        except RateLimitUnavailable:
+            return HttpResponse(
+                "Report submission is temporarily unavailable. Please try again shortly.",
+                status=503,
+            )
+        if rate_limited:
             return HttpResponse(
                 "Too many reports submitted from this device. Please try again later.",
                 status=429,
@@ -1750,7 +1983,7 @@ def exeat_detail_view(request, pk):
     Renders the official details and printable exeat pass slip for a student.
     """
     exeat = get_object_or_404(
-        filter_queryset_by_house(
+        filter_exeats_for_user(
             request.user,
             Exeat.objects.select_related(
                 "student__house",
@@ -1761,9 +1994,9 @@ def exeat_detail_view(request, pk):
                 "movement",
                 "reconciliation",
                 "approved_by",
+                "approved_by_user",
                 "created_by",
             ),
-            "student__house_id",
         ),
         pk=pk,
     )
@@ -1809,7 +2042,7 @@ def exeat_approval_review_view(request, pk):
         rejected we redirect to detail with a friendly info flash.
     """
     exeat = get_object_or_404(
-        filter_queryset_by_house(
+        filter_exeats_for_user(
             request.user,
             Exeat.objects.select_related(
                 "student",
@@ -1820,7 +2053,6 @@ def exeat_approval_review_view(request, pk):
                 "academic_term",
                 "created_by",
             ),
-            "student__house_id",
         ),
         pk=pk,
     )
@@ -1848,6 +2080,16 @@ def exeat_approval_review_view(request, pk):
         )
         return redirect("core:exeat_detail", pk=pk)
 
+    # General emergencies use the override page so the immediate reason and
+    # independent 24-hour review are always created (D2).
+    if exeat.exeat_type == Exeat.ExeatType.EMERGENCY:
+        messages.info(
+            request,
+            "General emergency departures must be authorized through the "
+            "emergency override page.",
+        )
+        return redirect("core:exeat_override", pk=pk)
+
     # 3. Bind / instantiate the Step-2 form.
     if request.method == "POST":
         form = ExeatApprovalForm(
@@ -1858,6 +2100,11 @@ def exeat_approval_review_view(request, pk):
         )
         if form.is_valid():
             reviewed = form.save(commit=False)
+            # Every decision keeps the authenticated actor (F-08). Medical
+            # approvals are attributed by user, not by a fabricated HouseMaster.
+            reviewed.approved_by_user = request.user
+            if getattr(form, "medical_authorizer", False):
+                reviewed.approved_by = None
 
             # Safety net: regardless of the dropdown values submitted, if
             # the current user is a HM with jurisdiction and no authorizer
@@ -1907,7 +2154,12 @@ def exeat_approval_review_view(request, pk):
             signatory = (
                 reviewed.approved_by.full_name
                 if reviewed.approved_by
-                else "Senior Housemaster"
+                else (
+                    reviewed.approved_by_user.get_full_name()
+                    or reviewed.approved_by_user.get_username()
+                    if reviewed.approved_by_user
+                    else "Named authorizer"
+                )
             )
             if reviewed.status == Exeat.Status.APPROVED:
                 movement_msg = (
@@ -1977,12 +2229,11 @@ def exeat_approval_review_view(request, pk):
 @tenant_feature_required("exeat_gate")
 def exeat_reconcile_view(request, pk):
     exeat = get_object_or_404(
-        filter_queryset_by_house(
+        filter_exeats_for_user(
             request.user,
             Exeat.objects.select_related(
                 "student__house", "movement", "reconciliation"
             ),
-            "student__house_id",
         ),
         pk=pk,
     )
@@ -2019,8 +2270,18 @@ def exeat_reconcile_view(request, pk):
         reconciliation.reconciled_by = request.user
         reconciliation.save()
         if reconciliation.outcome == ExeatReconciliation.Outcome.STUDENT_OUT:
+            open_late_return_incident(
+                exeat,
+                detected_at=timezone.now(),
+                source="reconciliation",
+            )
             enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
         elif reconciliation.outcome == ExeatReconciliation.Outcome.RETURNED:
+            open_late_return_incident(
+                exeat,
+                actual_return=reconciliation.actual_return,
+                source="reconciliation",
+            )
             enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
         messages.success(
             request, f"Movement records reconciled for {exeat.exeat_number}."
@@ -2048,10 +2309,9 @@ def exeat_action_view(request, pk, action):
       - 'cancel': Void/cancel pass (scoped to assigned House or Senior Housemaster)
     """
     exeat = get_object_or_404(
-        filter_queryset_by_house(
+        filter_exeats_for_user(
             request.user,
             Exeat.objects.select_related("student__house", "movement"),
-            "student__house_id",
         ),
         pk=pk,
     )
@@ -2082,61 +2342,68 @@ def exeat_action_view(request, pk, action):
                         f"Gate departure for {exeat.exeat_number} is available at "
                         f"{timezone.localtime(exeat.expected_departure).strftime('%d %b %Y, %H:%M')}.",
                     )
-                elif ExeatMovement.objects.filter(
-                    exeat=exeat, actual_departure__isnull=False
-                ).exists():
-                    messages.error(
-                        request,
-                        f"Gate departure is already recorded for {exeat.exeat_number}.",
-                    )
                 else:
-                    movement, _ = ExeatMovement.objects.get_or_create(exeat=exeat)
-                    movement.actual_departure = now
-                    movement.departure_recorded_by = user_name
-                    movement.save()
-                    enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
-                    messages.success(
-                        request,
-                        f"Gate departure recorded for {exeat.student.full_name}.",
-                    )
+                    try:
+                        _, recorded, _ = record_gate_departure(
+                            exeat,
+                            actor=request.user,
+                            recorded_by=user_name,
+                            at=now,
+                        )
+                    except ValueError as error:
+                        messages.error(request, str(error))
+                    else:
+                        if recorded:
+                            enqueue_exeat_event_sms(
+                                exeat, SMSDelivery.EventType.DEPARTURE
+                            )
+                            messages.success(
+                                request,
+                                f"Gate departure recorded for {exeat.student.full_name}.",
+                            )
+                        else:
+                            messages.error(
+                                request,
+                                f"Gate departure is already recorded for {exeat.exeat_number}.",
+                            )
             elif action == "return":
                 if exeat.status != Exeat.Status.APPROVED:
                     messages.error(
                         request, "Cannot record gate return for an unapproved exeat."
                     )
                 else:
-                    reconciliation = ExeatReconciliation.objects.filter(
-                        exeat=exeat,
-                        outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
-                        actual_return__isnull=True,
-                    ).first()
-                    if reconciliation:
-                        reconciliation.actual_return = now
-                        reconciliation.outcome = ExeatReconciliation.Outcome.RETURNED
-                        reconciliation.return_recorded_by = request.user
-                        reconciliation.save()
-                        enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
-                        messages.success(
-                            request,
-                            f"Gate return recorded for {exeat.student.full_name}.",
+                    try:
+                        movement_record, recorded = record_gate_return(
+                            exeat,
+                            actor=request.user,
+                            recorded_by=user_name,
+                            at=now,
                         )
+                    except ValueError as error:
+                        messages.error(request, str(error))
                     else:
-                        movement = ExeatMovement.objects.filter(exeat=exeat).first()
-                        if not movement or not movement.actual_departure:
+                        if movement_record is None:
                             messages.error(
                                 request,
                                 "A return cannot be recorded without a confirmed departure. "
                                 "Use Reconcile Pass if the departure was missed.",
                             )
-                        elif movement.actual_return:
+                        elif not recorded:
                             messages.error(
                                 request,
                                 f"Gate return is already recorded for {exeat.exeat_number}.",
                             )
                         else:
-                            movement.actual_return = now
-                            movement.return_recorded_by = user_name
-                            movement.save()
+                            source = (
+                                "gate reconciliation"
+                                if isinstance(movement_record, ExeatReconciliation)
+                                else "gate movement"
+                            )
+                            open_late_return_incident(
+                                exeat,
+                                actual_return=now,
+                                source=source,
+                            )
                             enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
                             messages.success(
                                 request,
@@ -2172,16 +2439,27 @@ def exeat_action_view(request, pk, action):
                 )
 
             # REJECT — capture a one-off rejection reason from POST if provided, store in approval_remarks
+            # General emergencies cannot be approved with the ordinary quick
+            # action; that would bypass the mandatory reason and 24-hour review.
+            elif action == "approve" and exeat.exeat_type == Exeat.ExeatType.EMERGENCY:
+                messages.info(
+                    request,
+                    "Use the emergency authorization page to approve a general "
+                    "emergency departure.",
+                )
+                return redirect("core:exeat_override", pk=exeat.pk)
+
             elif action == "reject":
                 rejection_reason = (request.POST.get("approval_remarks") or "").strip()
-                if not rejection_reason and not exeat.approval_remarks:
-                    messages.warning(
+                if not rejection_reason:
+                    messages.error(
                         request,
-                        f"Exeat {exeat.exeat_number} was REJECTED. Note: no rejection reason was captured. "
-                        f"Consider adding a reason in approval remarks for the student's records and audit trail.",
+                        "A rejection reason is required so the student and guardian "
+                        "can understand the decision.",
                     )
-                if rejection_reason:
-                    exeat.approval_remarks = rejection_reason
+                    return redirect("core:exeat_detail", pk=exeat.pk)
+                exeat.approval_remarks = rejection_reason
+                exeat.approved_by_user = request.user
                 exeat.status = Exeat.Status.REJECTED
                 exeat.save()
                 enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.REJECTED)
@@ -2214,6 +2492,9 @@ def exeat_action_view(request, pk, action):
                         # Jurisdiction OK — stamp current user as the signatory
                         exeat.approved_by = current_hm
 
+                # Keep an authenticated actor on every decision, including
+                # when a Housemaster profile is also recorded (F-08).
+                exeat.approved_by_user = request.user
                 exeat.status = Exeat.Status.APPROVED
                 # Note: Exeat.clean() + Exeat.save() both run full_clean so
                 # approved_by-is-set, jurisdiction, and one-active-pass rules
@@ -2245,26 +2526,11 @@ def exeat_action_view(request, pk, action):
                 )
 
             elif action == "cancel":
-                movement = ExeatMovement.objects.filter(exeat=exeat).first()
-                if exeat.status not in (Exeat.Status.PENDING, Exeat.Status.APPROVED):
-                    messages.error(
-                        request,
-                        f"Exeat pass {exeat.exeat_number} cannot be cancelled because it is "
-                        f"{exeat.get_status_display().lower()}.",
-                    )
-                elif ExeatReconciliation.objects.filter(exeat=exeat).exists():
-                    messages.error(
-                        request, "A reconciled exeat pass cannot be cancelled."
-                    )
-                elif movement and movement.actual_departure:
-                    messages.error(
-                        request,
-                        f"Exeat pass {exeat.exeat_number} cannot be cancelled after gate departure has been recorded.",
-                    )
+                try:
+                    cancel_exeat(exeat, actor=request.user)
+                except ValueError as error:
+                    messages.error(request, str(error))
                 else:
-                    # Pending and approved passes may be cancelled before departure.
-                    exeat.status = Exeat.Status.CANCELLED
-                    exeat.save()
                     messages.info(
                         request,
                         f"Exeat pass {exeat.exeat_number} was cancelled and voided.",
@@ -2328,17 +2594,24 @@ def global_search_view(request):
                 "total_results": 0,
             },
         )
-    house_scope = get_house_scope(request.user)
+    profile = get_user_profile(request.user)
+    role = profile.role if profile else None
+    is_medical = role == StaffRole.MEDICAL
+    house_scope = None if is_medical else get_house_scope(request.user)
 
-    # 1. Search Students
+    # 1. Search Students. The medical role is deliberately scoped to medical
+    # exeats and must not search the student registry.
     student_results = Student.objects.filter(
         Q(full_name__icontains=query)
         | Q(admission_no__icontains=query)
         | Q(index_number__icontains=query)
     ).select_related("house", "dormitory", "programme")
-    student_results = filter_queryset_by_house(
-        request.user, student_results, "house_id"
-    )
+    if is_medical:
+        student_results = student_results.none()
+    else:
+        student_results = filter_queryset_by_house(
+            request.user, student_results, "house_id"
+        )
     students = list(student_results[:5])
 
     # 2. Search Exeat Passes
@@ -2348,13 +2621,8 @@ def global_search_view(request):
         | Q(student__full_name__icontains=query)
         | Q(student__admission_no__icontains=query)
     ).select_related("student", "student__house", "movement")
-    exeat_results = filter_queryset_by_house(
-        request.user, exeat_results, "student__house_id"
-    )
+    exeat_results = filter_exeats_for_user(request.user, exeat_results)
     exeats = list(exeat_results[:5])
-
-    profile = get_user_profile(request.user)
-    role = profile.role if profile else None
     is_super = request.user.is_superuser
 
     # 3. Search Houses & Dormitories (Restricted to administration roles)
@@ -2874,22 +3142,30 @@ def gate_security_view(request):
         ):
             gate_operations_are_personal = True
             officer_name = request.user.get_full_name() or request.user.username
+            # Prefer the authenticated account. Keep the snapshot name as a
+            # fallback for movements recorded before the account fields existed.
+            departure_actor = Q(departure_recorded_by_user=request.user) | Q(
+                departure_recorded_by=officer_name
+            )
+            return_actor = Q(return_recorded_by_user=request.user) | Q(
+                return_recorded_by=officer_name
+            )
             academic_year_departures = ExeatMovement.objects.filter(
+                departure_actor,
                 actual_departure__date__range=academic_year_range,
-                departure_recorded_by=officer_name,
             ).count()
             academic_year_returns = ExeatMovement.objects.filter(
+                return_actor,
                 actual_return__date__range=academic_year_range,
-                return_recorded_by=officer_name,
             ).count()
             academic_year_movements = ExeatMovement.objects.filter(
                 Q(
+                    departure_actor,
                     actual_departure__date__range=academic_year_range,
-                    departure_recorded_by=officer_name,
                 )
                 | Q(
+                    return_actor,
                     actual_return__date__range=academic_year_range,
-                    return_recorded_by=officer_name,
                 )
             )
         else:
@@ -3402,7 +3678,9 @@ def gate_terminal_action_view(request, exeat_pk, action):
     if not can_log_gate_check(request.user):
         messages.error(
             request,
-            "Permission denied: Only authorized Gate Officers and administrators can log gate movements.",
+            "Permission denied: Only authorized Gate Officers and administrators "
+            "can log gate movements. If gate-duty enforcement is enabled, your "
+            "account needs a current shift assignment.",
         )
         return redirect("core:gate_security")
 
@@ -3411,6 +3689,7 @@ def gate_terminal_action_view(request, exeat_pk, action):
         Exeat.objects.select_related("student", "movement"), pk=exeat_pk
     )
     officer_name = request.user.get_full_name() or request.user.username
+    now = timezone.now()
 
     if action == "departure":
         if exeat.status != Exeat.Status.APPROVED:
@@ -3419,66 +3698,70 @@ def gate_terminal_action_view(request, exeat_pk, action):
             )
         elif ExeatReconciliation.objects.filter(exeat=exeat).exists():
             messages.error(request, "This pass has already been reconciled.")
-        elif timezone.now() < exeat.expected_departure:
+        elif now < exeat.expected_departure:
             messages.error(
                 request,
-                "Gate departure cannot be logged before the scheduled departure time.",
+                "Gate departure cannot be logged before the scheduled departure "
+                "time. Reschedule the pass through the exeat workflow if an early "
+                "departure has been authorized.",
             )
         else:
-            movement, _ = ExeatMovement.objects.get_or_create(exeat=exeat)
-            if movement.actual_departure:
-                messages.error(request, "Gate departure is already recorded.")
-            else:
-                movement.actual_departure = timezone.now()
-                movement.departure_recorded_by = officer_name
-                with transaction.atomic():
-                    movement.save()
-                    reconciled_count = reconcile_gate_departure_with_roll_calls(
-                        exeat,
-                        movement,
-                    )
-                enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
-                message = (
-                    f"Gate EXIT logged for {exeat.student.full_name} "
-                    f"({exeat.exeat_number})."
+            try:
+                _, recorded, reconciled_count = record_gate_departure(
+                    exeat,
+                    actor=request.user,
+                    recorded_by=officer_name,
+                    at=now,
+                    reconcile_roll_calls=True,
                 )
-                if reconciled_count:
-                    message += (
-                        f" {reconciled_count} unmarked roll-call entry/entries "
-                        "were automatically marked On Exeat."
+            except ValueError as error:
+                messages.error(request, str(error))
+            else:
+                if not recorded:
+                    messages.error(request, "Gate departure is already recorded.")
+                else:
+                    enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.DEPARTURE)
+                    message = (
+                        f"Gate EXIT logged for {exeat.student.full_name} "
+                        f"({exeat.exeat_number})."
                     )
-                messages.success(request, message)
+                    if reconciled_count:
+                        message += (
+                            f" {reconciled_count} unmarked roll-call entry/entries "
+                            "were automatically marked On Exeat."
+                        )
+                    messages.success(request, message)
     elif action == "return":
         if exeat.status != Exeat.Status.APPROVED:
             messages.error(request, "Only approved exeats can have gate return logged.")
         else:
-            reconciliation = ExeatReconciliation.objects.filter(
-                exeat=exeat,
-                outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
-                actual_return__isnull=True,
-            ).first()
-            if reconciliation:
-                reconciliation.actual_return = timezone.now()
-                reconciliation.outcome = ExeatReconciliation.Outcome.RETURNED
-                reconciliation.return_recorded_by = request.user
-                reconciliation.save()
-                enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
-                messages.success(
-                    request,
-                    f"Gate RETURN recorded for {exeat.student.full_name} ({exeat.exeat_number}).",
+            try:
+                movement_record, recorded = record_gate_return(
+                    exeat,
+                    actor=request.user,
+                    recorded_by=officer_name,
+                    at=now,
                 )
+            except ValueError as error:
+                messages.error(request, str(error))
             else:
-                movement = ExeatMovement.objects.filter(exeat=exeat).first()
-                if not movement or not movement.actual_departure:
+                if movement_record is None:
                     messages.error(
                         request, "Cannot record a return without a confirmed departure."
                     )
-                elif movement.actual_return:
+                elif not recorded:
                     messages.error(request, "Gate return is already recorded.")
                 else:
-                    movement.actual_return = timezone.now()
-                    movement.return_recorded_by = officer_name
-                    movement.save()
+                    source = (
+                        "gate reconciliation"
+                        if isinstance(movement_record, ExeatReconciliation)
+                        else "gate movement"
+                    )
+                    open_late_return_incident(
+                        exeat,
+                        actual_return=now,
+                        source=source,
+                    )
                     enqueue_exeat_event_sms(exeat, SMSDelivery.EventType.RETURN)
                     messages.success(
                         request,
@@ -3659,12 +3942,54 @@ def _reports_context(request, paginate=True):
     }
 
 
-def _csv_safe_value(value):
-    if isinstance(value, str) and value.lstrip(" \t\r\n").startswith(
-        ("=", "+", "-", "@")
-    ):
-        return f"'{value}"
-    return value
+@login_required
+@role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
+def report_export_view(request):
+    """Export any authorized detailed report as CSV, XLSX, or PDF (F-25/F-30)."""
+    from core.services.report_export import export_report_response
+    from core.services.reports import get_detailed_report
+
+    house_scope = get_house_scope(request.user)
+    filter_data = request.GET.copy()
+    filter_data.pop("format", None)
+    filter_data.pop("print", None)
+    _drop_pagination_params(filter_data)
+    if not filter_data.get("report"):
+        filter_data["report"] = "housing"
+    report_filters = ReportFilterForm(filter_data)
+    if not report_filters.is_valid():
+        return HttpResponseBadRequest(
+            "Invalid report filters. Return to Reports & Stats and correct the "
+            "selected values."
+        )
+    cleaned_data = report_filters.cleaned_data
+    term = cleaned_data.get("term")
+    report_type = cleaned_data.get("report") or "housing"
+    report = get_detailed_report(
+        report_type=report_type,
+        house_id=house_scope.pk if house_scope is not None else None,
+        date_from=cleaned_data.get("date_from"),
+        date_to=cleaned_data.get("date_to"),
+        term_id=term.pk if term else None,
+    )
+    report["record_count"] = len(report["rows"])
+    try:
+        return export_report_response(
+            report,
+            file_format=request.GET.get("format", "csv"),
+            actor=request.user,
+            filters={
+                "report": report_type,
+                "scope": house_scope.name if house_scope else "School-wide",
+                "academic_term": str(term) if term else "All terms",
+                "date_from": cleaned_data.get("date_from"),
+                "date_to": cleaned_data.get("date_to"),
+            },
+            purpose=request.GET.get("purpose", ""),
+        )
+    except ValueError as error:
+        return HttpResponseBadRequest(str(error))
 
 
 @login_required
@@ -3739,7 +4064,7 @@ def boarding_kpi_view(request):
 @role_required(*REPORT_ROLES)
 @tenant_feature_required("advanced_reports")
 def boarding_kpi_export_view(request):
-    """Export the filtered boarding KPI pack as a CSV file."""
+    """Export the filtered boarding KPI pack as CSV, XLSX, or PDF."""
     from core.services.reports import get_boarding_kpi_pack
 
     house_scope = get_house_scope(request.user)
@@ -3763,29 +4088,25 @@ def boarding_kpi_export_view(request):
         date_to=cleaned_data.get("date_to"),
     )
 
-    response = HttpResponse(content_type="text/csv; charset=utf-8")
-    response["Content-Disposition"] = 'attachment; filename="boarding-kpi-pack.csv"'
-    writer = csv.writer(response)
+    from core.services.report_export import export_report_response
 
-    def write_row(values):
-        writer.writerow([_csv_safe_value(value) for value in values])
-
-    write_row(["Boarding Termly KPI Pack"])
-    write_row(["Scope", house_scope.name if house_scope else "School-wide"])
-    write_row(["Academic term", str(term) if term else "All terms"])
-    write_row(["From", cleaned_data.get("date_from") or ""])
-    write_row(["To", cleaned_data.get("date_to") or ""])
-    writer.writerow([])
-    write_row(["Metric", "Value"])
-    for label, value, _tone in report["kpi_tiles"]:
-        write_row([label, value])
-    for section in report["sections"]:
-        writer.writerow([])
-        write_row([section["title"]])
-        write_row(section["headers"])
-        for row in section["rows"]:
-            write_row(row)
-    return response
+    report["title"] = "Boarding Termly KPI Pack"
+    try:
+        return export_report_response(
+            report,
+            file_format=request.GET.get("format", "csv"),
+            actor=request.user,
+            filters={
+                "report": "boarding_kpi",
+                "scope": house_scope.name if house_scope else "School-wide",
+                "academic_term": str(term) if term else "All terms",
+                "date_from": cleaned_data.get("date_from"),
+                "date_to": cleaned_data.get("date_to"),
+            },
+            purpose=request.GET.get("purpose", ""),
+        )
+    except ValueError as error:
+        return HttpResponseBadRequest(str(error))
 
 
 @login_required
@@ -3999,10 +4320,14 @@ def set_active_term_view(request, term_id):
     """
     HTMX endpoint to toggle the active academic term.
     """
-    from core.services.configuration import set_active_term
+    from core.services.configuration import (
+        lock_academic_term_updates,
+        set_active_term,
+    )
 
     try:
         with transaction.atomic():
+            lock_academic_term_updates()
             term = (
                 AcademicTerm.objects.select_for_update()
                 .select_related("academic_year")
@@ -4157,3 +4482,723 @@ def download_student_id_export_view(request, export_id):
     response["Content-Type"] = "application/zip"
     response["Content-Disposition"] = f'attachment; filename="{export.archive_name}"'
     return response
+
+
+# ---------------------------------------------------------------------------
+# Full P1 operational workflows
+# ---------------------------------------------------------------------------
+
+
+@login_required
+@role_required(*EXEAT_APPROVAL_ROLES)
+@require_http_methods(["GET", "POST"])
+@tenant_feature_required("exeat_gate")
+def exeat_reschedule_view(request, pk):
+    """Change an approved/pending pass's travel window with an audit trail."""
+    exeat = get_object_or_404(
+        filter_exeats_for_user(
+            request.user,
+            Exeat.objects.select_related("student__house", "movement"),
+        ),
+        pk=pk,
+    )
+    if not can_approve_exeat_check(request.user, exeat):
+        return HttpResponseForbidden(
+            "You do not have jurisdiction to reschedule this pass."
+        )
+    if exeat.status not in (Exeat.Status.PENDING, Exeat.Status.APPROVED):
+        messages.error(
+            request,
+            "Only pending or approved passes can be rescheduled.",
+        )
+        return redirect("core:exeat_detail", pk=exeat.pk)
+    form = ExeatRescheduleForm(
+        request.POST or None,
+        exeat=exeat,
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            reschedule_exeat(
+                exeat,
+                new_departure=form.cleaned_data["expected_departure"],
+                new_return=form.cleaned_data["expected_return"],
+                reason=form.cleaned_data["reason"],
+                actor=request.user,
+            )
+        except (ValueError, ValidationError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(
+                request,
+                f"Schedule updated for {exeat.exeat_number}. The previous "
+                "window is preserved in the schedule-change history.",
+            )
+            return redirect("core:exeat_detail", pk=exeat.pk)
+    return render(
+        request,
+        "core/exeats/reschedule.html",
+        {"exeat": exeat, "form": form},
+    )
+
+
+@login_required
+@role_required(*EXEAT_APPROVAL_ROLES)
+@require_http_methods(["GET", "POST"])
+@tenant_feature_required("exeat_gate")
+def exeat_override_view(request, pk):
+    """Approve a pending pass through the emergency/medical override path."""
+    exeat = get_object_or_404(
+        filter_exeats_for_user(
+            request.user,
+            Exeat.objects.select_related("student__house"),
+        ),
+        pk=pk,
+    )
+    if not can_approve_exeat_check(request.user, exeat):
+        return HttpResponseForbidden(
+            "You do not have jurisdiction to authorize this pass."
+        )
+    if exeat.status != Exeat.Status.PENDING:
+        messages.info(request, "Only pending passes can use an override.")
+        return redirect("core:exeat_detail", pk=exeat.pk)
+    form = EmergencyOverrideForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            _, review = approve_with_override(
+                exeat,
+                actor=request.user,
+                reason=form.cleaned_data["reason"],
+            )
+        except (ValueError, ValidationError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(
+                request,
+                f"{exeat.exeat_number} was approved through the override path. "
+                f"A review is due by {timezone.localtime(review.due_at):%d %b %Y, %H:%M}.",
+            )
+            return redirect("core:exeat_detail", pk=exeat.pk)
+    return render(
+        request,
+        "core/exeats/override.html",
+        {"exeat": exeat, "form": form},
+    )
+
+
+@login_required
+@role_required(StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)
+def exeat_review_queue_view(request):
+    """Show pending emergency/medical reviews and recent decisions."""
+    pending = (
+        ExeatReview.objects.filter(status=ExeatReview.Status.PENDING)
+        .select_related(
+            "exeat",
+            "exeat__student",
+            "exeat__student__house",
+            "authorized_by",
+        )
+        .order_by("due_at")
+    )
+    recent = (
+        ExeatReview.objects.exclude(status=ExeatReview.Status.PENDING)
+        .select_related("exeat", "exeat__student", "reviewed_by")
+        .order_by("-reviewed_at")[:20]
+    )
+    return render(
+        request,
+        "core/exeats/reviews.html",
+        {
+            "pending_reviews": pending,
+            "recent_reviews": recent,
+            "overdue_count": sum(review.is_overdue for review in pending),
+        },
+    )
+
+
+@login_required
+@role_required(StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)
+@require_http_methods(["GET", "POST"])
+def exeat_review_decision_view(request, review_pk):
+    """Record the independent post-hoc decision on an emergency/medical review."""
+    review = get_object_or_404(
+        ExeatReview.objects.select_related(
+            "exeat",
+            "exeat__student",
+            "authorized_by",
+            "reviewed_by",
+        ),
+        pk=review_pk,
+    )
+    form = ExeatReviewDecisionForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            decide_exeat_review(
+                review,
+                reviewer=request.user,
+                outcome=form.cleaned_data["outcome"],
+                notes=form.cleaned_data["review_notes"],
+            )
+        except (ValueError, ValidationError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, "The exeat review has been recorded.")
+            return redirect("core:exeat_review_queue")
+    return render(
+        request,
+        "core/exeats/review_decision.html",
+        {"review": review, "form": form},
+    )
+
+
+@login_required
+@role_required(StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)
+@require_http_methods(["GET", "POST"])
+def gate_duty_assignments_view(request):
+    """Manage time-bound gate shifts and temporary cover."""
+    form = GateDutyAssignmentForm(request.POST or None)
+    # The model requires an approver before it can pass full_clean(), which the
+    # ModelForm runs during is_valid(). Set it before validation, not after.
+    form.instance.approved_by = request.user
+    if request.method == "POST" and form.is_valid():
+        assignment = form.save(commit=False)
+        assignment.approved_by = request.user
+        try:
+            assignment.save()
+        except ValidationError as error:
+            form.add_error(None, error)
+        else:
+            AuditEvent.record(
+                actor=request.user,
+                action=AuditEvent.Action.GATE_DUTY_CHANGED,
+                target_type="GateDutyAssignment",
+                target_id=assignment.pk,
+                summary=(
+                    f"Gate duty for {assignment.user} at {assignment.gate_name} "
+                    f"from {assignment.starts_at} to {assignment.ends_at}"
+                ),
+            )
+            messages.success(request, "Gate duty assignment created.")
+            return redirect("core:gate_duty_assignments")
+    assignments = (
+        GateDutyAssignment.objects.select_related("user", "approved_by")
+        .order_by("-starts_at")[:100]
+    )
+    return render(
+        request,
+        "core/operations/gate_duty.html",
+        {
+            "form": form,
+            "assignments": assignments,
+            "enforcement_enabled": gate_duty_enforcement_enabled(),
+            "active_assignments": [
+                assignment
+                for assignment in assignments
+                if assignment.is_active_at()
+            ],
+        },
+    )
+
+
+@login_required
+@role_required(StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)
+@require_POST
+def gate_duty_cancel_view(request, assignment_pk):
+    assignment = get_object_or_404(GateDutyAssignment, pk=assignment_pk)
+    assignment.cancelled_at = timezone.now()
+    assignment.cancelled_by = request.user
+    assignment.save()
+    AuditEvent.record(
+        actor=request.user,
+        action=AuditEvent.Action.GATE_DUTY_CHANGED,
+        target_type="GateDutyAssignment",
+        target_id=assignment.pk,
+        summary=f"Cancelled gate duty for {assignment.user}",
+    )
+    messages.info(request, "Gate duty assignment cancelled.")
+    return redirect("core:gate_duty_assignments")
+
+
+@login_required
+@role_required(StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER, StaffRole.HOUSEMASTER)
+def late_return_incidents_view(request):
+    """Review late-return incidents and record investigation outcomes."""
+    incidents = LateReturnIncident.objects.select_related(
+        "student",
+        "student__house",
+        "exeat",
+        "owner",
+        "resolved_by",
+    )
+    incidents = filter_queryset_by_house(
+        request.user,
+        incidents,
+        "student__house_id",
+    )
+    open_count = incidents.filter(
+        status__in=(
+            LateReturnIncident.Status.OPEN,
+            LateReturnIncident.Status.INVESTIGATING,
+        )
+    ).count()
+    status_filter = request.GET.get("status", "open").strip()
+    if status_filter == "open":
+        incidents = incidents.filter(
+            status__in=(
+                LateReturnIncident.Status.OPEN,
+                LateReturnIncident.Status.INVESTIGATING,
+            )
+        )
+    elif status_filter:
+        incidents = incidents.filter(status=status_filter)
+    return render(
+        request,
+        "core/operations/late_returns.html",
+        {
+            "incidents": incidents.order_by("-detected_at")[:200],
+            "status_filter": status_filter,
+            "open_count": open_count,
+        },
+    )
+
+
+@login_required
+@role_required(StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER, StaffRole.HOUSEMASTER)
+@require_http_methods(["GET", "POST"])
+def late_return_incident_resolve_view(request, incident_pk):
+    incident = get_object_or_404(
+        filter_queryset_by_house(
+            request.user,
+            LateReturnIncident.objects.select_related("student", "exeat"),
+            "student__house_id",
+        ),
+        pk=incident_pk,
+    )
+    form = LateReturnIncidentResolutionForm(
+        request.POST or None,
+        instance=incident,
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            resolve_late_return_incident(
+                incident,
+                actor=request.user,
+                resolution=form.cleaned_data["resolution"],
+                status=form.cleaned_data["status"],
+            )
+        except (ValueError, ValidationError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, "Late-return investigation updated.")
+            return redirect("core:late_return_incidents")
+    return render(
+        request,
+        "core/operations/late_return_resolve.html",
+        {"incident": incident, "form": form},
+    )
+
+
+@login_required
+@role_required(*ROLL_CALL_ROLES)
+@require_http_methods(["GET", "POST"])
+def roll_call_correction_request_view(request, entry_pk):
+    entry = get_object_or_404(
+        filter_queryset_by_house(
+            request.user,
+            RollCallEntry.objects.select_related(
+                "session",
+                "student",
+                "student__house",
+            ),
+            "session__house_id",
+        ),
+        pk=entry_pk,
+    )
+    if entry.session.status not in (
+        RollCallSession.Status.COMPLETED,
+        RollCallSession.Status.EXPIRED,
+    ):
+        messages.error(
+            request,
+            "Use the normal attendance controls while this roll call is open.",
+        )
+        return redirect("core:roll_call_sessions")
+    form = RollCallCorrectionRequestForm(
+        request.POST or None,
+        entry=entry,
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            request_roll_call_correction(
+                entry,
+                requested_status=form.cleaned_data["requested_status"],
+                requested_remarks=form.cleaned_data["requested_remarks"],
+                reason=form.cleaned_data["reason"],
+                evidence=form.cleaned_data["evidence"],
+                actor=request.user,
+            )
+        except (ValueError, ValidationError, IntegrityError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(
+                request,
+                "Correction request submitted for independent approval.",
+            )
+            profile = get_user_profile(request.user)
+            if profile and profile.role == StaffRole.HOUSE_TUTOR:
+                return redirect(
+                    f"{reverse('core:roll_call_sessions')}"
+                    f"?session_id={entry.session_id}"
+                )
+            return redirect("core:roll_call_corrections")
+    return render(
+        request,
+        "core/operations/correction_request.html",
+        {"entry": entry, "form": form},
+    )
+
+
+@login_required
+@role_required(
+    StaffRole.ADMIN,
+    StaffRole.SENIOR_HOUSEMASTER,
+    StaffRole.HOUSEMASTER,
+)
+def roll_call_corrections_view(request):
+    corrections = RollCallCorrection.objects.select_related(
+        "entry",
+        "entry__student",
+        "entry__session",
+        "requested_by",
+        "reviewed_by",
+    )
+    corrections = filter_queryset_by_house(
+        request.user,
+        corrections,
+        "entry__session__house_id",
+    )
+    return render(
+        request,
+        "core/operations/corrections.html",
+        {
+            "pending_corrections": corrections.filter(
+                status=RollCallCorrection.Status.PENDING
+            ),
+            "recent_corrections": corrections.exclude(
+                status=RollCallCorrection.Status.PENDING
+            )[:100],
+        },
+    )
+
+
+@login_required
+@role_required(
+    StaffRole.ADMIN,
+    StaffRole.SENIOR_HOUSEMASTER,
+    StaffRole.HOUSEMASTER,
+)
+@require_http_methods(["GET", "POST"])
+def roll_call_correction_review_view(request, correction_pk):
+    corrections = RollCallCorrection.objects.select_related(
+        "entry",
+        "entry__student",
+        "entry__session",
+        "requested_by",
+        "reviewed_by",
+    )
+    corrections = filter_queryset_by_house(
+        request.user,
+        corrections,
+        "entry__session__house_id",
+    )
+    correction = get_object_or_404(corrections, pk=correction_pk)
+    profile = get_user_profile(request.user)
+    can_decide = bool(
+        request.user.is_superuser
+        or (profile and (profile.is_admin or profile.is_senior_housemaster))
+    )
+    if request.method == "POST":
+        if not can_decide:
+            return HttpResponseForbidden(
+                "Only a Senior Housemaster or Headmaster can decide corrections."
+            )
+        try:
+            review_roll_call_correction(
+                correction,
+                reviewer=request.user,
+                approve=request.POST.get("decision") == "approve",
+                review_note=request.POST.get("review_note", ""),
+            )
+        except (ValueError, ValidationError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, "Correction decision recorded.")
+            return redirect("core:roll_call_corrections")
+    return render(
+        request,
+        "core/operations/correction_review.html",
+        {"correction": correction, "can_decide": can_decide},
+    )
+
+
+@login_required
+@role_required(StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER)
+@require_http_methods(["GET", "POST"])
+def dormitory_capacity_exceptions_view(request):
+    form = DormitoryCapacityExceptionForm(request.POST or None)
+    form.instance.approved_by = request.user
+    if request.method == "POST" and form.is_valid():
+        exception = form.save(commit=False)
+        exception.approved_by = request.user
+        try:
+            exception.save()
+        except ValidationError as error:
+            form.add_error(None, error)
+        else:
+            AuditEvent.record(
+                actor=request.user,
+                action=AuditEvent.Action.DORMITORY_CAPACITY_EXCEPTION,
+                target_type="DormitoryCapacityException",
+                target_id=exception.pk,
+                summary=(
+                    f"{exception.dormitory} may hold "
+                    f"{exception.additional_capacity} extra boarder(s) until "
+                    f"{exception.ends_at}"
+                ),
+            )
+            messages.success(request, "Time-bound capacity exception recorded.")
+            return redirect("core:dormitory_capacity_exceptions")
+    now = timezone.now()
+    exceptions = DormitoryCapacityException.objects.select_related(
+        "dormitory",
+        "dormitory__house",
+        "approved_by",
+    )
+    return render(
+        request,
+        "core/operations/capacity_exceptions.html",
+        {
+            "form": form,
+            "active_exceptions": exceptions.filter(
+                cancelled_at__isnull=True,
+                starts_at__lte=now,
+                ends_at__gte=now,
+            ),
+            "upcoming_exceptions": exceptions.filter(
+                cancelled_at__isnull=True,
+                starts_at__gt=now,
+            )[:50],
+            "recent_exceptions": exceptions.order_by("-starts_at")[:50],
+        },
+    )
+
+
+@login_required
+@role_required(StaffRole.ADMIN)
+@require_http_methods(["GET", "POST"])
+def operational_settings_view(request):
+    settings_instance = get_operational_settings()
+    form = OperationalSettingsForm(
+        request.POST or None,
+        instance=settings_instance,
+    )
+    if request.method == "POST" and form.is_valid():
+        updated = form.save(commit=False)
+        updated.updated_by = request.user
+        try:
+            updated.save()
+        except ValidationError as error:
+            form.add_error(None, error)
+        else:
+            messages.success(request, "Operational settings updated.")
+            return redirect("core:operational_settings")
+    return render(
+        request,
+        "core/operations/settings.html",
+        {"form": form, "settings": settings_instance},
+    )
+
+
+@login_required
+def notifications_view(request):
+    notifications = request.user.staff_notifications.select_related(
+        "user"
+    ).order_by("-created_at")
+    unread = notifications.filter(read_at__isnull=True)
+    if request.method == "POST":
+        if request.POST.get("action") == "read_all":
+            unread.update(read_at=timezone.now())
+            messages.success(request, "All notifications marked as read.")
+        return redirect("core:notifications")
+    return render(
+        request,
+        "core/notifications.html",
+        {
+            "notifications": notifications[:200],
+            "unread_count": unread.count(),
+        },
+    )
+
+
+@login_required
+@require_POST
+def notification_read_view(request, notification_pk):
+    notification = get_object_or_404(
+        StaffNotification,
+        pk=notification_pk,
+        user=request.user,
+    )
+    if notification.read_at is None:
+        notification.read_at = timezone.now()
+        notification.save(update_fields=["read_at", "updated_at"])
+    if notification.url:
+        return redirect(notification.url)
+    return redirect("core:notifications")
+
+
+DISPUTE_ROLES = (
+    StaffRole.ADMIN,
+    StaffRole.SENIOR_HOUSEMASTER,
+    StaffRole.HOUSEMASTER,
+)
+
+
+@login_required
+@role_required(*DISPUTE_ROLES)
+def dispute_cases_view(request):
+    """List formal disputes, scoped to the user's house where applicable."""
+    disputes = DisputeCase.objects.select_related(
+        "student",
+        "student__house",
+        "exeat",
+        "roll_call_entry",
+        "raised_by",
+        "assigned_to",
+        "resolved_by",
+    )
+    disputes = filter_queryset_by_house(
+        request.user,
+        disputes,
+        "student__house_id",
+    )
+    open_count = disputes.filter(
+        status__in=(
+            DisputeCase.Status.OPEN,
+            DisputeCase.Status.UNDER_REVIEW,
+        )
+    ).count()
+    status_filter = request.GET.get("status", "").strip()
+    if status_filter:
+        disputes = disputes.filter(status=status_filter)
+    return render(
+        request,
+        "core/operations/disputes.html",
+        {
+            "disputes": disputes[:200],
+            "status_filter": status_filter,
+            "open_count": open_count,
+        },
+    )
+
+
+@login_required
+@role_required(*DISPUTE_ROLES)
+@require_http_methods(["GET", "POST"])
+def dispute_create_view(request):
+    form = DisputeCaseForm(request.POST or None)
+    form.fields["student"].queryset = filter_queryset_by_house(
+        request.user,
+        Student.objects.filter(
+            status__in=ACTIVE_ENROLLMENT_STATUSES,
+        ),
+        "house_id",
+    )
+    form.fields["exeat"].queryset = filter_exeats_for_user(
+        request.user,
+        Exeat.objects.select_related("student"),
+    )
+    form.fields["roll_call_entry"].queryset = filter_queryset_by_house(
+        request.user,
+        RollCallEntry.objects.select_related("student", "session"),
+        "session__house_id",
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            dispute = open_dispute(
+                student=form.cleaned_data["student"],
+                category=form.cleaned_data["category"],
+                details=form.cleaned_data["details"],
+                actor=request.user,
+                exeat=form.cleaned_data.get("exeat"),
+                roll_call_entry=form.cleaned_data.get("roll_call_entry"),
+            )
+        except (ValidationError, ValueError) as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(
+                request,
+                f"Dispute {dispute.reference} recorded for independent review.",
+            )
+            return redirect("core:dispute_detail", pk=dispute.pk)
+    return render(
+        request,
+        "core/operations/dispute_create.html",
+        {"form": form},
+    )
+
+
+@login_required
+@role_required(*DISPUTE_ROLES)
+@require_http_methods(["GET", "POST"])
+def dispute_detail_view(request, pk):
+    dispute = get_object_or_404(
+        filter_queryset_by_house(
+            request.user,
+            DisputeCase.objects.select_related(
+                "student",
+                "student__house",
+                "exeat",
+                "roll_call_entry",
+                "raised_by",
+                "assigned_to",
+                "resolved_by",
+                "correction",
+            ),
+            "student__house_id",
+        ),
+        pk=pk,
+    )
+    profile = get_user_profile(request.user)
+    can_decide = bool(
+        request.user.is_superuser
+        or (profile and (profile.is_admin or profile.is_senior_housemaster))
+    )
+    form = DisputeDecisionForm(request.POST or None)
+    if request.method == "POST":
+        if not can_decide:
+            return HttpResponseForbidden(
+                "Only the Headmaster/ADMIN or a Senior Housemaster can decide a dispute."
+            )
+        if form.is_valid():
+            try:
+                decide_dispute(
+                    dispute,
+                    actor=request.user,
+                    status=form.cleaned_data["status"],
+                    outcome=form.cleaned_data["outcome"],
+                    decision_notes=form.cleaned_data["decision_notes"],
+                    assigned_to=form.cleaned_data.get("assigned_to"),
+                )
+            except (ValidationError, ValueError) as error:
+                messages.error(request, str(error))
+            else:
+                messages.success(request, "Dispute decision recorded.")
+                return redirect("core:dispute_detail", pk=dispute.pk)
+    return render(
+        request,
+        "core/operations/dispute_detail.html",
+        {
+            "dispute": dispute,
+            "form": form,
+            "can_decide": can_decide,
+        },
+    )

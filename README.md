@@ -10,6 +10,21 @@ ID cards with QR codes for gate verification, and student roster imports. The sa
 run as a **single school** or as a **multi-school platform** where each school's data is kept in
 its own PostgreSQL schema.
 
+## Pilot user documentation
+
+Role-based quick starts, the plain-language user manual, retention guidance,
+and the accessibility/training checklists are in [`docs/`](docs/):
+
+- [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md)
+- [`docs/QUICK_START_GATE_OFFICER.md`](docs/QUICK_START_GATE_OFFICER.md)
+- [`docs/QUICK_START_HOUSEMASTER.md`](docs/QUICK_START_HOUSEMASTER.md)
+- [`docs/QUICK_START_SENIOR_HOUSEMASTER.md`](docs/QUICK_START_SENIOR_HOUSEMASTER.md)
+- [`docs/QUICK_START_MEDICAL_LEAD.md`](docs/QUICK_START_MEDICAL_LEAD.md)
+- [`docs/QUICK_START_ADMINISTRATOR.md`](docs/QUICK_START_ADMINISTRATOR.md)
+- [`docs/RETENTION_AND_DISPOSAL.md`](docs/RETENTION_AND_DISPOSAL.md)
+- [`docs/TRAINING_AND_HANDOVER.md`](docs/TRAINING_AND_HANDOVER.md)
+- [`docs/ACCESSIBILITY_CHECKLIST.md`](docs/ACCESSIBILITY_CHECKLIST.md)
+
 ---
 
 ## Table of Contents
@@ -40,7 +55,7 @@ its own PostgreSQL schema.
 | **Houses & dormitories** | Records houses, dormitory blocks (male/female), rooms and capacities. |
 | **Student records** | Admission number, index number, programme, class group, house, dormitory, room, guardian, photo. Imports from Excel/CSV. |
 | **Exeat life cycle** | Staff request leave for a student, a housemaster approves or rejects it, the main gate records departure and return, and guardians receive SMS updates at each stage. |
-| **Roll call** | Housemasters start an attendance session, mark students present/absent/on-exeat, and follow up absences. Unfinished sessions expire automatically and are retained for review. |
+| **Roll call** | Housemasters and house tutors start an attendance session, mark students present/absent/on-exeat, and follow up absences. Unfinished sessions expire automatically and are retained for review. |
 | **Discipline** | Records disciplinary incidents against students. |
 | **Student ID cards** | Generates printable CR80 ID cards with a portrait and a QR code. Scanning the QR code opens a privacy-safe public page that shows only whether the student is currently out and whether a gate departure was logged. |
 | **Reports** | Boarding KPIs, demographics, SMS usage and configuration audit reports (screen and print). |
@@ -572,8 +587,8 @@ in code and are always served by WhiteNoise; they have no environment variables.
 | Variable | Default | Controls |
 | :--- | :--- | :--- |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | Celery broker connection. |
-| `CACHE_BACKEND` | `django.core.cache.backends.locmem.LocMemCache` | Cache used for rate limits. LocMem is per-process. |
-| `CACHE_LOCATION` | `schoolsystem-cache` | Cache location/URL for the chosen backend. |
+| `CACHE_BACKEND` | `django.core.cache.backends.locmem.LocMemCache` locally; required shared backend in production | Cache used for rate limits. LocMem is per-process. |
+| `CACHE_LOCATION` | `schoolsystem-cache` locally; required in production | Cache location/URL for the chosen backend. |
 | `TRUSTED_PROXY_COUNT` | `1` | Number of proxy hops used to read the client IP from `X-Forwarded-For`. Render adds one hop, so `1` is correct. |
 | `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW` | `10` / `300` | Max login attempts per IP per window (seconds). |
 | `PUBLIC_REPORT_RATE_LIMIT` / `PUBLIC_REPORT_RATE_WINDOW` | `5` / `3600` | Max public "report a concern" submissions per IP per window. |
@@ -743,18 +758,23 @@ Imports a student roster from `.csv` or `.xlsx` with the same validation as the 
 | :--- | :--- | :--- |
 | `file_path` (positional) | Yes | Path to the roster file. |
 | `--schema` | Only when `TENANCY_ENABLED=True` | Target school schema. Rejected when tenancy is off. |
+| `--dry-run` | No | Validate and preview headers/sample rows without writing student records. |
 
 ```powershell
 # Single-school
 .\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx
 # Multi-school
 .\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx --schema achimota_shs
+# Validate first; this command makes no database changes
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx --dry-run
 ```
 
 Success prints `Roster import completed successfully: N student record(s) imported.` Validation
 errors abort the **entire** batch and print the reasons (duplicate admission/index numbers, invalid
 gender, boarder without a valid house, room capacity exceeded). The importer never silently
-overwrites existing students. See section 12.2 for the expected columns.
+overwrites existing students. The CLI and web app share validation and provide row diagnostics;
+the CLI reports progress when connected to an interactive terminal. See section 12.2 for the
+expected columns.
 
 ### 7.4 Custom command: `seed_synthetic_pilot` (core)
 
@@ -1533,8 +1553,9 @@ Notes:
 - **`ALLOWED_HOSTS` is ignored while `TENANCY_ENABLED=True`** (forced to `*`); tenant hostnames
   come from the `Domain` table. In single-school production you must set `ALLOWED_HOSTS` to your
   explicit hostnames.
-- `CACHE_BACKEND` defaults to a per-process `LocMemCache`. Point it at the shared Redis backend (as
-  above) so rate limits apply across all workers.
+- `CACHE_BACKEND` defaults to a per-process `LocMemCache` for development. Production refuses
+  to start unless an explicit non-local cache backend and location are configured. Rate-limited
+  requests return HTTP 503 if that cache is unavailable, rather than silently bypassing limits.
 - `EMAIL_BACKEND` defaults to the console backend and never sends real mail. To send real mail, set
   it to `django.core.mail.backends.smtp.EmailBackend` and supply `EMAIL_HOST`, `EMAIL_PORT`,
   `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` and exactly one of `EMAIL_USE_TLS` / `EMAIL_USE_SSL`.
@@ -1754,7 +1775,7 @@ To convert an existing single-school install, use `migrate_legacy_school` (secti
 | **Administrator (`ADMIN`)** | Whole school | Full configuration, terms, SMS, staff and student registry, audit logs. |
 | **Senior Housemaster (`SENIOR_HOUSEMASTER`)** | All houses | School-wide student views, exeat approval across houses, roll-call reconciliation, discipline, ID cards. |
 | **Housemaster (`HOUSEMASTER`)** | Assigned house | Approve house exeats, run roll calls, follow up absences, view house students. |
-| **House Tutor (`HOUSE_TUTOR`)** | Assigned house | Create/view exeat requests, record incidents, view house students. Cannot approve exeats, run roll call or use gate. |
+| **House Tutor (`HOUSE_TUTOR`)** | Assigned house | Create/view exeat requests, run the house roll call, request closed-session corrections, record incidents, view house students. Cannot approve exeats or use gate controls. |
 | **Gate Officer (`GATE_OFFICER`)** | Main gate | Gate scanner, record departures/returns, read-only exeat verification. |
 
 Roles are assigned via user profiles (Django admin). Some pages are also gated by the school's
@@ -1767,12 +1788,21 @@ Roles are assigned via user profiles (Django admin). Some pages are also gated b
 Via the web (`/students/import/`) or `import_roster`. Excel `.xlsx` or UTF-8 CSV, up to 10 MB and
 2,000 rows. Header names are matched case-insensitively with common aliases.
 
+The web importer first previews mapped headers, sample rows, and all validation errors. Confirming
+the import revalidates the same selected file before writing, so changes to student identifiers,
+configuration, or capacity since the preview are caught. The CLI supports the equivalent
+no-write review with `import_roster ... --dry-run`.
+
 - **Required:** Admission No, Index No, Full Name, Gender (`Male`/`Female`), Programme.
 - **Optional:** Date of Birth (`YYYY-MM-DD` or `DD/MM/YYYY`), Class, Residency (`Boarder`/`Day`),
   House, Dormitory, Room, Status, Guardian Name, Guardian Phone, Guardian Alt Phone.
 - **Rules:** duplicate admission/index numbers reject the whole batch; boarders need a valid,
   gender-compatible house/dormitory; room capacity is enforced; existing students are never
   silently overwritten.
+- **Configuration:** programmes, classes, houses, dormitories, and rooms must already exist. Add
+  missing records in the school’s configuration/admin screens, ensure boarding houses have
+  compatible dormitory blocks and capacity, then review the roster again. Unknown references are
+  reported rather than created automatically.
 
 Student class changes are performed from **Student Registry → Promote cohort**. An administrator
 previews the enrolled class roster, then confirms promotion by one level for the academic year the

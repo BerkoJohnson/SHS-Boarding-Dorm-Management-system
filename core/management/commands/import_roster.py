@@ -5,7 +5,10 @@ from django.conf import settings
 from django.core.files import File
 from django.core.management.base import BaseCommand, CommandError
 
-from core.services.student_import import import_student_roster
+from core.services.student_import import (
+    import_student_roster,
+    validate_student_roster,
+)
 
 
 class Command(BaseCommand):
@@ -18,6 +21,21 @@ class Command(BaseCommand):
             default=None,
             help="Target tenant schema (required when TENANCY_ENABLED=True).",
         )
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Validate the roster and show a preview without importing students.",
+        )
+
+    def _progress_callback(self, stage, current, total):
+        if not getattr(self.stdout, "isatty", lambda: False)():
+            return
+        if total:
+            message = f"{stage}: {current}/{total}"
+        else:
+            message = stage
+        self.stdout.write(f"\r{message:<60}", ending="")
+        self.stdout.flush()
 
     def handle(self, *args, **options):
         schema = options.get("schema")
@@ -45,15 +63,49 @@ class Command(BaseCommand):
             with context:
                 with file_path.open("rb") as source:
                     roster_file = File(source, name=file_path.name)
-                    imported_count, errors = import_student_roster(roster_file)
+                    if options["dry_run"]:
+                        validation = validate_student_roster(
+                            roster_file,
+                            progress_callback=self._progress_callback,
+                        )
+                        errors = validation.errors
+                        imported_count = 0
+                    else:
+                        imported_count, errors = import_student_roster(
+                            roster_file,
+                            progress_callback=self._progress_callback,
+                        )
         except OSError as error:
             raise CommandError(
                 f"Could not read roster file '{file_path}': {error}"
             ) from error
 
+        if getattr(self.stdout, "isatty", lambda: False)():
+            self.stdout.write("\r" + (" " * 60) + "\r", ending="")
         if errors:
             details = "\n".join(f"- {error}" for error in errors)
-            raise CommandError(f"Roster import failed:\n{details}")
+            action = "validation" if options["dry_run"] else "import"
+            raise CommandError(f"Roster {action} failed:\n{details}")
+
+        if options["dry_run"]:
+            for sheet in validation.headers:
+                self.stdout.write(f"Worksheet {sheet['sheet']} columns:")
+                for column in sheet["columns"]:
+                    target = column["field"] or "unrecognized (ignored)"
+                    self.stdout.write(f"  {column['source'] or '(blank)'} -> {target}")
+            self.stdout.write(f"Rows validated: {validation.row_count}")
+            if validation.sample_rows:
+                self.stdout.write("Sample rows:")
+                for row in validation.sample_rows:
+                    self.stdout.write(
+                        f"  {row['sheet']}, row {row['row']}: {row['values']}"
+                    )
+            self.stdout.write(
+                self.style.SUCCESS(
+                    "Roster validation passed. No student records were imported."
+                )
+            )
+            return
 
         self.stdout.write(
             self.style.SUCCESS(

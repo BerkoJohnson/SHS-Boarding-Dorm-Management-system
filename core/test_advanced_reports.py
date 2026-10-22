@@ -230,7 +230,9 @@ class AdvancedReportsTests(TestCase):
         self.assertEqual(len(report["rows"]), 2)
         self.assertEqual(report["rows"][0][0], late.exeat_number)
         self.assertEqual(report["rows"][1][0], overdue.exeat_number)
-        self.assertEqual(dict(report["summary"])["Currently overdue"], 1)
+        self.assertEqual(
+            dict(report["summary"])["Currently overdue (still out)"], 1
+        )
         self.assertEqual(dict(report["summary"])["Returned late in period"], 1)
 
     def test_kpi_pack_aggregates_metrics_for_selected_house_and_term(self):
@@ -334,7 +336,7 @@ class AdvancedReportsTests(TestCase):
         )
         Exeat.objects.filter(pk=rejected.pk).update(
             status=Exeat.Status.REJECTED,
-            updated_at=timezone.now(),
+            decided_at=timezone.now(),
         )
         outside_house = self.create_exeat(
             self.other_student,
@@ -353,7 +355,7 @@ class AdvancedReportsTests(TestCase):
         self.assertEqual(summary["Rejected"], 1)
         self.assertNotIn(outside_house.exeat_number, [row[0] for row in report["rows"]])
         self.assertIn(approved.exeat_number, [row[0] for row in report["rows"]])
-        self.assertIn("updated_at", " ".join(report["highlights"]))
+        self.assertIn("immutable decision timestamp", " ".join(report["highlights"]))
 
     def test_exeat_analytics_and_room_register_report_expected_aggregates(self):
         self.create_exeat(
@@ -583,10 +585,42 @@ class AdvancedReportsTests(TestCase):
         self.assertEqual(len(report["rows"]), 1)
         row = report["rows"][0]
         self.assertEqual(row[0], activity_housemaster.full_name)
-        self.assertEqual(row[2:7], (1, 1, 1, 1, 4))
+        self.assertEqual(row[2:8], (1, 1, 1, 1, 0, 4))
         unattributed = dict(report["sections"][0]["rows"])
         self.assertEqual(unattributed["Roll calls without a conductor"], 1)
         self.assertEqual(unattributed["Incidents without a logger"], 0)
+
+    def test_staff_activity_includes_admin_approver_and_gate_recorder(self):
+        admin = get_user_model().objects.create_superuser(
+            username="advanced-activity-admin",
+            email="advanced-activity-admin@example.test",
+            password="test-password",
+        )
+        gate_user = get_user_model().objects.create_user(
+            username="advanced-activity-gate",
+            first_name="Gate",
+            last_name="Recorder",
+            password="test-password",
+        )
+        exeat = self.create_exeat(
+            self.student,
+            expected_return=timezone.now() + timedelta(hours=2),
+        )
+        Exeat.objects.filter(pk=exeat.pk).update(approved_by_user=admin)
+        ExeatMovement.objects.filter(exeat=exeat).update(
+            departure_recorded_by_user=gate_user
+        )
+
+        report = get_detailed_report(
+            "staff_activity",
+            house_id=self.house.pk,
+            term_id=self.term.pk,
+        )
+        rows = {row[0]: row for row in report["rows"]}
+
+        self.assertEqual(rows["advanced-activity-admin"][3], 1)
+        self.assertEqual(rows["Gate Recorder"][6], 1)
+        self.assertEqual(rows["Gate Recorder"][7], 1)
 
     def test_welfare_report_combines_medical_exeats_and_infirmary_entries(self):
         session = self.create_roll_call(

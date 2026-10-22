@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Exeat Review | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+  <div>
+    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Post-hoc review</p>
+    <h1 class="mt-1 text-xl font-bold text-slate-900">{{ review.exeat.exeat_number }} — {{ review.exeat.student.full_name }}</h1>
+    <p class="mt-1 text-sm text-slate-600">
+      {{ review.get_review_type_display }} · due {{ review.due_at|date:"d M Y, H:i" }}
+    </p>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-5 text-sm">
+    <dl class="grid gap-3 sm:grid-cols-2">
+      <div><dt class="text-slate-500">Authorized by</dt><dd class="font-medium text-slate-900">{{ review.authorized_by.get_full_name|default:review.authorized_by.username }}</dd></div>
+      <div><dt class="text-slate-500">Authorized at</dt><dd class="font-medium text-slate-900">{{ review.authorized_at|date:"d M Y, H:i" }}</dd></div>
+      <div class="sm:col-span-2"><dt class="text-slate-500">Immediate reason</dt><dd class="mt-1 whitespace-pre-line text-slate-800">{{ review.reason }}</dd></div>
+    </dl>
+  </div>
+
+  <form method="post" class="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    {% csrf_token %}
+    {% include "core/partials/form_fields.html" with form=form %}
+    <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <a href="{% url 'core:exeat_review_queue' %}" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
+      <button type="submit" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">Record review</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

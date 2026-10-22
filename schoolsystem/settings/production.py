@@ -28,6 +28,19 @@ if len(SECRET_KEY) < 50 or len(set(SECRET_KEY)) < 5:
 
 DEBUG = False
 
+cache_backend = CACHES["default"]["BACKEND"].lower()
+if "locmem" in cache_backend:
+    raise ImproperlyConfigured(
+        "Production requires a shared CACHE_BACKEND for rate limiting; "
+        "LocMemCache is process-local."
+    )
+if not os.getenv("CACHE_BACKEND", "").strip() or not os.getenv(
+    "CACHE_LOCATION", ""
+).strip():
+    raise ImproperlyConfigured(
+        "Production requires explicit CACHE_BACKEND and CACHE_LOCATION settings."
+    )
+
 ALLOWED_HOSTS = [
     host.strip()
     for host in os.getenv("ALLOWED_HOSTS", "").split(",")

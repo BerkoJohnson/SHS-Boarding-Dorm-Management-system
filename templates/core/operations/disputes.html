@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Dispute Cases | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <header class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Record governance</p>
+      <h1 class="mt-1 text-base font-bold text-slate-900">Formal dispute cases</h1>
+      <p class="mt-1 max-w-3xl text-xs text-slate-500">
+        A documented review path for exeat, gate, and attendance decisions.
+        Decisions are independent and appended to the audit trail.
+      </p>
+    </div>
+    <a href="{% url 'core:dispute_create' %}" class="inline-flex min-h-9 shrink-0 items-center justify-center rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800">
+      Open a dispute
+    </a>
+  </header>
+
+  <div class="flex flex-wrap items-center gap-2 text-xs">
+    <span class="inline-flex min-h-9 items-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 font-semibold text-amber-900">{{ open_count }} open</span>
+    <a href="?status=" class="inline-flex min-h-9 items-center rounded-lg border px-3 py-2 font-semibold transition-colors {% if not status_filter %}border-brand-300 bg-brand-50 text-brand-800{% else %}border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">All</a>
+    <a href="?status=open" class="inline-flex min-h-9 items-center rounded-lg border px-3 py-2 font-semibold transition-colors {% if status_filter == 'open' %}border-brand-300 bg-brand-50 text-brand-800{% else %}border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">Open</a>
+    <a href="?status=under_review" class="inline-flex min-h-9 items-center rounded-lg border px-3 py-2 font-semibold transition-colors {% if status_filter == 'under_review' %}border-brand-300 bg-brand-50 text-brand-800{% else %}border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">Under review</a>
+    <a href="?status=resolved" class="inline-flex min-h-9 items-center rounded-lg border px-3 py-2 font-semibold transition-colors {% if status_filter == 'resolved' %}border-brand-300 bg-brand-50 text-brand-800{% else %}border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">Resolved</a>
+  </div>
+
+  <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+    <div class="flex items-center justify-between border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+      <h2 class="text-sm font-bold text-slate-900">Disputes</h2>
+      <span class="text-[11px] font-medium text-slate-500">{{ disputes|length }} shown</span>
+    </div>
+    <div class="divide-y divide-slate-100">
+      {% for dispute in disputes %}
+      <a href="{% url 'core:dispute_detail' dispute.pk %}" class="block px-4 py-3 transition-colors hover:bg-slate-50/70 focus-visible:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-brand-600 sm:px-5">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p class="text-xs font-semibold text-slate-900">{{ dispute.reference }} · {{ dispute.student.full_name }}</p>
+            <p class="mt-1 text-xs text-slate-600">{{ dispute.get_category_display }} · {{ dispute.details|truncatewords:30 }}</p>
+            <p class="mt-1 text-xs text-slate-500">
+              Raised by {{ dispute.raised_by.get_full_name|default:dispute.raised_by.username|default:"System" }}
+              · {{ dispute.created_at|date:"d M Y, H:i" }}
+              {% if dispute.assigned_to %} · assigned to {{ dispute.assigned_to.get_full_name|default:dispute.assigned_to.username }}{% endif %}
+            </p>
+          </div>
+          <span class="inline-flex shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold {% if dispute.status == 'open' %}bg-rose-100 text-rose-800{% elif dispute.status == 'under_review' %}bg-amber-100 text-amber-800{% elif dispute.status == 'resolved' %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">{{ dispute.get_status_display }}</span>
+        </div>
+      </a>
+      {% empty %}
+      <div class="px-4 py-10 text-center">
+        <p class="text-xs font-semibold text-slate-700">No dispute cases</p>
+        <p class="mt-1 text-xs text-slate-500">No records match the selected status.</p>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

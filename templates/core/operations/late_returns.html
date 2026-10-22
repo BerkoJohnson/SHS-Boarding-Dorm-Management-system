@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Late Returns | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <header class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Pastoral operations</p>
+      <h1 class="mt-1 text-base font-bold text-slate-900">Late-return incidents</h1>
+      <p class="mt-1 max-w-3xl text-xs text-slate-500">
+        Incidents open after the configured threshold. Escalation to the Senior
+        Housemaster and Headmaster is recorded in the audit trail.
+      </p>
+    </div>
+    <div class="flex shrink-0 gap-2 text-xs">
+      <a href="?status=open" class="inline-flex min-h-9 items-center rounded-lg border px-3 py-2 font-semibold transition-colors {% if status_filter == 'open' %}border-brand-300 bg-brand-50 text-brand-800{% else %}border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">Open ({{ open_count }})</a>
+      <a href="?status=" class="inline-flex min-h-9 items-center rounded-lg border px-3 py-2 font-semibold transition-colors {% if not status_filter %}border-brand-300 bg-brand-50 text-brand-800{% else %}border-slate-300 bg-white text-slate-700 hover:bg-slate-50{% endif %}">All</a>
+    </div>
+  </header>
+
+  <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+    <div class="flex items-center justify-between border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+      <h2 class="text-sm font-bold text-slate-900">{% if status_filter == 'open' %}Open incidents{% else %}Late-return incidents{% endif %}</h2>
+      <span class="text-[11px] font-medium text-slate-500">{{ incidents|length }} shown</span>
+    </div>
+    <div class="divide-y divide-slate-100">
+      {% for incident in incidents %}
+      <a href="{% url 'core:late_return_incident_resolve' incident.pk %}" class="block px-4 py-3 transition-colors hover:bg-slate-50/70 focus-visible:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-brand-600 sm:px-5">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p class="text-xs font-semibold text-slate-900">{{ incident.student.full_name }} <span class="font-normal text-slate-500">· {{ incident.exeat.exeat_number }}</span></p>
+            <p class="mt-1 text-xs text-slate-600">
+              Expected {{ incident.expected_return|date:"d M Y, H:i" }}
+              {% if incident.actual_return %} · returned {{ incident.actual_return|date:"d M Y, H:i" }}{% endif %}
+              · {{ incident.delay_hours }}h late
+            </p>
+            <p class="mt-1 text-xs text-slate-600">{{ incident.summary }}</p>
+          </div>
+          <div class="shrink-0 text-left sm:text-right">
+            <span class="inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold {% if incident.status == 'open' %}bg-rose-100 text-rose-800{% elif incident.status == 'investigating' %}bg-amber-100 text-amber-800{% else %}bg-slate-100 text-slate-700{% endif %}">{{ incident.get_status_display }}</span>
+            <p class="mt-1 text-[11px] text-slate-500">{{ incident.get_escalation_level_display }}</p>
+          </div>
+        </div>
+      </a>
+      {% empty %}
+      <div class="px-4 py-10 text-center sm:px-5">
+        <p class="text-xs font-semibold text-slate-700">No late-return incidents</p>
+        <p class="mt-1 text-xs text-slate-500">There are no incidents matching this filter.</p>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

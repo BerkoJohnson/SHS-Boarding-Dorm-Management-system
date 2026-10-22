@@ -148,6 +148,7 @@
                   {% endif %}
                 </td>
                 <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                  {% if can_log_gate %}
                   <form method="post" action="{% url 'core:gate_terminal_action' departure.exeat_id 'return' %}">
                     {% csrf_token %}
                     <button type="submit" 
@@ -156,6 +157,9 @@
                       Check In
                     </button>
                   </form>
+                  {% else %}
+                    <span class="text-[10px] text-slate-400">Active duty assignment required</span>
+                  {% endif %}
                 </td>
               </tr>
             {% empty %}
@@ -212,7 +216,7 @@
                     <span class="text-[10px] font-semibold text-orange-700">Pass expired — follow up</span>
                   {% elif exeat.expected_departure > current_time %}
                     <span class="text-[10px] text-slate-400">Available {{ exeat.expected_departure|date:"M d, H:i" }}</span>
-                  {% else %}
+                  {% elif can_log_gate %}
                   <form method="post" action="{% url 'core:gate_terminal_action' exeat.id 'departure' %}">
                     {% csrf_token %}
                     <button type="submit" 
@@ -221,6 +225,8 @@
                       Check Out
                     </button>
                   </form>
+                  {% else %}
+                    <span class="text-[10px] text-slate-400">Active duty assignment required</span>
                   {% endif %}
                 </td>
               </tr>

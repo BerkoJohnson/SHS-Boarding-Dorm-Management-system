@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Review Roll-Call Correction | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+  <div>
+    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Independent approval</p>
+    <h1 class="mt-1 text-xl font-bold text-slate-900">{{ correction.entry.student.full_name }}</h1>
+    <p class="mt-1 text-sm text-slate-600">
+      {{ correction.entry.session.get_session_type_display }} ·
+      {{ correction.entry.session.session_date|date:"d M Y" }} ·
+      {{ correction.previous_status }} → {{ correction.requested_status }}
+    </p>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-5 text-sm">
+    <dl class="space-y-3">
+      <div><dt class="text-slate-500">Reason</dt><dd class="mt-1 whitespace-pre-line text-slate-800">{{ correction.reason }}</dd></div>
+      <div><dt class="text-slate-500">Evidence</dt><dd class="mt-1 whitespace-pre-line text-slate-800">{{ correction.evidence|default:"No evidence supplied." }}</dd></div>
+      <div><dt class="text-slate-500">Requested by</dt><dd class="mt-1 text-slate-800">{{ correction.requested_by.get_full_name|default:correction.requested_by.username|default:"System" }} · {{ correction.created_at|date:"d M Y, H:i" }}</dd></div>
+      {% if correction.requires_second_approval %}
+      <div><span class="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-800">Sensitive correction — second approval required</span></div>
+      {% endif %}
+    </dl>
+  </div>
+
+  {% if can_decide %}
+  <form method="post" class="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    {% csrf_token %}
+    <div class="space-y-1.5">
+      <label for="review_note" class="block text-sm font-medium text-slate-700">Review note</label>
+      <textarea id="review_note" name="review_note" rows="4" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" placeholder="Record what was checked and why the decision is safe."></textarea>
+    </div>
+    <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <a href="{% url 'core:roll_call_corrections' %}" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Back</a>
+      <button type="submit" name="decision" value="reject" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-rose-300 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50">Reject</button>
+      <button type="submit" name="decision" value="approve" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">Approve and apply</button>
+    </div>
+  </form>
+  {% else %}
+  <div class="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+    <p class="font-semibold">Read-only review</p>
+    <p class="mt-1">Only a Senior Housemaster or Headmaster can decide a closed-session correction.</p>
+    <a href="{% url 'core:roll_call_corrections' %}" class="mt-4 inline-flex min-h-11 items-center justify-center rounded-lg border border-amber-300 px-4 py-2 font-medium text-amber-900 hover:bg-amber-100">Back to corrections</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

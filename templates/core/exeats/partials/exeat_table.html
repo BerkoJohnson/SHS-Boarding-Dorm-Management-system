@@ -236,7 +236,7 @@
                             </a>
 
                             <!-- Gate Actions -->
-                            {% if can_access_gate and exeat.status == 'Approved' %}
+                            {% if can_log_gate and exeat.status == 'Approved' %}
                                 {% if exeat.reconciliation.outcome == 'student_out' and not exeat.reconciliation.actual_return %}
                                     <form method="post" action="{% url 'core:exeat_action' exeat.pk 'return' %}">
                                         {% csrf_token %}
@@ -273,15 +273,22 @@
                                 {% endif %}
                             {% endif %}
 
-                            {% if can_approve_exeat and exeat.status == 'Approved' and exeat.expected_departure <= current_time and not exeat.movement.actual_departure and not exeat.reconciliation %}
+                            {% if exeat.user_can_approve_exeat and exeat.status == 'Approved' and exeat.expected_departure <= current_time and not exeat.movement.actual_departure and not exeat.reconciliation %}
                                 <a href="{% url 'core:exeat_reconcile' exeat.pk %}" class="flex items-center gap-2 px-3 py-1.5 text-xs text-orange-700 hover:bg-orange-50 transition">
                                     <span>Reconcile Missing Movement</span>
                                 </a>
                             {% endif %}
 
                             <!-- Housemaster Status Actions -->
-                            {% if can_approve_exeat and exeat.status == 'Pending' %}
-                                {% if request.user.is_superuser or is_senior_housemaster or user_assigned_house and user_assigned_house.id == exeat.student.house_id %}
+                            {% if exeat.user_can_approve_exeat and exeat.status == 'Pending' %}
+                                {% if exeat.exeat_type == 'Emergency' %}
+                                    <a href="{% url 'core:exeat_override' exeat.pk %}" class="flex items-center gap-2 px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 transition font-medium">
+                                        <svg class="w-3.5 h-3.5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a1 1 0 00.86 1.5h18.64a1 1 0 00.86-1.5L12.71 3.86a1 1 0 00-2.42 0z"/>
+                                        </svg>
+                                        <span>Authorize Emergency</span>
+                                    </a>
+                                {% else %}
                                     <form method="post" action="{% url 'core:exeat_action' exeat.pk 'approve' %}">
                                         {% csrf_token %}
                                         <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 transition text-left font-medium">
@@ -291,7 +298,8 @@
                                             <span>Approve Pass</span>
                                         </button>
                                     </form>
-                                    <form method="post" action="{% url 'core:exeat_action' exeat.pk 'reject' %}">
+                                {% endif %}
+                                <form method="post" action="{% url 'core:exeat_action' exeat.pk 'reject' %}">
                                         {% csrf_token %}
                                         <button type="submit" class="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-rose-700 hover:bg-rose-50 transition text-left">
                                             <svg class="w-3.5 h-3.5 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -299,18 +307,13 @@
                                             </svg>
                                             <span>Reject Request</span>
                                         </button>
-                                    </form>
-                                {% else %}
-                                    <div class="px-3 py-1 text-[11px] text-slate-400 italic">
-                                        Sign-off: {{ exeat.student.house.name|default:"Housemaster" }}
-                                    </div>
-                                {% endif %}
+                                </form>
                             {% endif %}
 
                             <div class="my-1 border-t border-slate-100"></div>
 
                             <!-- Cancel Pass -->
-                            {% if can_approve_exeat and exeat.status == 'Pending' or can_approve_exeat and exeat.status == 'Approved' %}
+                            {% if exeat.user_can_approve_exeat and exeat.status == 'Pending' or exeat.user_can_approve_exeat and exeat.status == 'Approved' %}
                                 {% if not exeat.movement.actual_departure and not exeat.movement.actual_return and not exeat.reconciliation %}
                                 <form method="post" action="{% url 'core:exeat_action' exeat.pk 'cancel' %}" 
                                       onsubmit="return confirm('Are you sure you want to cancel this exeat pass?');">

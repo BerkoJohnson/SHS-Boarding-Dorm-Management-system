@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from django import forms
+from django.contrib.auth import get_user_model
 from django.db import models
 from django.db.models import Count, F, Q
 from django.utils import timezone
@@ -8,8 +9,17 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from .models import (
     DORMITORY_GENDER_BY_STUDENT_GENDER,
+    DisputeCase,
+    DormitoryCapacityException,
     Exeat,
     ExeatReconciliation,
+    ExeatReview,
+    GateDutyAssignment,
+    LateReturnIncident,
+    OperationalSettings,
+    RollCallCorrection,
+    RollCallEntry,
+    StaffRole,
     Student,
     Programme,
     House,
@@ -21,6 +31,7 @@ from .models import (
     AcademicTerm,
     AcademicYear,
     DisciplinaryRecord,
+    get_user_profile,
 )
 from .widgets import PrivateStudentPhotoInput
 
@@ -458,7 +469,19 @@ class ExeatApprovalForm(forms.ModelForm):
         # 3. Auto-select the current user as authorizer IF they are a HouseMaster
         #    record AND in the eligible list. Prevents HMs from manually hunting for
         #    their own name. (Admins and Senior HMs can still override if needed.)
+        self.medical_authorizer = False
         if reviewing_user is not None:
+            profile = get_user_profile(reviewing_user)
+            self.medical_authorizer = bool(
+                profile and profile.role == StaffRole.MEDICAL
+            )
+            if self.medical_authorizer:
+                # The named medical lead has no HouseMaster row. Attribute the
+                # decision to the authenticated user instead of inventing a
+                # HouseMaster signatory, and hide the inapplicable dropdown.
+                self.instance.approved_by_user = reviewing_user
+                self.instance.approved_by = None
+                self.fields["approved_by"].widget = forms.HiddenInput()
             hm = getattr(reviewing_user, "housemaster", None)
             if hm is None:
                 # Backwards-compat fallback used elsewhere in the app
@@ -466,7 +489,11 @@ class ExeatApprovalForm(forms.ModelForm):
                     models.Q(staff_id__iexact=reviewing_user.username)
                     | models.Q(full_name__icontains=reviewing_user.username)
                 ).first()
-            if hm is not None and eligible_qs.filter(pk=hm.pk).exists():
+            if (
+                hm is not None
+                and not self.medical_authorizer
+                and eligible_qs.filter(pk=hm.pk).exists()
+            ):
                 self.initial.setdefault("approved_by", hm.pk)
 
         # Required state enforced in clean(), not via field.required to give clear messages.
@@ -479,8 +506,16 @@ class ExeatApprovalForm(forms.ModelForm):
         approved_by = cleaned_data.get("approved_by")
         remarks = (cleaned_data.get("approval_remarks") or "").strip()
 
-        # 1. Approve → authorizer is mandatory (model-level Exeat.clean also enforces this)
-        if status == Exeat.Status.APPROVED and not approved_by:
+        # 1. Approve → an authorizer is mandatory. Medical leads are attributed
+        # through approved_by_user and have no HouseMaster row to select.
+        if self.medical_authorizer:
+            cleaned_data["approved_by"] = None
+            approved_by = None
+        if (
+            status == Exeat.Status.APPROVED
+            and not approved_by
+            and not self.medical_authorizer
+        ):
             raise ValidationError(
                 {
                     "approved_by": "An authorizing Housemaster must be selected when approving a pass. "
@@ -910,3 +945,363 @@ class StudentRosterUploadForm(forms.Form):
         if roster_file.size > 10 * 1024 * 1024:
             raise ValidationError("Roster files must be 10 MB or smaller.")
         return roster_file
+
+# ---------------------------------------------------------------------------
+# Full P1 operational workflows
+# ---------------------------------------------------------------------------
+
+_INPUT_CLASS = (
+    "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm "
+    "focus:outline-none focus:ring-2 focus:ring-brand-500"
+)
+_TEXTAREA_CLASS = _INPUT_CLASS
+
+
+class ExeatRescheduleForm(forms.Form):
+    expected_departure = forms.DateTimeField(
+        label="New departure",
+        widget=forms.DateTimeInput(
+            attrs={"type": "datetime-local", "class": _INPUT_CLASS}
+        ),
+    )
+    expected_return = forms.DateTimeField(
+        label="New return",
+        widget=forms.DateTimeInput(
+            attrs={"type": "datetime-local", "class": _INPUT_CLASS}
+        ),
+    )
+    reason = forms.CharField(
+        label="Reason for the schedule change",
+        max_length=2000,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 3,
+                "class": _TEXTAREA_CLASS,
+                "placeholder": "Explain the change and who authorized it.",
+            }
+        ),
+    )
+
+    def __init__(self, *args, exeat=None, **kwargs):
+        self.exeat = exeat
+        super().__init__(*args, **kwargs)
+        if exeat is not None and not self.is_bound:
+            self.initial.setdefault(
+                "expected_departure",
+                timezone.localtime(exeat.expected_departure).strftime(
+                    "%Y-%m-%dT%H:%M"
+                ),
+            )
+            self.initial.setdefault(
+                "expected_return",
+                timezone.localtime(exeat.expected_return).strftime("%Y-%m-%dT%H:%M"),
+            )
+
+    def clean(self):
+        cleaned = super().clean()
+        departure = cleaned.get("expected_departure")
+        returned = cleaned.get("expected_return")
+        if departure and returned and returned <= departure:
+            raise ValidationError(
+                {"expected_return": "The new return time must be after departure."}
+            )
+        return cleaned
+
+
+class EmergencyOverrideForm(forms.Form):
+    reason = forms.CharField(
+        label="Immediate reason and authority",
+        min_length=10,
+        max_length=2000,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 4,
+                "class": _TEXTAREA_CLASS,
+                "placeholder": (
+                    "State the emergency, who authorized the movement, and why "
+                    "the normal approval path could not be completed."
+                ),
+            }
+        ),
+    )
+
+
+class ExeatReviewDecisionForm(forms.Form):
+    outcome = forms.ChoiceField(
+        choices=ExeatReview.Outcome.choices,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    review_notes = forms.CharField(
+        label="Review notes",
+        required=True,
+        max_length=4000,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 4,
+                "class": _TEXTAREA_CLASS,
+                "placeholder": "Record the evidence reviewed and any follow-up action.",
+            }
+        ),
+    )
+
+
+class GateDutyAssignmentForm(forms.ModelForm):
+    class Meta:
+        model = GateDutyAssignment
+        fields = ("user", "gate_name", "starts_at", "ends_at", "is_temporary", "reason")
+        widgets = {
+            "user": forms.Select(attrs={"class": _INPUT_CLASS}),
+            "gate_name": forms.TextInput(attrs={"class": _INPUT_CLASS}),
+            "starts_at": forms.DateTimeInput(
+                attrs={"type": "datetime-local", "class": _INPUT_CLASS}
+            ),
+            "ends_at": forms.DateTimeInput(
+                attrs={"type": "datetime-local", "class": _INPUT_CLASS}
+            ),
+            "is_temporary": forms.CheckboxInput(
+                attrs={"class": "h-4 w-4 rounded border-slate-300"}
+            ),
+            "reason": forms.Textarea(
+                attrs={"rows": 2, "class": _TEXTAREA_CLASS}
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        User = get_user_model()
+        self.fields["user"].queryset = User.objects.filter(
+            is_active=True,
+            is_staff=True,
+            profile__role__in=(StaffRole.ADMIN, StaffRole.GATE_OFFICER),
+        ).order_by("first_name", "last_name", "username")
+
+
+class LateReturnIncidentResolutionForm(forms.ModelForm):
+    class Meta:
+        model = LateReturnIncident
+        fields = ("status", "resolution")
+        widgets = {
+            "status": forms.Select(attrs={"class": _INPUT_CLASS}),
+            "resolution": forms.Textarea(
+                attrs={
+                    "rows": 3,
+                    "class": _TEXTAREA_CLASS,
+                    "placeholder": "Record the investigation outcome and any action taken.",
+                }
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["status"].choices = [
+            (LateReturnIncident.Status.INVESTIGATING, "Investigating"),
+            (LateReturnIncident.Status.RESOLVED, "Resolved"),
+            (LateReturnIncident.Status.CLOSED, "Closed"),
+        ]
+
+    def clean_resolution(self):
+        value = (self.cleaned_data.get("resolution") or "").strip()
+        if not value:
+            raise ValidationError("Record the investigation outcome.")
+        return value
+
+
+class RollCallCorrectionRequestForm(forms.Form):
+    requested_status = forms.ChoiceField(
+        choices=RollCallEntry.Status.choices,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    requested_remarks = forms.CharField(
+        label="Corrected remarks",
+        required=False,
+        max_length=200,
+        widget=forms.TextInput(attrs={"class": _INPUT_CLASS}),
+    )
+    reason = forms.CharField(
+        label="Reason for the correction",
+        max_length=2000,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 3,
+                "class": _TEXTAREA_CLASS,
+                "placeholder": "Explain why the original mark was wrong.",
+            }
+        ),
+    )
+    evidence = forms.CharField(
+        label="Supporting evidence",
+        required=False,
+        max_length=4000,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 3,
+                "class": _TEXTAREA_CLASS,
+                "placeholder": (
+                    "Required for Present/Absent or conduct-linked changes. "
+                    "Record what was checked, not sensitive medical detail."
+                ),
+            }
+        ),
+    )
+
+    def __init__(self, *args, entry=None, **kwargs):
+        self.entry = entry
+        super().__init__(*args, **kwargs)
+        if entry is not None:
+            self.fields["requested_status"].choices = [
+                choice
+                for choice in RollCallEntry.Status.choices
+                if choice[0] != entry.status
+            ]
+
+
+class DormitoryCapacityExceptionForm(forms.ModelForm):
+    class Meta:
+        model = DormitoryCapacityException
+        fields = (
+            "dormitory",
+            "starts_at",
+            "ends_at",
+            "additional_capacity",
+            "reason",
+        )
+        widgets = {
+            "dormitory": forms.Select(attrs={"class": _INPUT_CLASS}),
+            "starts_at": forms.DateTimeInput(
+                attrs={"type": "datetime-local", "class": _INPUT_CLASS}
+            ),
+            "ends_at": forms.DateTimeInput(
+                attrs={"type": "datetime-local", "class": _INPUT_CLASS}
+            ),
+            "additional_capacity": forms.NumberInput(
+                attrs={"min": 1, "max": 100, "class": _INPUT_CLASS}
+            ),
+            "reason": forms.Textarea(
+                attrs={"rows": 3, "class": _TEXTAREA_CLASS}
+            ),
+        }
+
+
+class OperationalSettingsForm(forms.ModelForm):
+    class Meta:
+        model = OperationalSettings
+        fields = (
+            "roll_call_timeout_minutes",
+            "late_return_incident_after_minutes",
+            "senior_housemaster_escalation_after_minutes",
+            "headmaster_escalation_after_minutes",
+            "absence_follow_up_deadline_hours",
+            "gate_duty_enforcement_enabled",
+        )
+        widgets = {
+            "roll_call_timeout_minutes": forms.NumberInput(
+                attrs={"class": _INPUT_CLASS, "min": 5, "max": 240}
+            ),
+            "late_return_incident_after_minutes": forms.NumberInput(
+                attrs={"class": _INPUT_CLASS, "min": 15, "max": 1440}
+            ),
+            "senior_housemaster_escalation_after_minutes": forms.NumberInput(
+                attrs={"class": _INPUT_CLASS, "min": 15, "max": 1440}
+            ),
+            "headmaster_escalation_after_minutes": forms.NumberInput(
+                attrs={"class": _INPUT_CLASS, "min": 30, "max": 2880}
+            ),
+            "absence_follow_up_deadline_hours": forms.NumberInput(
+                attrs={"class": _INPUT_CLASS, "min": 1, "max": 168}
+            ),
+            "gate_duty_enforcement_enabled": forms.CheckboxInput(
+                attrs={"class": "h-4 w-4 rounded border-slate-300"}
+            ),
+        }
+
+
+class DisputeCaseForm(forms.ModelForm):
+    class Meta:
+        model = DisputeCase
+        fields = ("student", "category", "exeat", "roll_call_entry", "details")
+        widgets = {
+            "student": forms.Select(attrs={"class": _INPUT_CLASS}),
+            "category": forms.Select(attrs={"class": _INPUT_CLASS}),
+            "exeat": forms.Select(attrs={"class": _INPUT_CLASS}),
+            "roll_call_entry": forms.Select(attrs={"class": _INPUT_CLASS}),
+            "details": forms.Textarea(
+                attrs={
+                    "rows": 5,
+                    "class": _TEXTAREA_CLASS,
+                    "placeholder": (
+                        "Record exactly what is disputed, the evidence relied on, "
+                        "and the outcome the student or guardian is seeking."
+                    ),
+                }
+            ),
+        }
+
+    def clean(self):
+        cleaned = super().clean()
+        student = cleaned.get("student")
+        exeat = cleaned.get("exeat")
+        entry = cleaned.get("roll_call_entry")
+        if student and exeat and exeat.student_id != student.pk:
+            raise ValidationError({"exeat": "This pass belongs to a different student."})
+        if student and entry and entry.student_id != student.pk:
+            raise ValidationError(
+                {"roll_call_entry": "This roll-call entry belongs to a different student."}
+            )
+        return cleaned
+
+
+class DisputeDecisionForm(forms.Form):
+    status = forms.ChoiceField(
+        choices=(
+            (DisputeCase.Status.UNDER_REVIEW, "Under review"),
+            (DisputeCase.Status.RESOLVED, "Resolved / upheld"),
+            (DisputeCase.Status.REJECTED, "Not upheld"),
+            (DisputeCase.Status.CLOSED, "Closed"),
+        ),
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    outcome = forms.ChoiceField(
+        choices=(("", "Select when deciding"),) + tuple(DisputeCase.Outcome.choices),
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    assigned_to = forms.ModelChoiceField(
+        label="Assign to",
+        queryset=None,
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    decision_notes = forms.CharField(
+        label="Review notes / decision reasoning",
+        required=False,
+        max_length=4000,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 4,
+                "class": _TEXTAREA_CLASS,
+                "placeholder": "Record what was reviewed and why the decision is fair.",
+            }
+        ),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        User = get_user_model()
+        self.fields["assigned_to"].queryset = User.objects.filter(
+            is_active=True,
+            is_staff=True,
+        ).order_by("first_name", "last_name", "username")
+
+    def clean(self):
+        cleaned = super().clean()
+        status = cleaned.get("status")
+        if status and status != DisputeCase.Status.UNDER_REVIEW:
+            if not cleaned.get("outcome"):
+                raise ValidationError(
+                    {"outcome": "Choose an outcome when deciding the dispute."}
+                )
+            if not (cleaned.get("decision_notes") or "").strip():
+                raise ValidationError(
+                    {"decision_notes": "Record the reasoning for the decision."}
+                )
+        return cleaned

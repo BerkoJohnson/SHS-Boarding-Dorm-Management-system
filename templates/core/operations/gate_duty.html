@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Gate Duty Roster | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <header class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+    <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Gate operations</p>
+    <h1 class="mt-1 text-base font-bold text-slate-900">Gate duty roster</h1>
+    <p class="mt-1 text-xs text-slate-500">
+      Record time-bound shifts and temporary cover. Enforcement is
+      {% if enforcement_enabled %}<span class="font-semibold text-emerald-700">enabled</span>{% else %}<span class="font-semibold text-amber-700">disabled</span>{% endif %}.
+    </p>
+  </header>
+
+  {% if not enforcement_enabled %}
+  <div role="status" class="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-900">
+    <span class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 font-bold" aria-hidden="true">!</span>
+    <p>Gate Officers can currently log movements without a shift assignment. Enable enforcement only after every gate officer has a current roster entry.</p>
+  </div>
+  {% endif %}
+
+  <div class="grid gap-4 lg:grid-cols-5">
+    <form method="post" class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs lg:col-span-2">
+      {% csrf_token %}
+      <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+        <h2 class="text-sm font-bold text-slate-900">Add assignment</h2>
+        <p class="mt-1 text-xs text-slate-500">Schedule a gate officer for a defined shift.</p>
+      </div>
+      <div class="space-y-4 p-4">
+        {% include "core/partials/form_fields.html" with form=form %}
+        <button type="submit" class="inline-flex min-h-10 w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800">
+          Save assignment
+        </button>
+      </div>
+    </form>
+
+    <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs lg:col-span-3">
+      <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+        <h2 class="text-sm font-bold text-slate-900">Recent and upcoming assignments</h2>
+      </div>
+      <div class="divide-y divide-slate-100">
+        {% for assignment in assignments %}
+        <div class="flex flex-col gap-2 px-4 py-3 text-xs transition-colors hover:bg-slate-50/70 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="font-medium text-slate-900">
+              {{ assignment.user.get_full_name|default:assignment.user.username }}
+              <span class="font-normal text-slate-500">· {{ assignment.gate_name }}</span>
+              {% if assignment.is_active_at %}<span class="ml-1 inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">On duty</span>{% endif %}
+              {% if assignment.is_temporary %}<span class="ml-1 inline-flex rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">Temporary</span>{% endif %}
+            </p>
+            <p class="mt-1 text-xs text-slate-500">
+              {{ assignment.starts_at|date:"d M Y, H:i" }} – {{ assignment.ends_at|date:"d M Y, H:i" }}
+              {% if assignment.approved_by %} · approved by {{ assignment.approved_by.get_full_name|default:assignment.approved_by.username }}{% endif %}
+              {% if assignment.cancelled_at %} · cancelled{% endif %}
+            </p>
+            {% if assignment.reason %}<p class="mt-1 text-xs text-slate-500">{{ assignment.reason }}</p>{% endif %}
+          </div>
+          {% if not assignment.cancelled_at %}
+          <form method="post" action="{% url 'core:gate_duty_cancel' assignment.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="min-h-9 rounded-lg border border-rose-200 px-3 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Cancel</button>
+          </form>
+          {% endif %}
+        </div>
+        {% empty %}
+        <p class="px-4 py-8 text-center text-xs text-slate-500">No gate duty assignments recorded.</p>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

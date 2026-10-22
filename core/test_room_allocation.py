@@ -221,6 +221,65 @@ class DormitoryRoomAllocationTests(TestCase):
         self.assertTrue(any("at its capacity" in error for error in errors))
         self.assertEqual(room.students.count(), 0)
 
+    def test_roster_import_reports_dormitory_capacity_overflow_without_saving(self):
+        self.dormitory.capacity = 1
+        self.dormitory.save()
+        room = DormitoryRoom.objects.create(
+            dormitory=self.dormitory,
+            name="Dormitory Overflow Room",
+            capacity=2,
+        )
+        content = io.StringIO()
+        writer = csv.writer(content)
+        writer.writerow(
+            [
+                "Admission No.",
+                "Index Number",
+                "Full Name",
+                "Gender",
+                "Programme",
+                "House",
+                "Dormitory",
+                "Room",
+            ]
+        )
+        writer.writerows(
+            [
+                [
+                    "DORM-IMPORT-001",
+                    "DORM-IMPORT-IDX-001",
+                    "First Dormitory Student",
+                    "Male",
+                    self.programme.name,
+                    self.house.name,
+                    self.dormitory.name,
+                    room.name,
+                ],
+                [
+                    "DORM-IMPORT-002",
+                    "DORM-IMPORT-IDX-002",
+                    "Second Dormitory Student",
+                    "Male",
+                    self.programme.name,
+                    self.house.name,
+                    self.dormitory.name,
+                    room.name,
+                ],
+            ]
+        )
+        upload = SimpleUploadedFile(
+            "dormitory-capacity.csv",
+            content.getvalue().encode("utf-8"),
+            content_type="text/csv",
+        )
+
+        imported, errors = import_student_roster(upload)
+
+        self.assertEqual(imported, 0)
+        self.assertEqual(Student.objects.count(), 0)
+        self.assertTrue(any("dormitory" in error and "capacity" in error for error in errors))
+        self.assertEqual(room.students.count(), 0)
+
     def test_housing_report_includes_room_occupancy_and_unassigned_count(self):
         self.create_student("REPORT-001", room=self.room)
 
@@ -242,11 +301,16 @@ class DormitoryRoomAllocationTests(TestCase):
             house=self.other_house,
             name="Overflow Block",
             gender=Dormitory.GenderBlock.MALE,
-            capacity=0,
+            capacity=1,
         )
         self.create_student("COHORT-001")
         self.create_student("COHORT-002", dormitory=girls_block, gender=Student.Gender.FEMALE)
         self.create_student("COHORT-003", dormitory=unrecorded_block)
+        # Simulate historical occupancy recorded against a block whose bed
+        # count was later corrected to zero. The report must show the negative
+        # vacancy rather than hiding it.
+        Dormitory.objects.filter(pk=unrecorded_block.pk).update(capacity=0)
+        unrecorded_block.refresh_from_db()
 
         report = get_detailed_report("housing")
 

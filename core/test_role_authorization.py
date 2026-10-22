@@ -419,18 +419,12 @@ class StudentPhotoAuthorizationTests(TransactionTestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn(reverse("core:login"), response["Location"])
 
-    def test_public_photo_requires_the_students_opaque_qr_token(self):
+    def test_public_student_photo_endpoint_is_not_exposed(self):
         response = self.client.get(
-            reverse("core:public_student_photo", args=[self.student.public_token])
+            f"/verify/student/{self.student.public_token}/photo/"
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response["X-Robots-Tag"], "noindex, nofollow")
-        unknown_token_response = self.client.get(
-            reverse("core:public_student_photo", args=[uuid.uuid4()])
-        )
-        self.assertEqual(unknown_token_response.status_code, 404)
-        response.close()
+        self.assertEqual(response.status_code, 404)
 
     def test_admin_student_change_form_does_not_request_private_photo_url(self):
         administrator = User.objects.create_superuser(

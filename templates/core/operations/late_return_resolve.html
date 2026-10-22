@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Late-Return Investigation | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+  <div>
+    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Investigation</p>
+    <h1 class="mt-1 text-xl font-bold text-slate-900">{{ incident.student.full_name }} — {{ incident.exeat.exeat_number }}</h1>
+    <p class="mt-1 text-sm text-slate-600">
+      Expected return {{ incident.expected_return|date:"d M Y, H:i" }}
+      {% if incident.actual_return %} · actual return {{ incident.actual_return|date:"d M Y, H:i" }}{% endif %}
+      · {{ incident.delay_hours }} hours late
+    </p>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white p-5 text-sm">
+    <p class="font-medium text-slate-900">Escalation</p>
+    <p class="mt-1 text-slate-600">{{ incident.get_escalation_level_display }} · {{ incident.get_status_display }}</p>
+    <p class="mt-2 whitespace-pre-line text-slate-700">{{ incident.summary }}</p>
+    {% if incident.resolution %}
+    <div class="mt-4 rounded-lg bg-slate-50 p-3">
+      <p class="font-medium text-slate-800">Current resolution</p>
+      <p class="mt-1 whitespace-pre-line text-slate-700">{{ incident.resolution }}</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <form method="post" class="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    {% csrf_token %}
+    {% include "core/partials/form_fields.html" with form=form %}
+    <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <a href="{% url 'core:late_return_incidents' %}" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancel</a>
+      <button type="submit" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700">Save investigation</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

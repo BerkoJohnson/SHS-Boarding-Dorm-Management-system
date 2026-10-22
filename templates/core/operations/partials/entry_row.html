@@ -62,9 +62,15 @@
         </select>
       </form>
     {% else %}
-      <div class="flex items-center gap-1 text-slate-400 text-[10px] font-medium bg-slate-50 px-2 py-1.5 lg:py-1 rounded-md border border-slate-100 w-full lg:w-auto">
+      <div class="flex flex-wrap items-center gap-2 text-slate-400 text-[10px] font-medium bg-slate-50 px-2 py-1.5 lg:py-1 rounded-md border border-slate-100 w-full lg:w-auto">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
         Locked
+        {% if entry.session.status == 'Completed' or entry.session.status == 'Expired' %}
+        <a href="{% url 'core:roll_call_correction_request' entry.pk %}"
+           class="rounded border border-slate-300 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-100">
+          Request correction
+        </a>
+        {% endif %}
       </div>
     {% endif %}
     {% if entry.status_source == 'gate' %}

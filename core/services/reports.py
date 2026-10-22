@@ -2,11 +2,13 @@
 Service layer for reporting and statistics aggregation.
 """
 
+from django.contrib.auth import get_user_model
 from django.db.models import Count, F, Max, Q, Sum
 from django.utils import timezone
 from core.models import (
     Student,
     Exeat,
+    ExeatMovement,
     ExeatReconciliation,
     DisciplinaryRecord,
     RollCallSession,
@@ -16,6 +18,7 @@ from core.models import (
     House,
     HouseMaster,
     Dormitory,
+    DormitoryCapacityException,
     DormitoryRoom,
     SMSDelivery,
     MovementConcernReport,
@@ -1340,6 +1343,38 @@ def get_boarding_kpi_pack(house_id=None, term=None, date_from=None, date_to=None
         .order_by("severity")
     ]
 
+    capacity_exceptions = DormitoryCapacityException.objects.select_related(
+        "dormitory__house", "approved_by"
+    ).filter(cancelled_at__isnull=True)
+    if house_id is not None:
+        capacity_exceptions = capacity_exceptions.filter(
+            dormitory__house_id=house_id
+        )
+    if start is not None:
+        capacity_exceptions = capacity_exceptions.filter(ends_at__date__gte=start)
+    if end is not None:
+        capacity_exceptions = capacity_exceptions.filter(starts_at__date__lte=end)
+    active_exception_count = capacity_exceptions.filter(
+        starts_at__lte=now, ends_at__gte=now
+    ).count()
+    capacity_exception_rows = [
+        (
+            exception.dormitory.house.name,
+            exception.dormitory.name,
+            f"+{exception.additional_capacity}",
+            timezone.localtime(exception.starts_at).strftime("%d %b %Y %H:%M"),
+            timezone.localtime(exception.ends_at).strftime("%d %b %Y %H:%M"),
+            (
+                exception.approved_by.get_full_name()
+                or exception.approved_by.get_username()
+            )
+            if exception.approved_by
+            else "—",
+            exception.reason,
+        )
+        for exception in capacity_exceptions.order_by("-starts_at")[:100]
+    ]
+
     return {
         "title": "Boarding Termly KPI Pack",
         "layout": "boarding_kpi",
@@ -1352,6 +1387,7 @@ def get_boarding_kpi_pack(house_id=None, term=None, date_from=None, date_to=None
             ("Awaiting dorm placement", awaiting_dorm, "amber"),
             ("Awaiting room placement", awaiting_room, "amber"),
             ("Over-capacity dormitories", over_capacity_dorms, "rose"),
+            ("Active capacity exceptions", active_exception_count, "amber"),
             ("Currently out", active_out, "sky"),
             ("Overdue returns", overdue, "rose"),
             ("Exeats in period", exeat_total, "violet"),
@@ -1376,12 +1412,29 @@ def get_boarding_kpi_pack(house_id=None, term=None, date_from=None, date_to=None
                 "headers": ("Severity", "Active cases"),
                 "rows": severity_rows,
             },
+            {
+                "title": "Dormitory capacity exceptions (weekly review)",
+                "headers": (
+                    "House",
+                    "Dormitory",
+                    "Extra places",
+                    "Starts",
+                    "Ends",
+                    "Approved by",
+                    "Reason",
+                ),
+                "rows": capacity_exception_rows,
+            },
         ),
         "highlights": (
             f"Exeats: {exeat_pending} pending, {exeat_approved} approved, "
             f"{exeat_rejected} rejected in the selected period.",
             "Occupancy compares placed boarders against configured dormitory capacity.",
             "Attendance counts completed roll calls only; Present ÷ Expected marks.",
+            (
+                f"{active_exception_count} time-bound dormitory capacity exception(s) "
+                "are active now. Review exceptions weekly and do not make them permanent."
+            ),
         ),
         "record_count": total_boarders,
     }
@@ -1646,6 +1699,8 @@ def _overdue_register_report(house_id=None, date_from=None, date_to=None, term_i
         reconciliation_outcome=F("reconciliation__outcome"),
     )
     rows = []
+    overdue_rows = []
+    late_return_rows = []
     overdue_now = 0
     late_returned = 0
     max_late = 0.0
@@ -1662,7 +1717,12 @@ def _overdue_register_report(house_id=None, date_from=None, date_to=None, term_i
             hours_late = round((now - expected_return).total_seconds() / 3600, 1)
             state = "OVERDUE - still out"
             overdue_now += 1
-        elif actual_return and expected_return and actual_return > expected_return:
+        elif (
+            departed is not None
+            and actual_return
+            and expected_return
+            and actual_return > expected_return
+        ):
             hours_late = round(
                 (actual_return - expected_return).total_seconds() / 3600, 1
             )
@@ -1672,19 +1732,24 @@ def _overdue_register_report(house_id=None, date_from=None, date_to=None, term_i
             continue
 
         max_late = max(max_late, hours_late)
-        rows.append(
-            (
-                exeat["exeat_number"],
-                exeat["student__full_name"],
-                exeat["student__house__name"] or "Unassigned",
-                _EXEAT_TYPE_LABELS.get(exeat["exeat_type"], exeat["exeat_type"]),
-                expected_return,
-                actual_return or "Still out",
-                f"{hours_late}h",
-                state,
-            )
+        row = (
+            exeat["exeat_number"],
+            exeat["student__full_name"],
+            exeat["student__house__name"] or "Unassigned",
+            _EXEAT_TYPE_LABELS.get(exeat["exeat_type"], exeat["exeat_type"]),
+            expected_return,
+            actual_return or "Still out",
+            f"{hours_late}h",
+            state,
         )
+        rows.append(row)
+        if state.startswith("OVERDUE"):
+            overdue_rows.append(row)
+        else:
+            late_return_rows.append(row)
     rows.sort(key=lambda row: row[4])
+    overdue_rows.sort(key=lambda row: row[4], reverse=True)
+    late_return_rows.sort(key=lambda row: row[4], reverse=True)
 
     return {
         "title": "Overdue & Late-Return Register",
@@ -1700,13 +1765,44 @@ def _overdue_register_report(house_id=None, date_from=None, date_to=None, term_i
         ),
         "rows": rows,
         "summary": (
-            ("Currently overdue", overdue_now),
+            ("Currently overdue (still out)", overdue_now),
             ("Returned late in period", late_returned),
             ("Total exceptions", len(rows)),
             ("Maximum delay", f"{max_late}h" if rows else "—"),
         ),
+        "sections": (
+            {
+                "title": "Currently overdue — student still out",
+                "headers": (
+                    "Pass",
+                    "Student",
+                    "House",
+                    "Type",
+                    "Expected Return",
+                    "Recorded Return",
+                    "Delay",
+                    "State",
+                ),
+                "rows": overdue_rows,
+            },
+            {
+                "title": "Returned late during the period",
+                "headers": (
+                    "Pass",
+                    "Student",
+                    "House",
+                    "Type",
+                    "Expected Return",
+                    "Recorded Return",
+                    "Delay",
+                    "State",
+                ),
+                "rows": late_return_rows,
+            },
+        ),
         "highlights": (
-            "Includes passes still out past expected return and passes returned after expected return.",
+            "The register separates passes still out beyond the expected return from passes that have already returned late.",
+            "A pass without a confirmed departure is not counted as overdue; use the reconciliation workflow to resolve missing gate events.",
             "Departed/returned timestamps come from the gate log, falling back to reconciled records.",
         ),
         "point_in_time": False,
@@ -1816,7 +1912,7 @@ def _gate_conflict_report(house_id=None, date_from=None, date_to=None, term_id=N
 def _approval_turnaround_report(
     house_id=None, date_from=None, date_to=None, term_id=None
 ):
-    """Summarize decision volume and approximate approval turnaround."""
+    """Summarize decision volume and immutable approval turnaround."""
     exeats = Exeat.objects.exclude(status=Exeat.Status.PENDING)
     if house_id is not None:
         exeats = exeats.filter(student__house_id=house_id)
@@ -1834,9 +1930,12 @@ def _approval_turnaround_report(
         "exeat_type",
         "status",
         "created_at",
-        "updated_at",
+        "decided_at",
         "expected_departure",
         "approved_by__full_name",
+        "approved_by_user__first_name",
+        "approved_by_user__last_name",
+        "approved_by_user__username",
     ).order_by("-created_at")
     rows = []
     turnarounds = []
@@ -1845,12 +1944,16 @@ def _approval_turnaround_report(
     approved = rejected = cancelled = 0
     for exeat in data:
         submitted = exeat["created_at"]
-        decided = exeat["updated_at"]
-        turnaround = (
-            round((decided - submitted).total_seconds() / 3600, 1)
-            if submitted and decided
-            else None
-        )
+        decided = exeat["decided_at"]
+        # Turnaround is a performance measure for positive/negative decisions.
+        # A cancelled request is not an approval decision and must not distort it.
+        turnaround = None
+        if (
+            exeat["status"] in (Exeat.Status.APPROVED, Exeat.Status.REJECTED)
+            and submitted
+            and decided
+        ):
+            turnaround = round((decided - submitted).total_seconds() / 3600, 1)
         lead_time = (
             round(
                 (exeat["expected_departure"] - submitted).total_seconds() / 3600,
@@ -1870,6 +1973,19 @@ def _approval_turnaround_report(
             cancelled += 1
 
         type_label = _EXEAT_TYPE_LABELS.get(exeat["exeat_type"], exeat["exeat_type"])
+        approver_name = (
+            exeat["approved_by__full_name"]
+            or " ".join(
+                part
+                for part in (
+                    exeat["approved_by_user__first_name"],
+                    exeat["approved_by_user__last_name"],
+                )
+                if part
+            ).strip()
+            or exeat["approved_by_user__username"]
+            or "Unassigned"
+        )
         rows.append(
             (
                 exeat["exeat_number"],
@@ -1886,18 +2002,18 @@ def _approval_turnaround_report(
                     else "—"
                 ),
                 f"{lead_time}h" if lead_time is not None else "—",
-                exeat["approved_by__full_name"] or "—",
+                approver_name,
             )
         )
 
-        approver = exeat["approved_by__full_name"] or "Unassigned"
-        totals = approver_totals.setdefault(
-            approver, {"decisions": 0, "hours": 0.0, "measured": 0}
-        )
-        totals["decisions"] += 1
-        if turnaround is not None:
-            totals["hours"] += turnaround
-            totals["measured"] += 1
+        if exeat["status"] != Exeat.Status.CANCELLED:
+            totals = approver_totals.setdefault(
+                approver_name, {"decisions": 0, "hours": 0.0, "measured": 0}
+            )
+            totals["decisions"] += 1
+            if turnaround is not None:
+                totals["hours"] += turnaround
+                totals["measured"] += 1
         type_totals[type_label] = type_totals.get(type_label, 0) + 1
 
     approver_rows = [
@@ -1940,10 +2056,10 @@ def _approval_turnaround_report(
         ),
         "rows": rows,
         "summary": (
-            ("Decided passes", len(rows)),
+            ("Decided passes", approved + rejected),
             ("Approved", approved),
             ("Rejected", rejected),
-            ("Cancelled", cancelled),
+            ("Cancelled (excluded from turnaround)", cancelled),
             ("Avg turnaround", f"{average}h" if average is not None else "—"),
             ("Fastest", f"{min(turnarounds)}h" if turnarounds else "—"),
             ("Slowest", f"{max(turnarounds)}h" if turnarounds else "—"),
@@ -1961,7 +2077,8 @@ def _approval_turnaround_report(
             },
         ),
         "highlights": (
-            "There is no dedicated approval timestamp; updated_at is only an approximation and can shift if a record is edited later.",
+            "Turnaround uses the immutable decision timestamp recorded when the request was approved or rejected.",
+            "Cancelled requests are reported separately and excluded from turnaround and approver averages.",
             "Lead time is scheduled departure minus request creation (how much notice was given).",
         ),
         "point_in_time": False,
@@ -2376,25 +2493,32 @@ def _staff_activity_report(house_id=None, date_from=None, date_to=None, term_id=
         house_masters = house_masters.filter(house_id=house_id)
 
     roll_calls = RollCallSession.objects.all()
-    approvals = Exeat.objects.filter(status=Exeat.Status.APPROVED)
+    approvals = Exeat.objects.exclude(status=Exeat.Status.PENDING).filter(
+        decided_at__isnull=False
+    )
     incidents = DisciplinaryRecord.objects.all()
     resolutions = RollCallAbsenceFollowUp.objects.filter(
         resolved_at__isnull=False,
         resolved_by__isnull=False,
+    )
+    gate_movements = ExeatMovement.objects.filter(
+        Q(departure_recorded_by_user__isnull=False)
+        | Q(return_recorded_by_user__isnull=False)
     )
     if house_id is not None:
         roll_calls = roll_calls.filter(house_id=house_id)
         approvals = approvals.filter(student__house_id=house_id)
         incidents = incidents.filter(student__house_id=house_id)
         resolutions = resolutions.filter(entry__session__house_id=house_id)
+        gate_movements = gate_movements.filter(exeat__student__house_id=house_id)
     if date_from:
         roll_calls = roll_calls.filter(date__gte=date_from)
-        approvals = approvals.filter(updated_at__date__gte=date_from)
+        approvals = approvals.filter(decided_at__date__gte=date_from)
         incidents = incidents.filter(created_at__date__gte=date_from)
         resolutions = resolutions.filter(resolved_at__date__gte=date_from)
     if date_to:
         roll_calls = roll_calls.filter(date__lte=date_to)
-        approvals = approvals.filter(updated_at__date__lte=date_to)
+        approvals = approvals.filter(decided_at__date__lte=date_to)
         incidents = incidents.filter(created_at__date__lte=date_to)
         resolutions = resolutions.filter(resolved_at__date__lte=date_to)
     if term_id:
@@ -2402,16 +2526,33 @@ def _staff_activity_report(house_id=None, date_from=None, date_to=None, term_id=
         approvals = approvals.filter(academic_term_id=term_id)
         incidents = incidents.filter(academic_term_id=term_id)
         resolutions = resolutions.filter(entry__session__academic_term_id=term_id)
+        gate_movements = gate_movements.filter(exeat__academic_term_id=term_id)
+
+    departures = gate_movements.filter(departure_recorded_by_user__isnull=False)
+    returns = gate_movements.filter(return_recorded_by_user__isnull=False)
+    if date_from:
+        departures = departures.filter(actual_departure__date__gte=date_from)
+        returns = returns.filter(actual_return__date__gte=date_from)
+    if date_to:
+        departures = departures.filter(actual_departure__date__lte=date_to)
+        returns = returns.filter(actual_return__date__lte=date_to)
+    gate_counts = {}
+    for field, actions in (
+        ("departure_recorded_by_user_id", departures),
+        ("return_recorded_by_user_id", returns),
+    ):
+        for user_id, count in (
+            actions.exclude(**{f"{field}__isnull": True})
+            .values(field)
+            .annotate(count=Count("id"))
+            .values_list(field, "count")
+        ):
+            gate_counts[user_id] = gate_counts.get(user_id, 0) + count
 
     roll_call_counts = dict(
         roll_calls.values("conducted_by_id")
         .annotate(count=Count("id"))
         .values_list("conducted_by_id", "count")
-    )
-    approval_counts = dict(
-        approvals.values("approved_by_id")
-        .annotate(count=Count("id"))
-        .values_list("approved_by_id", "count")
     )
     incident_counts = dict(
         incidents.values("logged_by_id")
@@ -2425,12 +2566,33 @@ def _staff_activity_report(house_id=None, date_from=None, date_to=None, term_id=
     )
 
     rows = []
+    matched_approval_ids = set()
     for housemaster in house_masters:
         roll_call_count = roll_call_counts.get(housemaster.pk, 0)
-        approval_count = approval_counts.get(housemaster.pk, 0)
+        # Prefer the authenticated actor. Legacy rows without an actor fall
+        # back to the HouseMaster attribution, so a normal approval recorded in
+        # both places is counted once (F-08/F-21).
+        if housemaster.user_id:
+            actor_filter = Q(approved_by_user_id=housemaster.user_id) | Q(
+                approved_by_user__isnull=True,
+                approved_by_id=housemaster.pk,
+            )
+        else:
+            actor_filter = Q(
+                approved_by_user__isnull=True,
+                approved_by_id=housemaster.pk,
+            )
+        approval_ids = set(
+            approvals.filter(actor_filter).values_list("pk", flat=True)
+        )
+        matched_approval_ids.update(approval_ids)
+        approval_count = len(approval_ids)
         incident_count = incident_counts.get(housemaster.pk, 0)
         resolution_count = (
             resolution_counts.get(housemaster.user_id, 0) if housemaster.user_id else 0
+        )
+        gate_count = (
+            gate_counts.get(housemaster.user_id, 0) if housemaster.user_id else 0
         )
         rows.append(
             (
@@ -2440,23 +2602,64 @@ def _staff_activity_report(house_id=None, date_from=None, date_to=None, term_id=
                 approval_count,
                 incident_count,
                 resolution_count,
-                roll_call_count + approval_count + incident_count + resolution_count,
+                gate_count,
+                roll_call_count
+                + approval_count
+                + incident_count
+                + resolution_count
+                + gate_count,
             )
         )
-    rows.sort(key=lambda row: (-row[6], row[0].casefold()))
 
+    linked_user_ids = {
+        housemaster.user_id
+        for housemaster in house_masters
+        if housemaster.user_id is not None
+    }
     unlogged_roll_calls = roll_calls.filter(conducted_by__isnull=True)
     unlogged_incidents = incidents.filter(logged_by__isnull=True)
-    total_actions = sum(row[6] for row in rows)
+    other_approval_rows = list(
+        approvals.exclude(pk__in=matched_approval_ids)
+        .filter(approved_by_user__isnull=False)
+        .values("approved_by_user_id")
+        .annotate(count=Count("id"))
+    )
+    approval_counts_by_user = {
+        row["approved_by_user_id"]: row["count"] for row in other_approval_rows
+    }
+    extra_user_ids = set(approval_counts_by_user) | (set(gate_counts) - linked_user_ids)
+    extra_user_ids.discard(None)
+    users = get_user_model().objects.in_bulk(extra_user_ids)
+    for user_id in extra_user_ids:
+        user = users.get(user_id)
+        if user is None:
+            continue
+        approval_count = approval_counts_by_user.get(user_id, 0)
+        gate_count = gate_counts.get(user_id, 0)
+        rows.append(
+            (
+                user.get_full_name().strip() or user.get_username(),
+                "School-wide",
+                0,
+                approval_count,
+                0,
+                0,
+                gate_count,
+                approval_count + gate_count,
+            )
+        )
+    rows.sort(key=lambda row: (-row[7], row[0].casefold()))
+    total_actions = sum(row[7] for row in rows)
     return {
         "title": "Staff Activity & Workload",
         "headers": (
-            "Housemaster",
-            "House",
+            "Staff member",
+            "Scope",
             "Roll calls",
             "Passes approved",
             "Incidents logged",
             "Absences resolved",
+            "Gate movements",
             "Total actions",
         ),
         "rows": rows,
@@ -2478,8 +2681,9 @@ def _staff_activity_report(house_id=None, date_from=None, date_to=None, term_id=
             },
         ),
         "highlights": (
-            "Approvals are counted by updated_at, the closest available proxy for when the decision was recorded.",
-            "Absence resolutions are matched to a housemaster through their linked login account.",
+            "Approvals use the immutable decision timestamp and the authenticated authorizer account where one is recorded.",
+            "Administrators, medical leads, and gate officers appear as staff rows when they act in the selected period.",
+            "Absence resolutions are matched to a housemaster through their linked login account; gate movements count departures and returns separately.",
         ),
         "point_in_time": False,
     }
@@ -2517,13 +2721,18 @@ def _welfare_infirmary_report(
     }
     medical_by_student = {row["student_id"]: row["count"] for row in medical_rows}
     student_ids = set(infirmary_by_student) | set(medical_by_student)
-    students = Student.objects.filter(pk__in=student_ids).values(
+    students = Student.objects.filter(pk__in=student_ids).exclude(
+        status=Student.EnrollmentStatus.COMPLETED
+    ).values(
         "id",
         "full_name",
         "house__name",
         "dormitory__name",
     )
     student_info = {student["id"]: student for student in students}
+    # Do not let a completed/left student remain on a current welfare
+    # watchlist merely because an old term record still exists (F-24).
+    student_ids = set(student_info)
 
     rows = []
     for student_id in student_ids:
@@ -2746,7 +2955,14 @@ def _conduct_normalized_report(
             )
         ).values_list("pk", "count")
     )
-    active_records = DisciplinaryRecord.objects.filter(corrected_at__isnull=True)
+    active_records = DisciplinaryRecord.objects.filter(
+        corrected_at__isnull=True,
+        student__status__in=(
+            Student.EnrollmentStatus.ENROLLED,
+            Student.EnrollmentStatus.APPROVED,
+            Student.EnrollmentStatus.IN_PROGRESS,
+        ),
+    )
     if house_id is not None:
         active_records = active_records.filter(student__house_id=house_id)
     if date_from:
@@ -2811,7 +3027,8 @@ def _conduct_normalized_report(
         ),
         "highlights": (
             "The 'per 100 boarders' rate compares houses using the current boarding population.",
-            "Only active (uncorrected) records created within the selected period and term are counted.",
+            "Only active (uncorrected) records created within the selected period and term for current students are counted.",
+            "Houses with zero current boarders show a zero rate rather than an undefined ratio.",
         ),
         "point_in_time": False,
     }

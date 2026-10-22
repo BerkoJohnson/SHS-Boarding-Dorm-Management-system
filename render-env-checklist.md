@@ -164,16 +164,17 @@ These are independent: either can be enabled without the other.
 | `AWS_REGION` | region | R with `neon_s3` |
 | `AWS_ACCESS_KEY_ID` | access key | R S |
 | `AWS_SECRET_ACCESS_KEY` | secret key | R S |
-| `CACHE_BACKEND` | `django.core.cache.backends.redis.RedisCache` | O |
-| `CACHE_LOCATION` | `redis://<host>:6379/1` | O |
+| `CACHE_BACKEND` | `django.core.cache.backends.redis.RedisCache` | R |
+| `CACHE_LOCATION` | `redis://<host>:6379/1` | R |
 | `REDIS_URL` | Celery broker — needed only for the worker/beat services | O |
 | `BACKGROUND_JOBS_ENABLED` | `False` on the web-only blueprint; set `True` only when worker + Beat run | O |
 | `TRUSTED_PROXY_COUNT` | `1` | O |
 
 > `MEDIA_STORAGE_BACKEND=filesystem` loses uploads on every deploy and restart. Use `neon_s3` in production.
 >
-> Without a shared `CACHE_BACKEND`, rate limits are per-process and each of the 3 Gunicorn workers keeps
-> its own counters.
+> Production refuses to start without an explicit shared cache backend and location. If the cache
+> becomes unavailable, login and public concern-report submissions return HTTP 503 rather than
+> bypassing their rate limits.
 >
 > The supplied `render.yaml` is **web-only**: it sets `BACKGROUND_JOBS_ENABLED=False`, so SMS
 > dispatch, overdue reminders, roll-call expiry, ID-export cleanup, and SHS 3 phase-out do not run.

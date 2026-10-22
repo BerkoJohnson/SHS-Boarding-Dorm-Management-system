@@ -31,9 +31,33 @@ from .models import (
     RollCallSession,
     RollCallEntry,
     RollCallAbsenceFollowUp,
+    RollCallCorrection,
     MovementConcernReport,
+    OperationalSettings,
+    AuditEvent,
+    DataExportLog,
+    ExeatReview,
+    ExeatScheduleChange,
+    GateDutyAssignment,
+    LateReturnIncident,
+    StaffNotification,
+    DormitoryCapacityException,
+    DisputeCase,
 )
 from .widgets import PrivateStudentPhotoInput
+
+
+class _ReadOnlyAdmin(admin.ModelAdmin):
+    """View-only mirror for records that must change through audited workflows."""
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 class TenantStaffQuotaFormMixin:
@@ -265,6 +289,8 @@ class StudentProgressionRecordAdmin(admin.ModelAdmin):
 
 @admin.register(Exeat)
 class ExeatAdmin(admin.ModelAdmin):
+    """Read-only mirror. Decisions must use the audited workflow pages."""
+
     list_display = (
         "exeat_number",
         "student",
@@ -273,13 +299,26 @@ class ExeatAdmin(admin.ModelAdmin):
         "expected_return",
         "status",
         "approved_by",
+        "approved_by_user",
     )
     list_filter = ("status", "exeat_type", "student__house")
     search_fields = ("exeat_number", "student__full_name", "student__admission_no")
+    readonly_fields = tuple(field.name for field in Exeat._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ExeatMovement)
 class ExeatMovementAdmin(admin.ModelAdmin):
+    """Read-only gate evidence. Movement is recorded by the gate terminal."""
+
     list_display = (
         "exeat",
         "actual_departure",
@@ -287,6 +326,16 @@ class ExeatMovementAdmin(admin.ModelAdmin):
         "departure_recorded_by",
         "return_recorded_by",
     )
+    readonly_fields = tuple(field.name for field in ExeatMovement._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(MovementConcernReport)
@@ -314,7 +363,9 @@ class MovementConcernReportAdmin(admin.ModelAdmin):
 
 
 @admin.register(ExeatReconciliation)
-class ExeatReconciliationAdmin(admin.ModelAdmin):
+class ExeatReconciliationAdmin(_ReadOnlyAdmin):
+    """Read-only mirror. Reconciliation changes go through the gate workflow."""
+
     list_display = (
         "exeat",
         "outcome",
@@ -325,7 +376,9 @@ class ExeatReconciliationAdmin(admin.ModelAdmin):
     )
     list_filter = ("outcome", "created_at")
     search_fields = ("exeat__exeat_number", "exeat__student__full_name", "reason")
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = tuple(
+        field.name for field in ExeatReconciliation._meta.fields
+    )
 
 
 @admin.register(SMSDelivery)
@@ -562,7 +615,7 @@ class DisciplinaryRecordAdmin(admin.ModelAdmin):
 
 
 @admin.register(RollCallSession)
-class RollCallSessionAdmin(admin.ModelAdmin):
+class RollCallSessionAdmin(_ReadOnlyAdmin):
     list_display = (
         "house",
         "dormitory",
@@ -576,7 +629,7 @@ class RollCallSessionAdmin(admin.ModelAdmin):
 
 
 @admin.register(RollCallEntry)
-class RollCallEntryAdmin(admin.ModelAdmin):
+class RollCallEntryAdmin(_ReadOnlyAdmin):
     list_display = (
         "session",
         "student",
@@ -588,19 +641,9 @@ class RollCallEntryAdmin(admin.ModelAdmin):
     list_filter = ("status", "session__house", "session__date")
     search_fields = ("student__full_name", "student__admission_no", "remarks")
 
-    def has_change_permission(self, request, obj=None):
-        if obj and obj.session.status == "Completed":
-            return False
-        return super().has_change_permission(request, obj)
-
-    def has_delete_permission(self, request, obj=None):
-        if obj and obj.session.status == "Completed":
-            return False
-        return super().has_delete_permission(request, obj)
-
 
 @admin.register(RollCallAbsenceFollowUp)
-class RollCallAbsenceFollowUpAdmin(admin.ModelAdmin):
+class RollCallAbsenceFollowUpAdmin(_ReadOnlyAdmin):
     list_display = ("entry", "status", "reported_by", "resolved_by", "resolved_at")
     list_filter = ("status", "entry__session__house", "entry__session__date")
     search_fields = (
@@ -640,3 +683,167 @@ admin.site.register(
 class AcademicYearAdmin(admin.ModelAdmin):
     list_display = ("name", "start_date", "end_date", "is_current")
     readonly_fields = ("students_phased_out_at",)
+
+
+@admin.register(OperationalSettings)
+class OperationalSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        "roll_call_timeout_minutes",
+        "late_return_incident_after_minutes",
+        "senior_housemaster_escalation_after_minutes",
+        "headmaster_escalation_after_minutes",
+        "gate_duty_enforcement_enabled",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return OperationalSettings.objects.filter(pk=1).exists() is False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(GateDutyAssignment)
+class GateDutyAssignmentAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "user",
+        "gate_name",
+        "starts_at",
+        "ends_at",
+        "is_temporary",
+        "approved_by",
+        "cancelled_at",
+    )
+    list_filter = ("gate_name", "is_temporary", "cancelled_at")
+    search_fields = ("user__username", "user__first_name", "user__last_name")
+
+
+@admin.register(DormitoryCapacityException)
+class DormitoryCapacityExceptionAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "dormitory",
+        "additional_capacity",
+        "starts_at",
+        "ends_at",
+        "approved_by",
+        "cancelled_at",
+    )
+    list_filter = ("dormitory__house", "cancelled_at")
+    search_fields = ("dormitory__name", "reason")
+
+
+@admin.register(ExeatReview)
+class ExeatReviewAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "exeat",
+        "review_type",
+        "status",
+        "authorized_by",
+        "due_at",
+        "reviewed_by",
+        "reviewed_at",
+    )
+    list_filter = ("review_type", "status")
+    search_fields = ("exeat__exeat_number", "exeat__student__full_name")
+
+
+@admin.register(ExeatScheduleChange)
+class ExeatScheduleChangeAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "exeat",
+        "change_type",
+        "previous_departure",
+        "new_departure",
+        "changed_by",
+        "created_at",
+    )
+    list_filter = ("change_type",)
+    search_fields = ("exeat__exeat_number", "exeat__student__full_name", "reason")
+
+
+@admin.register(LateReturnIncident)
+class LateReturnIncidentAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "student",
+        "exeat",
+        "expected_return",
+        "actual_return",
+        "escalation_level",
+        "status",
+        "owner",
+    )
+    list_filter = ("status", "escalation_level")
+    search_fields = ("student__full_name", "student__admission_no", "exeat__exeat_number")
+
+
+@admin.register(RollCallCorrection)
+class RollCallCorrectionAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "entry",
+        "previous_status",
+        "requested_status",
+        "requires_second_approval",
+        "status",
+        "requested_by",
+        "reviewed_by",
+        "created_at",
+    )
+    list_filter = ("status", "requires_second_approval")
+    search_fields = (
+        "entry__student__full_name",
+        "entry__student__admission_no",
+        "reason",
+    )
+
+
+@admin.register(StaffNotification)
+class StaffNotificationAdmin(_ReadOnlyAdmin):
+    list_display = ("user", "kind", "title", "read_at", "created_at")
+    list_filter = ("kind", "read_at")
+    search_fields = ("user__username", "title", "message")
+
+
+@admin.register(AuditEvent)
+class AuditEventAdmin(_ReadOnlyAdmin):
+    list_display = ("created_at", "actor", "action", "target_type", "summary")
+    list_filter = ("action", "created_at")
+    search_fields = ("summary", "target_type", "target_id", "actor__username")
+
+
+@admin.register(DataExportLog)
+class DataExportLogAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "created_at",
+        "actor",
+        "report_name",
+        "file_format",
+        "row_count",
+        "purpose",
+    )
+    list_filter = ("file_format", "created_at")
+    search_fields = ("report_name", "purpose", "actor__username")
+
+
+@admin.register(DisputeCase)
+class DisputeCaseAdmin(_ReadOnlyAdmin):
+    list_display = (
+        "reference",
+        "student",
+        "category",
+        "status",
+        "outcome",
+        "assigned_to",
+        "raised_by",
+        "created_at",
+    )
+    list_filter = ("category", "status", "outcome")
+    search_fields = (
+        "reference",
+        "student__full_name",
+        "student__admission_no",
+        "details",
+    )

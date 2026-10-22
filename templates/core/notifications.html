@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Notifications | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Inbox</p>
+      <h1 class="mt-1 text-xl font-bold text-slate-900">Operational notifications</h1>
+      <p class="mt-1 text-sm text-slate-600">{{ unread_count }} unread notification{{ unread_count|pluralize }}.</p>
+    </div>
+    {% if unread_count %}
+    <form method="post">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="read_all">
+      <button type="submit" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Mark all read</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <section class="rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div class="divide-y divide-slate-100">
+      {% for notification in notifications %}
+      <div class="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-start sm:justify-between {% if not notification.read_at %}bg-sky-50/40{% endif %}">
+        <div class="min-w-0">
+          <p class="font-semibold text-slate-900">{{ notification.title }}</p>
+          <p class="mt-1 text-sm text-slate-600">{{ notification.message }}</p>
+          <p class="mt-1 text-xs text-slate-500">{{ notification.get_kind_display }} · {{ notification.created_at|date:"d M Y, H:i" }}</p>
+        </div>
+        <div class="flex shrink-0 gap-2">
+          {% if notification.url %}
+          <form method="post" action="{% url 'core:notification_read' notification.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="min-h-9 rounded-lg border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">Open</button>
+          </form>
+          {% elif not notification.read_at %}
+          <form method="post" action="{% url 'core:notification_read' notification.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="min-h-9 rounded-lg border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">Mark read</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% empty %}
+      <p class="px-5 py-10 text-center text-sm text-slate-500">No notifications yet.</p>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

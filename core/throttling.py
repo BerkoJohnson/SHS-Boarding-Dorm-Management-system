@@ -4,9 +4,6 @@ Used to slow credential stuffing against the staff login and spam against the
 public "report a concern" endpoint. The cache defaults to ``LocMemCache``
 (per-process); point ``CACHE_BACKEND`` / ``CACHE_LOCATION`` at a shared backend
 for cluster-wide limits across multiple workers.
-
-The failure mode is deliberately fail-open: if the cache backend is
-unavailable, requests are allowed rather than taking the site down.
 """
 from __future__ import annotations
 
@@ -14,6 +11,10 @@ import hashlib
 import time
 
 from django.core.cache import cache
+
+
+class RateLimitUnavailable(RuntimeError):
+    """Raised when the configured cache cannot safely enforce a rate limit."""
 
 
 def client_ip(request):
@@ -57,10 +58,13 @@ def is_rate_limited(scope, identity, limit, window):
         try:
             count = cache.incr(cache_key)
         except ValueError:
-            # Key expired between add() and incr(): restart the window.
-            cache.set(cache_key, 1, window)
-            return False
+            # The key expired between add() and incr(); only one concurrent
+            # request may recreate it.
+            if cache.add(cache_key, 1, window):
+                return False
+            count = cache.incr(cache_key)
         return count > limit
-    except Exception:
-        # Never fail closed: a cache outage must not take the site down.
-        return False
+    except Exception as error:
+        raise RateLimitUnavailable(
+            "The configured cache could not enforce the rate limit."
+        ) from error

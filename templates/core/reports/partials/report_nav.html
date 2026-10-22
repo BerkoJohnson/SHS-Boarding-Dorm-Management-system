@@ -17,7 +17,7 @@ Context:
   <a href="{% url 'core:sms_usage' %}"
      class="inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-semibold transition {% if active_report == 'sms' %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}"
      {% if active_report == 'sms' %}aria-current="page"{% endif %}>SMS usage</a>
-  {% if can_view_config %}
+  {% if can_view_config_audit %}
     <a href="{% url 'core:config_audit' %}"
        class="inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-semibold transition {% if active_report == 'config' %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}"
        {% if active_report == 'config' %}aria-current="page"{% endif %}>Config audit</a>

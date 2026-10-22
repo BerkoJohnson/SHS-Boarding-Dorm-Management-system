@@ -9,7 +9,7 @@ from functools import wraps
 from django.core.exceptions import PermissionDenied
 from django.contrib import messages
 from django.shortcuts import redirect
-from core.models import StaffRole, get_user_profile
+from core.models import Exeat, StaffRole, get_user_profile
 
 
 # ---------------------------------------------------------------------------
@@ -32,11 +32,13 @@ STUDENT_RECORD_ROLES = (
     StaffRole.HOUSEMASTER,
 )
 
-# Roll Call: Conducting dormitory attendance sessions
+# Roll Call: Conducting dormitory attendance sessions. House tutors may run
+# their own house's roll call but cannot approve exeats or use gate controls.
 ROLL_CALL_ROLES = (
     StaffRole.ADMIN,
     StaffRole.SENIOR_HOUSEMASTER,
     StaffRole.HOUSEMASTER,
+    StaffRole.HOUSE_TUTOR,
 )
 
 # Gate Operations: School-wide departure/return logging at the main checkpoint
@@ -51,13 +53,16 @@ EXEAT_ROLES = (
     StaffRole.SENIOR_HOUSEMASTER,
     StaffRole.HOUSEMASTER,
     StaffRole.HOUSE_TUTOR,
+    StaffRole.MEDICAL,
 )
 
-# Exeat Approval: Only senior staff can approve/reject
+# Exeat Approval: senior staff plus the scoped Medical/Infirmary Lead.
+# The Medical role is further restricted by can_approve_exeat_check().
 EXEAT_APPROVAL_ROLES = (
     StaffRole.ADMIN,
     StaffRole.SENIOR_HOUSEMASTER,
     StaffRole.HOUSEMASTER,
+    StaffRole.MEDICAL,
 )
 
 # Exeat Creation: Tutors, Housemasters and Admins (Gate Officers cannot create exeats)
@@ -123,6 +128,14 @@ def filter_queryset_by_house(user, queryset, house_lookup):
     return queryset.filter(**{house_lookup: house.pk})
 
 
+def filter_exeats_for_user(user, queryset):
+    """Apply the correct exeat scope, including the medical-only role."""
+    profile = get_user_profile(user)
+    if profile and profile.role == StaffRole.MEDICAL and not user.is_superuser:
+        return queryset.filter(exeat_type=Exeat.ExeatType.MEDICAL)
+    return filter_queryset_by_house(user, queryset, "student__house_id")
+
+
 def role_required(*allowed_roles):
     """
     Decorator enforcing that the authenticated user possesses one of the allowed institutional roles.
@@ -153,13 +166,14 @@ def role_required(*allowed_roles):
     return decorator
 
 
-def can_approve_exeat_check(user, exeat) -> bool:
+def can_approve_exeat_check(user, exeat, profile=None) -> bool:
     """
     Checks if a user has jurisdictional authority to approve or reject a specific exeat.
     
     Rules:
       - Superusers and Senior Housemasters can approve ANY student's exeat.
       - Regular Housemasters can ONLY approve exeats for students residing in their assigned House.
+      - The Medical/Infirmary Lead can approve only Medical passes.
       - Tutors and Gate Officers cannot approve exeats.
     """
     if not user or not user.is_authenticated:
@@ -167,7 +181,7 @@ def can_approve_exeat_check(user, exeat) -> bool:
     if user.is_superuser:
         return True
 
-    profile = get_user_profile(user)
+    profile = profile or get_user_profile(user)
     if not profile:
         return False
     if profile.role not in EXEAT_APPROVAL_ROLES:
@@ -186,8 +200,11 @@ def can_approve_exeat_check(user, exeat) -> bool:
 
 def can_log_gate_check(user) -> bool:
     """
-    Checks if user is authorized to record student departures and arrivals at the gate.
-    Allowed for: Admins, Senior Housemasters, Housemasters, Gate Officers.
+    Check whether a user may record departures/returns.
+
+    Gate-duty enforcement is opt-in.  When enabled, a Gate Officer must have a
+    current GateDutyAssignment; administrators remain able to cover the gate so
+    a missing roster cannot lock the school out completely.
     """
     if not user or not user.is_authenticated:
         return False
@@ -195,6 +212,15 @@ def can_log_gate_check(user) -> bool:
         return True
 
     profile = get_user_profile(user)
-    if not profile:
+    if not profile or not profile.can_log_gate_movement():
         return False
-    return profile.can_log_gate_movement()
+    if profile.is_admin:
+        return True
+    from core.services.operational import (
+        active_gate_assignment,
+        gate_duty_enforcement_enabled,
+    )
+
+    if not gate_duty_enforcement_enabled():
+        return True
+    return active_gate_assignment(user) is not None

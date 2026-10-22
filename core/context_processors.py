@@ -21,6 +21,7 @@ from core.permissions import (
     EXEAT_CREATE_ROLES,
     CONDUCT_ROLES,
     REPORT_ROLES,
+    can_log_gate_check,
 )
 
 
@@ -93,12 +94,20 @@ def _guest_context(school_configuration: SchoolConfiguration) -> Dict[str, Any]:
         "can_view_exeats": False,
         "can_view_reports": False,
         "can_view_config": False,
+        "can_view_config_audit": False,
         "can_manage_students": False,
         "can_view_student_records": False,
         "can_create_exeat": False,
         "can_approve_exeat": False,
         "can_access_gate": False,
+        "can_log_gate": False,
         "can_access_roll_call": False,
+        "can_view_exeat_reviews": False,
+        "can_view_late_returns": False,
+        "can_view_roll_call_corrections": False,
+        "can_view_disputes": False,
+        "can_manage_gate_duty": False,
+        "can_manage_capacity_exceptions": False,
     }
 
 
@@ -282,6 +291,8 @@ def header_context(request) -> Dict[str, Any]:
         role_display = "Senior Housemaster"
     elif role == StaffRole.GATE_OFFICER:
         role_display = "Security / Gate Officer"
+    elif role == StaffRole.MEDICAL:
+        role_display = "Medical / Infirmary Lead"
     elif role == StaffRole.HOUSE_TUTOR:
         role_display = "House Tutor"
     elif housemaster:
@@ -290,6 +301,8 @@ def header_context(request) -> Dict[str, Any]:
             if assigned_house
             else "Housemaster"
         )
+    elif not profile or role == StaffRole.UNASSIGNED:
+        role_display = "Unassigned staff"
     elif user.is_staff:
         role_display = "Staff Officer"
     else:
@@ -315,17 +328,40 @@ def header_context(request) -> Dict[str, Any]:
     is_super = user.is_superuser
     can_view_houses = is_super or role in ADMIN_ROLES
     can_view_conduct = is_super or (has_house_scope and role in CONDUCT_ROLES)
-    can_view_exeats = is_super or (has_house_scope and role in EXEAT_ROLES)
+    can_view_exeats = (
+        is_super
+        or role in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER, StaffRole.MEDICAL)
+        or (has_house_scope and role in EXEAT_ROLES)
+    )
     can_view_reports = is_super or (has_house_scope and role in REPORT_ROLES)
     can_view_config = is_super or role == StaffRole.ADMIN
+    can_view_config_audit = is_super or role in ADMIN_ROLES
     can_manage_students = is_super or role in STUDENT_MANAGEMENT_ROLES
     can_view_student_records = is_super or (
         has_house_scope and role in STUDENT_RECORD_ROLES
     )
     can_create_exeat = is_super or (has_house_scope and role in EXEAT_CREATE_ROLES)
-    can_approve_exeat = is_super or (has_house_scope and role in EXEAT_APPROVAL_ROLES)
+    can_approve_exeat = is_super or role == StaffRole.MEDICAL or (
+        has_house_scope and role in EXEAT_APPROVAL_ROLES
+    )
     can_access_gate = is_super or role in GATE_ROLES
+    can_log_gate = can_log_gate_check(user)
     can_access_roll_call = is_super or (has_house_scope and role in ROLL_CALL_ROLES)
+    can_view_exeat_reviews = is_super or role in (
+        StaffRole.ADMIN,
+        StaffRole.SENIOR_HOUSEMASTER,
+    )
+    can_view_late_returns = is_super or role in (
+        StaffRole.ADMIN,
+        StaffRole.SENIOR_HOUSEMASTER,
+    ) or (has_house_scope and role == StaffRole.HOUSEMASTER)
+    can_view_roll_call_corrections = is_super or role in (
+        StaffRole.ADMIN,
+        StaffRole.SENIOR_HOUSEMASTER,
+    ) or (has_house_scope and role == StaffRole.HOUSEMASTER)
+    can_view_disputes = can_view_roll_call_corrections
+    can_manage_gate_duty = can_view_exeat_reviews
+    can_manage_capacity_exceptions = can_view_exeat_reviews
 
     return {
         "school_configuration": school_configuration,
@@ -351,10 +387,18 @@ def header_context(request) -> Dict[str, Any]:
         "can_view_exeats": can_view_exeats,
         "can_view_reports": can_view_reports,
         "can_view_config": can_view_config,
+        "can_view_config_audit": can_view_config_audit,
         "can_manage_students": can_manage_students,
         "can_view_student_records": can_view_student_records,
         "can_create_exeat": can_create_exeat,
         "can_approve_exeat": can_approve_exeat,
         "can_access_gate": can_access_gate,
+        "can_log_gate": can_log_gate,
         "can_access_roll_call": can_access_roll_call,
+        "can_view_exeat_reviews": can_view_exeat_reviews,
+        "can_view_late_returns": can_view_late_returns,
+        "can_view_roll_call_corrections": can_view_roll_call_corrections,
+        "can_view_disputes": can_view_disputes,
+        "can_manage_gate_duty": can_manage_gate_duty,
+        "can_manage_capacity_exceptions": can_manage_capacity_exceptions,
     }

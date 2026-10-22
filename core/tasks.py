@@ -235,11 +235,16 @@ def enqueue_overdue_exeat_reminders(tenant_schema: str | None = None) -> int:
 
 def _enqueue_overdue_exeat_reminders_for_current_tenant() -> int:
     from core.models import Exeat, ExeatReconciliation, SMSConfiguration, SMSDelivery
+    from core.services.late_returns import (
+        notify_missed_return,
+        open_late_return_incident,
+    )
     from core.services.sms import enqueue_exeat_event_sms
 
-    if not SMSConfiguration.is_enabled():
-        return 0
-
+    # Incidents and in-app escalation notifications are operational controls and
+    # must run even while SMS is disabled (D6/F-07).  Only the SMS enqueue step
+    # is gated by SMS configuration.
+    sms_enabled = SMSConfiguration.is_enabled()
     now = timezone.now()
     active_exeats = (
         Exeat.objects.filter(status=Exeat.Status.APPROVED)
@@ -261,23 +266,39 @@ def _enqueue_overdue_exeat_reminders_for_current_tenant() -> int:
         if not exeat.expected_return or now < exeat.expected_return:
             continue
 
+        # D3 first stage: alert the Housemaster as soon as the return is missed,
+        # before the incident threshold opens a formal investigation.
+        notify_missed_return(exeat, detected_at=now)
+
+        # Create or escalate the written late-return incident.  This is
+        # idempotent: repeated task runs only notify when the escalation level
+        # changes.
+        open_late_return_incident(exeat, detected_at=now, source="scheduled task")
+
+        if not sms_enabled:
+            continue
+
         reminder_number = int(
             (now - exeat.expected_return).total_seconds()
             // timedelta(days=1).total_seconds()
         )
+        # Within the first 24 hours the first-stage warning is the guardian
+        # message. Daily reminders begin on day one so the guardian is not sent
+        # two duplicate transactional messages in the same run.
+        occurrence_key = "first" if reminder_number == 0 else str(reminder_number)
         existing_key_prefix = f"{SMSDelivery.EventType.OVERDUE}:{exeat.pk}:"
         if SMSDelivery.objects.filter(
             exeat=exeat,
             event_type=SMSDelivery.EventType.OVERDUE,
             dedupe_key__startswith=existing_key_prefix,
-            dedupe_key__endswith=f":{reminder_number}",
+            dedupe_key__endswith=f":{occurrence_key}",
         ).exists():
             continue
 
         deliveries = enqueue_exeat_event_sms(
             exeat,
             SMSDelivery.EventType.OVERDUE,
-            occurrence_key=str(reminder_number),
+            occurrence_key=occurrence_key,
         )
         count += len(deliveries)
     return count
@@ -293,16 +314,15 @@ def expire_unfinished_roll_calls(tenant_schema: str | None = None) -> int:
 
 
 def _expire_unfinished_roll_calls_for_current_tenant() -> int:
-    from core.models import (
-        ROLL_CALL_SESSION_TIMEOUT,
-        RollCallNotification,
-        RollCallSession,
-    )
+    from core.models import RollCallNotification, RollCallSession
+    from core.services.operational import get_operational_settings, roll_call_timeout
 
     now = timezone.now()
+    timeout = roll_call_timeout()
+    configured_minutes = get_operational_settings().roll_call_timeout_minutes
     expired_ids = RollCallSession.objects.filter(
         status=RollCallSession.Status.IN_PROGRESS,
-        created_at__lte=now - ROLL_CALL_SESSION_TIMEOUT,
+        created_at__lte=now - timeout,
     ).values_list("pk", flat=True)[:100]
 
     expired_count = 0
@@ -314,7 +334,7 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
                 .filter(
                     pk=session_id,
                     status=RollCallSession.Status.IN_PROGRESS,
-                    created_at__lte=now - ROLL_CALL_SESSION_TIMEOUT,
+                    created_at__lte=now - timeout,
                 )
                 .first()
             )
@@ -331,8 +351,8 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
                     message=(
                         f"The {session.get_session_type_display()} for "
                         f"{session.house.name} expired because it was not "
-                        "completed within one hour. Its attendance records were "
-                        "preserved for review."
+                        f"completed within {configured_minutes} minutes. Its "
+                        "attendance records were preserved for review."
                     ),
                 )
             else:
@@ -342,8 +362,9 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
                 )
             session.status = RollCallSession.Status.EXPIRED
             note = (
-                "Expired automatically after the one-hour completion window; "
-                "attendance records retained for review."
+                "Expired automatically after the configured "
+                f"{configured_minutes}-minute completion window; attendance "
+                "records retained for review."
             )
             session.notes = (
                 f"{session.notes.rstrip()}\n{note}"

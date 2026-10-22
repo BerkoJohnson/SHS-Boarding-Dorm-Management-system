@@ -25,6 +25,8 @@ class ProductionSettingsTests(SimpleTestCase):
         hsts_subdomains=None,
         hsts_preload=None,
         csp_report_uri=None,
+        cache_backend="django.core.cache.backends.redis.RedisCache",
+        cache_location="redis://localhost:6379/1",
     ):
         environment = os.environ.copy()
         environment["DJANGO_SECRET_KEY"] = secret_key
@@ -35,9 +37,13 @@ class ProductionSettingsTests(SimpleTestCase):
         environment["PGUSER"] = "neon_user"
         environment["PGPASSWORD"] = "test-password"
         environment["PGSSLMODE"] = pg_sslmode
-        environment.pop("SECURE_HSTS_SECONDS", None)
-        environment.pop("SECURE_HSTS_INCLUDE_SUBDOMAINS", None)
-        environment.pop("SECURE_HSTS_PRELOAD", None)
+        environment["CACHE_BACKEND"] = cache_backend
+        environment["CACHE_LOCATION"] = cache_location
+        # Blank values keep settings.base from loading a developer's local
+        # .env values, so this test exercises the production defaults.
+        environment["SECURE_HSTS_SECONDS"] = ""
+        environment["SECURE_HSTS_INCLUDE_SUBDOMAINS"] = ""
+        environment["SECURE_HSTS_PRELOAD"] = ""
         environment.pop("CSP_REPORT_URI", None)
         if secure_hsts_seconds is not None:
             environment["SECURE_HSTS_SECONDS"] = secure_hsts_seconds
@@ -111,6 +117,8 @@ class ProductionSettingsTests(SimpleTestCase):
                 "PGUSER": "neon_user",
                 "PGPASSWORD": "test-password",
                 "PGSSLMODE": "require",
+                "CACHE_BACKEND": "django.core.cache.backends.redis.RedisCache",
+                "CACHE_LOCATION": "redis://localhost:6379/1",
             },
             capture_output=True,
             text=True,
@@ -131,6 +139,26 @@ class ProductionSettingsTests(SimpleTestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("'*' is not allowed", result.stderr)
+
+    def test_production_settings_reject_process_local_rate_limit_cache(self):
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            cache_backend="django.core.cache.backends.locmem.LocMemCache",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Production requires a shared CACHE_BACKEND", result.stderr)
+
+    def test_production_settings_require_explicit_cache_location(self):
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY,
+            allowed_hosts="school.example.org",
+            cache_location="",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("explicit CACHE_BACKEND and CACHE_LOCATION", result.stderr)
 
     def test_tenant_mode_uses_verified_domain_routing_for_dynamic_hosts(self):
         result = subprocess.run(
@@ -159,6 +187,8 @@ class ProductionSettingsTests(SimpleTestCase):
                 "PGUSER": "neon_user",
                 "PGPASSWORD": "test-password",
                 "PGSSLMODE": "require",
+                "CACHE_BACKEND": "django.core.cache.backends.redis.RedisCache",
+                "CACHE_LOCATION": "redis://localhost:6379/1",
             },
             capture_output=True,
             text=True,
@@ -187,6 +217,8 @@ class ProductionSettingsTests(SimpleTestCase):
                 "PGUSER": "neon_user",
                 "PGPASSWORD": "test-password",
                 "PGSSLMODE": "require",
+                "CACHE_BACKEND": "django.core.cache.backends.redis.RedisCache",
+                "CACHE_LOCATION": "redis://localhost:6379/1",
             },
             capture_output=True,
             text=True,

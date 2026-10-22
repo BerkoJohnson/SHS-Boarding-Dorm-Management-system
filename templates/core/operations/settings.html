@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Operational Settings | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-4">
+  <header class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+    <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Configuration</p>
+    <h1 class="mt-1 text-base font-bold text-slate-900">Operational escalation settings</h1>
+    <p class="mt-1 max-w-3xl text-xs text-slate-500">
+      These thresholds drive roll-call expiry and late-return escalation. Changes
+      are recorded in the configuration audit log.
+    </p>
+  </header>
+
+  <form method="post" class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+    {% csrf_token %}
+    <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+      <h2 class="text-sm font-bold text-slate-900">Escalation thresholds</h2>
+      <p class="mt-1 text-xs text-slate-500">Set the timing used for incident creation and escalation.</p>
+    </div>
+    <div class="space-y-4 p-4 sm:p-5">
+      {% include "core/partials/form_fields.html" with form=form %}
+      <div class="rounded-lg border border-sky-100 bg-sky-50/70 p-3 text-xs text-sky-900">
+        <p class="font-semibold">Default policy</p>
+        <p class="mt-1 text-sky-800">Incident and Senior Housemaster escalation at 2 hours; Headmaster escalation at 6 hours. The Senior Housemaster threshold cannot be earlier than the incident threshold, and the Headmaster threshold must follow it.</p>
+      </div>
+      <div class="flex justify-end border-t border-slate-100 pt-4">
+        <button type="submit" class="inline-flex min-h-10 items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800">
+          Save settings
+        </button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

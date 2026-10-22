@@ -24,6 +24,11 @@
                 Reconcile Missing Movement
             </a>
             {% endif %}
+            {% if can_approve_exeat and not exeat.movement.actual_departure and not exeat.reconciliation %}
+            <a href="{% url 'core:exeat_reschedule' exeat.pk %}" class="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg text-xs font-semibold border border-sky-200">
+                Reschedule
+            </a>
+            {% endif %}
             <button type="button" 
                     onclick="window.print()" 
                     class="px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition shadow-sm">
@@ -59,23 +64,37 @@
                 </div>
                 <h3 class="text-sm font-extrabold text-amber-900 tracking-tight">This request needs your sign-off</h3>
                 <p class="text-[11px] text-amber-800/90 mt-0.5">
+                    {% if user_profile.role == 'MEDICAL' %}
+                    You are receiving this because you are the Medical/Infirmary Lead and this is a medical pass.
+                    {% else %}
                     You are receiving this because you are the Senior Housemaster, or the Housemaster for <strong>{{ exeat.student.house.name }}</strong>.
+                    {% endif %}
                     Verify the student details, reason & dates and then Approve (creates gate log) or Reject (captures reason).
                 </p>
             </div>
 
             <!-- Approve + Cancel quick action buttons -->
             <div class="flex flex-wrap items-center gap-2 pt-1">
+                {% if exeat.exeat_type == 'Emergency' %}
+                <a href="{% url 'core:exeat_override' exeat.id %}"
+                   class="min-h-11 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition shadow-xs">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a1 1 0 00.86 1.5h18.64a1 1 0 00.86-1.5L12.71 3.86a1 1 0 00-2.42 0z"/>
+                    </svg>
+                    Authorize emergency
+                </a>
+                {% else %}
                 <form method="post" action="{% url 'core:exeat_action' exeat.id 'approve' %}">
                     {% csrf_token %}
-                    <button type="submit" 
-                            class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition shadow-xs">
+                    <button type="submit"
+                            class="min-h-11 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition shadow-xs">
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                         </svg>
                         Approve & Issue Gate Pass
                     </button>
                 </form>
+                {% endif %}
                 <button type="button" 
                         @click="showReject = !showReject"
                         class="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 transition shadow-xs">
@@ -91,6 +110,16 @@
                         Cancel Request
                     </button>
                 </form>
+                <a href="{% url 'core:exeat_reschedule' exeat.pk %}"
+                   class="px-3 py-1.5 border border-sky-200 bg-sky-50 text-sky-800 rounded-lg text-xs font-medium transition hover:bg-sky-100">
+                    Reschedule
+                </a>
+                {% if exeat.exeat_type == 'Emergency' or exeat.exeat_type == 'Medical' %}
+                <a href="{% url 'core:exeat_override' exeat.pk %}"
+                   class="px-3 py-1.5 border border-rose-200 bg-white text-rose-700 rounded-lg text-xs font-medium transition hover:bg-rose-50">
+                    Emergency Override
+                </a>
+                {% endif %}
             </div>
 
             <!-- Inline rejection form (collapsed by default) -->
@@ -186,7 +215,7 @@
                 Status: {{ exeat.current_state }}
             </h3>
             <p class="text-[11px] {% if exeat.current_state == 'OVERDUE (Student Out)' or exeat.current_state == 'OVERDUE (Reconciled)' %}text-rose-800/90{% elif exeat.current_state == 'Pass Unresolved' or exeat.current_state == 'Departure Not Recorded' %}text-amber-800/90{% elif exeat.current_state == 'Active (Student Out)' or exeat.current_state == 'Student Out (Reconciled)' %}text-blue-800/90{% else %}text-emerald-800/90{% endif %} mt-0.5">
-                Gate log entry created. <strong>Approved by {{ exeat.approved_by.full_name|default:"Senior Housemaster" }}</strong>{% if exeat.approved_by and exeat.approved_by.is_senior_housemaster %} (Senior Housemaster){% endif %}.
+                Gate log entry created. <strong>Approved by {{ exeat.approver_display|default:"Senior Housemaster" }}</strong>{% if exeat.approved_by and exeat.approved_by.is_senior_housemaster %} (Senior Housemaster){% endif %}{% if exeat.is_emergency_override %} · emergency override{% endif %}.
             </p>
         </div>
     </div>
@@ -351,7 +380,7 @@
             <div>
                 <div class="h-10 border-b border-dashed border-slate-300 flex items-end justify-center pb-1">
                     <span class="font-serif italic text-slate-800 font-bold">
-                        {{ exeat.approved_by.full_name|default:"Senior Housemaster" }}
+                        {{ exeat.approver_display|default:"Senior Housemaster" }}
                     </span>
                 </div>
                 <div class="text-2xs text-slate-500 font-semibold mt-1">Authorizing Housemaster</div>
@@ -396,7 +425,7 @@
                 <div class="text-slate-400 uppercase tracking-wider font-semibold text-[10px] mb-0.5">Approval Status</div>
                 <div class="font-bold text-slate-800">{{ exeat.get_status_display }}</div>
                 {% if exeat.approved_by %}
-                <div class="text-slate-500">Signed off by <strong>{{ exeat.approved_by.full_name }}</strong>{% if exeat.approved_by.is_senior_housemaster %} (Senior HM){% endif %}</div>
+                <div class="text-slate-500">Signed off by <strong>{{ exeat.approver_display }}</strong>{% if exeat.approved_by.is_senior_housemaster %} (Senior HM){% endif %}</div>
                 {% elif exeat.status == 'Pending' %}
                 <div class="text-amber-600 font-medium">Awaiting housemaster sign-off</div>
                 {% endif %}

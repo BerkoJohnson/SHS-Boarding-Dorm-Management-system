@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Exeat Reviews | SHS Management System{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+  <header class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Governance</p>
+      <h1 class="mt-1 text-base font-bold text-slate-900">Emergency and medical reviews</h1>
+      <p class="mt-1 text-xs text-slate-500">
+        Every override or after-hours medical approval must be reviewed within 24 hours.
+      </p>
+    </div>
+    <div class="inline-flex items-center gap-1.5 self-start rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800 sm:self-auto">
+      <span class="font-bold">{{ overdue_count }}</span> overdue
+    </div>
+  </header>
+
+  <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+    <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+      <h2 class="text-sm font-bold text-slate-900">Pending reviews</h2>
+    </div>
+    <div class="divide-y divide-slate-100">
+      {% for review in pending_reviews %}
+      <a href="{% url 'core:exeat_review_decision' review.pk %}" class="block px-4 py-3 transition-colors hover:bg-slate-50/70 focus-visible:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-brand-600 sm:px-5">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p class="text-xs font-semibold text-slate-900">{{ review.exeat.exeat_number }} — {{ review.exeat.student.full_name }}</p>
+            <p class="mt-1 text-xs text-slate-600">{{ review.get_review_type_display }} · authorized by {{ review.authorized_by.get_full_name|default:review.authorized_by.username }}</p>
+            <p class="mt-1 text-xs text-slate-600">{{ review.reason|truncatewords:24 }}</p>
+          </div>
+          <div class="shrink-0 text-left sm:text-right">
+            <p class="text-[11px] font-semibold {% if review.is_overdue %}text-rose-700{% else %}text-slate-600{% endif %}">
+              Due {{ review.due_at|date:"d M Y, H:i" }}
+            </p>
+            <p class="mt-1 text-[11px] text-slate-500">Authorized {{ review.authorized_at|date:"d M Y, H:i" }}</p>
+          </div>
+        </div>
+      </a>
+      {% empty %}
+      <p class="px-4 py-8 text-center text-xs text-slate-500">No pending reviews.</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+    <div class="border-b border-slate-200 bg-slate-50/60 px-4 py-3">
+      <h2 class="text-sm font-bold text-slate-900">Recently decided</h2>
+    </div>
+    <div class="divide-y divide-slate-100">
+      {% for review in recent_reviews %}
+      <div class="px-4 py-3 text-xs sm:px-5">
+        <p class="font-semibold text-slate-800">{{ review.exeat.exeat_number }} — {{ review.exeat.student.full_name }}</p>
+        <p class="mt-1 text-slate-600">{{ review.get_outcome_display }}{% if review.reviewed_by %} · {{ review.reviewed_by.get_full_name|default:review.reviewed_by.username }}{% endif %} · {{ review.reviewed_at|date:"d M Y, H:i" }}</p>
+        {% if review.review_notes %}<p class="mt-1 text-slate-500">{{ review.review_notes }}</p>{% endif %}
+      </div>
+      {% empty %}
+      <p class="px-4 py-8 text-center text-xs text-slate-500">No completed reviews yet.</p>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

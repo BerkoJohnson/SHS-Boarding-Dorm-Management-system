@@ -31,7 +31,11 @@ from core.models import (
     Student,
     UserProfile,
 )
-from core.services.student_import import import_student_roster
+from core.services.student_import import (
+    commit_student_roster,
+    import_student_roster,
+    validate_student_roster,
+)
 
 
 class ImportRosterCommandTenantTests(SimpleTestCase):
@@ -848,6 +852,168 @@ class StudentRegistryTests(TestCase):
         self.assertEqual(male_student.dormitory, self.male_dorm)
         self.assertEqual(female_student.dormitory, self.female_dorm)
         self.assertEqual(male_student.residency, Student.ResidencyStatus.BOARDING)
+
+    def test_validation_preview_uses_import_validation_without_creating_records(self):
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "ADM-PREVIEW",
+                    "IDX-PREVIEW",
+                    "Preview Student",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                ],
+            ],
+            headers=[
+                "Admission No.",
+                "Index Number",
+                "Full Name",
+                "Gender",
+                "Programme",
+                "House",
+                "Class",
+                "Extra Notes",
+            ],
+        )
+
+        validation = validate_student_roster(uploaded_file)
+
+        self.assertTrue(validation.is_valid)
+        self.assertEqual(validation.row_count, 1)
+        self.assertEqual(validation.headers[0]["sheet"], "CSV")
+        self.assertIsNone(validation.headers[0]["columns"][-1]["field"])
+        self.assertEqual(
+            validation.sample_rows[0]["values"]["full_name"],
+            "Preview Student",
+        )
+        self.assertFalse(Student.objects.exists())
+
+        imported, errors = commit_student_roster(validation)
+
+        self.assertEqual((imported, errors), (1, []))
+        self.assertTrue(Student.objects.filter(admission_no="ADM-PREVIEW").exists())
+
+    def test_web_preview_and_confirmation_share_the_service_validation(self):
+        row = [
+            "ADM-WEB-PREVIEW",
+            "IDX-WEB-PREVIEW",
+            "Web Preview Student",
+            "Male",
+            "GSCI",
+            "Red House",
+            "1A1",
+        ]
+        preview_response = self.client.post(
+            reverse("core:student_import"),
+            {"intent": "preview", "roster_file": self._csv_upload([row])},
+            HTTP_ACCEPT="application/json",
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(preview_response.status_code, 200)
+        preview = preview_response.json()
+        self.assertTrue(preview["valid"])
+        self.assertEqual(preview["row_count"], 1)
+        self.assertFalse(Student.objects.exists())
+
+        import_response = self.client.post(
+            reverse("core:student_import"),
+            {"intent": "import", "roster_file": self._csv_upload([row])},
+            HTTP_ACCEPT="application/json",
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(import_response.status_code, 200)
+        self.assertTrue(import_response.json()["success"])
+        self.assertTrue(
+            Student.objects.filter(admission_no="ADM-WEB-PREVIEW").exists()
+        )
+
+    def test_web_preview_renders_column_mapping_and_sample_without_importing(self):
+        row = [
+            "ADM-HTML-PREVIEW",
+            "IDX-HTML-PREVIEW",
+            "HTML Preview Student",
+            "Male",
+            "GSCI",
+            "Red House",
+            "1A1",
+        ]
+
+        response = self.client.post(
+            reverse("core:student_import"),
+            {"intent": "preview", "roster_file": self._csv_upload([row])},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Roster preview")
+        self.assertContains(response, "Admission No.")
+        self.assertContains(response, "HTML Preview Student")
+        self.assertContains(response, "Confirm and import")
+        self.assertFalse(Student.objects.exists())
+
+    def test_web_preview_reports_missing_programme_and_house_before_import(self):
+        response = self.client.post(
+            reverse("core:student_import"),
+            {
+                "intent": "preview",
+                "roster_file": self._csv_upload(
+                    [
+                        [
+                            "ADM-UNKNOWN-REF",
+                            "IDX-UNKNOWN-REF",
+                            "Unknown Reference Student",
+                            "Male",
+                            "New Programme",
+                            "New House",
+                            "",
+                        ]
+                    ]
+                ),
+            },
+            HTTP_ACCEPT="application/json",
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        preview = response.json()
+        self.assertFalse(preview["valid"])
+        self.assertTrue(any("unknown programme" in error for error in preview["errors"]))
+        self.assertTrue(any("unknown house" in error for error in preview["errors"]))
+        self.assertFalse(Student.objects.exists())
+
+    def test_cli_dry_run_reports_preview_without_importing(self):
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "ADM-DRY-RUN",
+                    "IDX-DRY-RUN",
+                    "Dry Run Student",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                ],
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            roster_path = Path(directory, uploaded_file.name)
+            roster_path.write_bytes(uploaded_file.read())
+            output = io.StringIO()
+
+            call_command(
+                "import_roster",
+                str(roster_path),
+                "--dry-run",
+                stdout=output,
+            )
+
+        self.assertIn("Roster validation passed", output.getvalue())
+        self.assertIn("Rows validated: 1", output.getvalue())
+        self.assertIn("Dry Run Student", output.getvalue())
+        self.assertFalse(Student.objects.exists())
 
     def test_xlsx_import_normalizes_house_and_treats_unallocated_class_as_blank(self):
         uploaded_file = self._xlsx_upload(

@@ -189,7 +189,7 @@ services:
         value: "0"
       - key: TRUSTED_PROXY_COUNT
         value: "1"
-      # Shared cache for cluster-wide rate limits (optional, recommended).
+      # Shared cache for cluster-wide rate limits (required in production).
       - key: CACHE_BACKEND
         sync: false
       - key: CACHE_LOCATION

@@ -81,6 +81,13 @@
           <option value="{{ value }}" {% if filter_values.status == value %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select>
+        <label class="sr-only" for="student-placement">Placement status</label>
+        <select id="student-placement" name="placement" class="px-3 py-2 text-xs bg-white border rounded-lg border-slate-300">
+          <option value="">All placement statuses</option>
+          {% for value, label in placement_choices %}
+          <option value="{{ value }}" {% if filter_values.placement == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
         <label class="sr-only" for="student-house">House</label>
         <select id="student-house" name="house" class="px-3 py-2 text-xs bg-white border rounded-lg border-slate-300">
           <option value="">All houses</option>

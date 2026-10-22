@@ -7,6 +7,8 @@ from core.models import (
     Programme,
     House,
     Dormitory,
+    DormitoryRoom,
+    DormitoryCapacityException,
     Exeat,
     ExeatMovement,
     ExeatReconciliation,
@@ -22,6 +24,7 @@ from core.models import (
     RollCallEntry,
     RollCallNotification,
     RollCallAbsenceFollowUp,
+    OperationalSettings,
 )
 from core.services.roll_call import (
     create_roll_call_session,
@@ -30,6 +33,7 @@ from core.services.roll_call import (
     mark_all_present,
     resolve_absence_follow_up,
 )
+
 from core.services.reports import get_detailed_report
 from core.tasks import expire_unfinished_roll_calls
 
@@ -90,6 +94,20 @@ class DashboardViewTests(TestCase):
             residency=Student.ResidencyStatus.DAY
         )
 
+    def test_unassigned_staff_dashboard_explains_required_access_setup(self):
+        user = User.objects.create_user(
+            username='unassigned_staff',
+            password='password123',
+        )
+        self.client.force_login(user)
+
+        response = self.client.get('/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Your staff access is not configured yet')
+        self.assertContains(response, 'Unassigned staff')
+        self.assertNotContains(response, 'Student Population')
+
     def test_dashboard_login_required(self):
         """Unauthenticated requests should redirect to login."""
         response = self.client.get('/')
@@ -146,9 +164,14 @@ class DashboardViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.context['recent_exeats']), 5)
         self.assertEqual(response.context['total_matching_exeats'], 6)
+        self.assertTrue(
+            all(exeat.user_can_approve_exeat for exeat in response.context['recent_exeats'])
+        )
         self.assertNotIn(created_exeats[0].exeat_number.encode(), response.content)
         self.assertIn(created_exeats[-1].exeat_number.encode(), response.content)
         self.assertIn(b'Pass</th>', response.content)
+        self.assertIn(b'Approve Pass', response.content)
+        self.assertIn(b'Reject Request', response.content)
         self.assertIn(b'View Complete Exeat Register', response.content)
         self.assertIn(b'<strong>5</strong> of <strong>6</strong> matching records', response.content)
         partial_response = self.client.get(
@@ -192,7 +215,7 @@ class HouseOperationsViewTests(TestCase):
             house=self.house,
         )
 
-    def create_boarder(self, suffix):
+    def create_boarder(self, suffix, room=None):
         return Student.objects.create(
             admission_no=f'HOUSING-{suffix}',
             index_number=f'IDX-HOUSING-{suffix}',
@@ -201,6 +224,7 @@ class HouseOperationsViewTests(TestCase):
             programme=self.programme,
             house=self.house,
             dormitory=self.dormitory,
+            room=room,
             residency=Student.ResidencyStatus.BOARDING,
         )
 
@@ -242,9 +266,16 @@ class HouseOperationsViewTests(TestCase):
     def test_house_operations_flags_over_capacity_and_missing_placements(self):
         self.create_boarder('002')
         self.create_boarder('003')
+        # Build a historical over-capacity state for the report fixture. New
+        # placements are blocked by the capacity guard, so the extra boarder is
+        # created before the recorded capacity is corrected downward.
+        Dormitory.objects.filter(pk=self.dormitory.pk).update(capacity=4)
+        self.dormitory.refresh_from_db()
         self.create_boarder('004')
         self.create_boarder('005')
         Student.objects.filter(admission_no='HOUSING-005').update(dormitory=None)
+        Dormitory.objects.filter(pk=self.dormitory.pk).update(capacity=2)
+        self.dormitory.refresh_from_db()
 
         response = self.client.get('/houses/')
 
@@ -258,6 +289,101 @@ class HouseOperationsViewTests(TestCase):
         self.assertIn('Over capacity: Block A', house.attention_items)
         self.assertContains(response, 'Placement gaps')
         self.assertContains(response, 'over capacity')
+
+    def test_housing_overview_accounts_for_temporary_capacity_and_rooms(self):
+        room_a = DormitoryRoom.objects.create(
+            dormitory=self.dormitory,
+            name='Room A',
+            capacity=2,
+        )
+        room_b = DormitoryRoom.objects.create(
+            dormitory=self.dormitory,
+            name='Room B',
+            capacity=2,
+        )
+        self.create_boarder('006', room=room_a)
+        self.create_boarder('007', room=room_b)
+        UserProfile.objects.update_or_create(
+            user=self.user,
+            defaults={'role': StaffRole.ADMIN},
+        )
+        DormitoryCapacityException.objects.create(
+            dormitory=self.dormitory,
+            approved_by=self.user,
+            reason='Temporary overflow while another block is repaired.',
+            starts_at=timezone.now() - timezone.timedelta(minutes=5),
+            ends_at=timezone.now() + timezone.timedelta(days=1),
+            additional_capacity=1,
+        )
+        self.create_boarder('008')
+
+        response = self.client.get('/houses/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['total_capacity'], 3)
+        house = response.context['houses'][0]
+        dormitory = house.dormitories.all()[0]
+        self.assertFalse(dormitory.is_over_capacity)
+        self.assertTrue(dormitory.uses_capacity_exception)
+        self.assertEqual(dormitory.authorized_capacity, 3)
+        self.assertEqual(dormitory.unassigned_room_boarders, 1)
+        self.assertEqual(
+            {room.boarder_count for room in dormitory.rooms.all()},
+            {1},
+        )
+        self.assertContains(response, 'temporary place(s)')
+        self.assertContains(response, '3 / 3')
+        self.assertNotContains(response, '3 / 2')
+        self.assertContains(response, 'Room A')
+        self.assertContains(response, 'Review records')
+        self.assertContains(response, 'Manage capacity exceptions')
+
+    def test_student_registry_filters_missing_housing_and_room_placements(self):
+        self.dormitory.capacity = 4
+        self.dormitory.save()
+        missing_dormitory = self.create_boarder('009')
+        missing_room = self.create_boarder('010')
+        assigned_room = DormitoryRoom.objects.create(
+            dormitory=self.dormitory,
+            name='Room C',
+            capacity=2,
+        )
+        mismatched_dorm_boarder = self.create_boarder('011', room=assigned_room)
+        other_house = House.objects.create(name='Blue House')
+        other_dormitory = Dormitory.objects.create(
+            house=other_house,
+            name='Block B',
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=1,
+        )
+        Student.objects.filter(pk=mismatched_dorm_boarder.pk).update(
+            dormitory=other_dormitory,
+            room=None,
+        )
+        Student.objects.filter(pk=missing_dormitory.pk).update(dormitory=None)
+
+        housing_response = self.client.get(
+            '/students/?placement=missing_dormitory&house={}'.format(self.house.pk)
+        )
+        room_response = self.client.get(
+            '/students/?placement=missing_room&dormitory={}'.format(
+                self.dormitory.pk
+            )
+        )
+
+        self.assertEqual(housing_response.status_code, 200)
+        self.assertEqual(
+            set(
+                student.pk
+                for student in housing_response.context['students_page']
+            ),
+            {missing_dormitory.pk, mismatched_dorm_boarder.pk},
+        )
+        self.assertEqual(room_response.status_code, 200)
+        self.assertEqual(
+            [student.pk for student in room_response.context['students_page']],
+            [missing_room.pk],
+        )
 
 
 class ExeatCreateViewTests(TestCase):
@@ -1822,6 +1948,10 @@ class RollCallAndGateTests(TestCase):
         self.assertFalse(home_response.context['can_access_gate'])
         self.assertContains(home_response, 'href="/operations/roll-call/"')
         self.assertNotContains(home_response, 'href="/operations/gate/"')
+        self.assertContains(home_response, 'href="/operations/late-returns/"')
+        self.assertContains(home_response, 'href="/operations/roll-call/corrections/"')
+        self.assertContains(home_response, 'href="/disputes/"')
+        self.assertNotContains(home_response, 'href="/operations/gate-duty/"')
 
         response = self.client.get('/operations/roll-call/')
         self.assertEqual(response.status_code, 200)
@@ -1850,13 +1980,19 @@ class RollCallAndGateTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
 
+        self.hm.is_senior_housemaster = True
+        self.hm.save(update_fields=['is_senior_housemaster'])
         housemaster_profile = get_user_profile(self.user_hm)
-        housemaster_profile.role = StaffRole.SENIOR_HOUSEMASTER
-        housemaster_profile.save(update_fields=['role'])
+        self.assertEqual(housemaster_profile.role, StaffRole.SENIOR_HOUSEMASTER)
         senior_home_response = self.client.get('/')
         self.assertTrue(senior_home_response.context['can_access_roll_call'])
         self.assertFalse(senior_home_response.context['can_access_gate'])
         self.assertNotContains(senior_home_response, 'href="/operations/gate/"')
+        self.assertTrue(senior_home_response.context['can_view_config_audit'])
+        self.assertContains(
+            self.client.get('/reports/'),
+            'href="/reports/config-audit/"',
+        )
         self.assertEqual(self.client.get('/operations/gate/').status_code, 302)
 
         self.client.force_login(self.user_gate)
@@ -1876,6 +2012,10 @@ class RollCallAndGateTests(TestCase):
         self.assertContains(response, 'Gate Security & Movement Terminal')
         self.assertNotContains(response, 'Dormitory Roster')
         self.assertNotContains(response, 'id="modal-title"')
+        self.assertNotContains(response, 'href="/operations/late-returns/"')
+        self.assertNotContains(response, 'href="/operations/roll-call/corrections/"')
+        self.assertNotContains(response, 'href="/disputes/"')
+        self.assertNotContains(response, 'href="/operations/gate-duty/"')
 
         response = self.client.post('/operations/roll-call/new/', {
             'house': str(self.house.pk),
@@ -1885,16 +2025,94 @@ class RollCallAndGateTests(TestCase):
 
         self.client.force_login(self.user_regular)
         home_response = self.client.get('/')
-        self.assertFalse(home_response.context['can_access_roll_call'])
+        self.assertTrue(home_response.context['can_access_roll_call'])
         self.assertFalse(home_response.context['can_access_gate'])
-        self.assertNotContains(home_response, 'href="/operations/roll-call/"')
+        self.assertContains(home_response, 'href="/operations/roll-call/"')
         self.assertNotContains(
             home_response,
             'href="/operations/gate/"',
         )
         response = self.client.get('/operations/roll-call/')
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get('/operations/gate/').status_code, 302)
+
+    def test_gate_actions_are_hidden_without_an_active_required_duty_assignment(self):
+        settings = OperationalSettings.get_solo()
+        settings.gate_duty_enforcement_enabled = True
+        settings.save(update_fields=['gate_duty_enforcement_enabled', 'updated_at'])
+        now = timezone.now()
+        exeat = Exeat.objects.create(
+            student=self.boarder1,
+            academic_term=self.term,
+            exeat_type=Exeat.ExeatType.TOWN,
+            expected_departure=now - timezone.timedelta(minutes=1),
+            expected_return=now + timezone.timedelta(hours=2),
+            destination='Town',
+            reason='Test gate duty enforcement',
+            status=Exeat.Status.APPROVED,
+            approved_by=self.hm,
+        )
+        self.client.force_login(self.user_gate)
+
+        response = self.client.get('/operations/gate/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_log_gate'])
+        self.assertContains(response, 'Movement logging is unavailable')
+        self.assertContains(response, 'Active duty assignment required')
+        self.assertNotContains(response, 'Check Out')
+
+        response = self.client.post(f'/operations/gate/{exeat.pk}/departure/')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(ExeatMovement.objects.filter(exeat=exeat).exists())
+
+    def test_medical_approver_sees_actions_for_medical_pending_passes(self):
+        medical_user = User.objects.create_user(
+            username='medical_lead',
+            password='password123',
+        )
+        profile = get_user_profile(medical_user)
+        profile.role = StaffRole.MEDICAL
+        profile.save(update_fields=['role'])
+        exeat = Exeat.objects.create(
+            student=self.boarder1,
+            academic_term=self.term,
+            exeat_type=Exeat.ExeatType.MEDICAL,
+            expected_departure=timezone.now() + timezone.timedelta(hours=1),
+            expected_return=timezone.now() + timezone.timedelta(hours=3),
+            destination='Clinic',
+            reason='Medical appointment',
+            status=Exeat.Status.PENDING,
+        )
+        self.client.force_login(medical_user)
+
+        response = self.client.get('/exeats/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['can_approve_exeat'])
+        self.assertContains(response, 'Pending Approvals')
+        self.assertContains(response, exeat.exeat_number)
+        self.assertContains(response, 'Approve Pass')
+        self.assertContains(response, 'Medical / Infirmary Lead')
+
+        approvals_response = self.client.get('/exeats/pending-approvals/')
+        self.assertEqual(approvals_response.status_code, 200)
+        self.assertContains(approvals_response, 'Medical/Infirmary Lead')
+        self.assertContains(approvals_response, 'Medical passes only')
+
+        detail_response = self.client.get(f'/exeats/{exeat.pk}/')
+        self.assertContains(
+            detail_response,
+            'Medical/Infirmary Lead and this is a medical pass',
+        )
+
+        response = self.client.post(f'/exeats/{exeat.pk}/action/approve/')
+
+        self.assertEqual(response.status_code, 302)
+        exeat.refresh_from_db()
+        self.assertEqual(exeat.status, Exeat.Status.APPROVED)
+        self.assertEqual(exeat.approved_by_user, medical_user)
 
     def test_admin_can_access_both_separate_workspaces(self):
         admin = User.objects.create_user(
@@ -3246,11 +3464,14 @@ class HouseScopedAccessTests(TestCase):
         self.assertContains(print_response, '9 free beds — 9 boys&#x27;')
         self.assertContains(print_response, 'Amber Block')
 
-        self.dorm_a.capacity = 0
-        self.dorm_a.save(update_fields=['capacity'])
         self.create_boarder(
             'SCOPE-A-OVER', 'Additional Amber Student', self.house_a, self.dorm_a
         )
+        # Simulate a dormitory whose recorded bed count was later corrected to
+        # zero while boarders remained assigned. This exercises the report's
+        # unrecorded-bed path without bypassing the normal placement guard.
+        Dormitory.objects.filter(pk=self.dorm_a.pk).update(capacity=0)
+        self.dorm_a.refresh_from_db()
         over_capacity_response = self.client.get('/reports/?report=housing')
         # A block holding boarders with no recorded capacity is reported as
         # unrecorded beds, not as a known capacity that has been exceeded.

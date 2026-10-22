@@ -56,7 +56,7 @@
           {% if current_session.is_expired %}
             This roll call has expired. Its attendance records are preserved below for review.
           {% else %}
-            Complete within one hour. Time remaining:
+            Complete within the configured window. Time remaining:
             <strong data-roll-call-countdown data-expires-at="{{ current_session.expires_at|date:'c' }}">Calculating…</strong>
           {% endif %}
         </p>

@@ -1,20 +1,22 @@
 import csv
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from zipfile import BadZipFile
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Sum
+from django.utils import timezone
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from core.models import (
     ClassGroup,
     Dormitory,
+    DormitoryCapacityException,
     DormitoryRoom,
     Guardian,
     House,
@@ -77,6 +79,20 @@ class StagedStudent:
     guardian_alt_phone: str
 
 
+@dataclass
+class RosterValidation:
+    row_count: int = 0
+    headers: list[dict] = field(default_factory=list)
+    sample_rows: list[dict] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    staged: list[StagedStudent] = field(default_factory=list, repr=False)
+    guardians_by_phone: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def is_valid(self):
+        return not self.errors and bool(self.staged)
+
+
 def _text(value):
     if value is None:
         return ""
@@ -124,7 +140,7 @@ def _read_csv(data):
         headers = next(reader)
     except StopIteration:
         raise ValueError("The uploaded CSV file is empty.") from None
-    return [
+    return [("CSV", headers, 1, None)] + [
         ("CSV", headers, row_number, row) for row_number, row in enumerate(reader, 2)
     ]
 
@@ -144,6 +160,7 @@ def _read_xlsx(data):
             headers = next(iterator, None)
             if not headers or not any(_text(value) for value in headers):
                 continue
+            rows.append((sheet.title, headers, 1, None))
             for row_number, row in enumerate(iterator, 2):
                 rows.append((sheet.title, headers, row_number, row))
                 if len(rows) > MAX_ROSTER_ROWS + len(workbook.worksheets):
@@ -206,32 +223,48 @@ def _choice_value(value, choices, field, location, errors, default=""):
     return default
 
 
-def import_student_roster(uploaded_file):
-    """Validate a complete CSV/XLSX roster, then create it atomically."""
+def validate_student_roster(uploaded_file, progress_callback=None):
+    """Validate a complete CSV/XLSX roster without creating records."""
     from tenancy.entitlements import feature_enabled
 
     if not feature_enabled("roster_import"):
-        return 0, ["This tenant's subscription does not include roster import."]
+        return RosterValidation(
+            errors=["This tenant's subscription does not include roster import."]
+        )
 
     extension = Path(uploaded_file.name).suffix.lower()
     if extension not in {".csv", ".xlsx"}:
-        return 0, ["Upload a CSV or Excel .xlsx file."]
+        return RosterValidation(errors=["Upload a CSV or Excel .xlsx file."])
     if uploaded_file.size > 10 * 1024 * 1024:
-        return 0, ["Roster files must be 10 MB or smaller."]
+        return RosterValidation(errors=["Roster files must be 10 MB or smaller."])
 
+    if progress_callback:
+        progress_callback("Reading roster", 0, 1)
     data = uploaded_file.read()
     try:
         raw_rows = _read_csv(data) if extension == ".csv" else _read_xlsx(data)
     except ValueError as error:
-        return 0, [str(error)]
+        return RosterValidation(errors=[str(error)])
+    if progress_callback:
+        progress_callback("Reading roster", 1, 1)
 
     errors = []
     parsed_rows = []
+    headers_by_sheet = {}
+    sample_rows = []
     data_row_count = 0
     checked_sheets = set()
     for sheet_name, headers, row_number, row in raw_rows:
         if sheet_name not in checked_sheets:
             checked_sheets.add(sheet_name)
+            mapped_headers = [
+                {
+                    "source": _text(header),
+                    "field": COLUMN_ALIASES.get(_normalized_header(header)),
+                }
+                for header in headers
+            ]
+            headers_by_sheet[sheet_name] = mapped_headers
             available = {
                 COLUMN_ALIASES.get(_normalized_header(header)) for header in headers
             }
@@ -242,10 +275,16 @@ def import_student_roster(uploaded_file):
                     f"{', '.join(sorted(name.replace('_', ' ') for name in missing))}."
                 )
                 continue
+        if row is None:
+            continue
         mapped = _row_values(headers, row, sheet_name, row_number, errors)
         if mapped is not None:
             data_row_count += 1
             parsed_rows.append((sheet_name, row_number, mapped))
+            if len(sample_rows) < 10:
+                sample_rows.append(
+                    {"sheet": sheet_name, "row": row_number, "values": mapped}
+                )
     if data_row_count > MAX_ROSTER_ROWS:
         errors.append(
             f"Roster files cannot contain more than {MAX_ROSTER_ROWS} student rows."
@@ -253,8 +292,18 @@ def import_student_roster(uploaded_file):
     if not parsed_rows and not errors:
         errors.append("The roster file contains no student rows.")
     if errors:
-        return 0, errors
+        return RosterValidation(
+            row_count=data_row_count,
+            headers=[
+                {"sheet": sheet, "columns": columns}
+                for sheet, columns in headers_by_sheet.items()
+            ],
+            sample_rows=sample_rows,
+            errors=errors,
+        )
 
+    if progress_callback:
+        progress_callback("Validating rows", 0, len(parsed_rows))
     programmes = list(Programme.objects.all())
     programme_index = _reference_index(programmes, "name")
     for programme in programmes:
@@ -265,6 +314,33 @@ def import_student_roster(uploaded_file):
     class_index = _reference_index(ClassGroup.objects.all(), "name")
     house_index = _reference_index(House.objects.all(), "name")
     dormitories = list(Dormitory.objects.select_related("house").all())
+    dormitory_occupancy = {
+        dormitory_id: occupied
+        for dormitory_id, occupied in Student.objects.filter(
+            residency=Student.ResidencyStatus.BOARDING
+        )
+        .exclude(status=Student.EnrollmentStatus.COMPLETED)
+        .values("dormitory_id")
+        .annotate(occupied=Count("pk"))
+        .values_list("dormitory_id", "occupied")
+    }
+    now = timezone.now()
+    exception_capacity = dict(
+        DormitoryCapacityException.objects.filter(
+            dormitory_id__in=[dormitory.pk for dormitory in dormitories],
+            cancelled_at__isnull=True,
+            starts_at__lte=now,
+            ends_at__gte=now,
+        )
+        .values("dormitory_id")
+        .annotate(additional_capacity=Sum("additional_capacity"))
+        .values_list("dormitory_id", "additional_capacity")
+    )
+    dormitory_limits = {
+        dormitory.pk: dormitory.capacity
+        + (exception_capacity.get(dormitory.pk) or 0)
+        for dormitory in dormitories
+    }
     rooms = list(
         DormitoryRoom.objects.select_related("dormitory").annotate(
             occupied=Count(
@@ -310,12 +386,24 @@ def import_student_roster(uploaded_file):
     }
     seen_admission_numbers = set()
     seen_index_numbers = set()
+    roster_guardian_phones = {
+        row.get("guardian_phone", "").strip()
+        for _, _, row in parsed_rows
+        if row.get("guardian_phone", "").strip()
+    }
     guardians_by_phone = {}
-    for guardian in Guardian.objects.all():
+    for guardian in Guardian.objects.filter(
+        phone_number__in=roster_guardian_phones
+    ).only("id", "full_name", "phone_number", "alt_phone_number"):
         guardians_by_phone.setdefault(guardian.phone_number, []).append(guardian)
 
     staged = []
-    for sheet_name, row_number, row in parsed_rows:
+    staged_guardian_names = {}
+    for row_index, (sheet_name, row_number, row) in enumerate(parsed_rows, 1):
+        if progress_callback and (
+            row_index == 1 or row_index % 25 == 0 or row_index == len(parsed_rows)
+        ):
+            progress_callback("Validating rows", row_index, len(parsed_rows))
         location = f"{sheet_name}, row {row_number}"
         row_error_count = len(errors)
         admission_no = row.get("admission_no", "").strip()
@@ -462,6 +550,18 @@ def import_student_roster(uploaded_file):
                     f"{location}: room '{room.name}' is at its capacity of "
                     f"{room.capacity}."
                 )
+        if (
+            dormitory
+            and residency == Student.ResidencyStatus.BOARDING
+            and status != Student.EnrollmentStatus.COMPLETED
+        ):
+            occupied = dormitory_occupancy.get(dormitory.pk, 0)
+            limit = dormitory_limits[dormitory.pk]
+            if occupied >= limit:
+                errors.append(
+                    f"{location}: dormitory '{dormitory.name}' is at its capacity "
+                    f"of {limit}."
+                )
 
         dob = _parse_date(row.get("date_of_birth"), location, errors)
         guardian_name = row.get("guardian_name", "").strip()
@@ -504,16 +604,16 @@ def import_student_roster(uploaded_file):
                 else:
                     guardian = matching_guardians[0]
             else:
-                for staged_row in staged:
-                    if (
-                        staged_row.guardian_phone == guardian_phone
-                        and staged_row.guardian_name.casefold()
-                        != guardian_name.casefold()
-                    ):
-                        errors.append(
-                            f"{location}: guardian phone is used with different names in the file."
-                        )
-                        break
+                staged_guardian_name = staged_guardian_names.get(guardian_phone)
+                if (
+                    staged_guardian_name
+                    and staged_guardian_name.casefold() != guardian_name.casefold()
+                ):
+                    errors.append(
+                        f"{location}: guardian phone is used with different names in the file."
+                    )
+                else:
+                    staged_guardian_names[guardian_phone] = guardian_name
 
         student = Student(
             admission_no=admission_no,
@@ -544,6 +644,15 @@ def import_student_roster(uploaded_file):
             and len(errors) == row_error_count
         ):
             room_occupancy[room.pk] += 1
+        if (
+            dormitory
+            and residency == Student.ResidencyStatus.BOARDING
+            and status != Student.EnrollmentStatus.COMPLETED
+            and len(errors) == row_error_count
+        ):
+            dormitory_occupancy[dormitory.pk] = (
+                dormitory_occupancy.get(dormitory.pk, 0) + 1
+            )
         staged.append(
             StagedStudent(
                 student=student,
@@ -553,13 +662,31 @@ def import_student_roster(uploaded_file):
             )
         )
 
-    if errors:
-        return 0, errors
+    return RosterValidation(
+        row_count=data_row_count,
+        headers=[
+            {"sheet": sheet, "columns": columns}
+            for sheet, columns in headers_by_sheet.items()
+        ],
+        sample_rows=sample_rows,
+        errors=errors,
+        staged=staged,
+        guardians_by_phone=guardians_by_phone,
+    )
 
+
+def commit_student_roster(validation, progress_callback=None):
+    """Atomically create students from a successful validation report."""
+    if validation.errors:
+        return 0, validation.errors
+    if not validation.staged:
+        return 0, ["The roster file contains no student rows."]
+
+    staged = validation.staged
+    guardians_by_phone = validation.guardians_by_phone
     enrolled_to_import = sum(
         item.student.status == Student.EnrollmentStatus.ENROLLED for item in staged
     )
-
     try:
         with transaction.atomic():
             from tenancy.entitlements import (
@@ -583,7 +710,7 @@ def import_student_roster(uploaded_file):
                         return 0, error.messages
 
                 created_guardians = {}
-                for item in staged:
+                for row_index, item in enumerate(staged, 1):
                     if item.guardian_phone:
                         guardian = next(
                             (
@@ -607,10 +734,30 @@ def import_student_roster(uploaded_file):
                             created_guardians[item.guardian_phone] = guardian
                         item.student.guardian = guardian
                     item.student.save()
+                    if progress_callback:
+                        progress_callback(
+                            "Importing students", row_index, len(staged)
+                        )
     except IntegrityError:
         return 0, [
             "The roster could not be imported because a student identifier was "
             "added or changed during validation. No students were imported; "
             "please upload the file again."
         ]
+    except ValidationError as error:
+        return 0, [
+            "The roster could not be imported because a student placement became "
+            f"invalid during saving. No students were imported: {' '.join(error.messages)}"
+        ]
     return len(staged), []
+
+
+def import_student_roster(uploaded_file, progress_callback=None):
+    """Validate a complete roster, then create it atomically."""
+    validation = validate_student_roster(
+        uploaded_file,
+        progress_callback=progress_callback,
+    )
+    if validation.errors:
+        return 0, validation.errors
+    return commit_student_roster(validation, progress_callback=progress_callback)

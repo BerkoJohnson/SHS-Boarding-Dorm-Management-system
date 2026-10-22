@@ -6,6 +6,8 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import (
     FileExtensionValidator,
     MaxLengthValidator,
+    MaxValueValidator,
+    MinValueValidator,
     RegexValidator,
 )
 from django.utils import timezone
@@ -178,6 +180,13 @@ class AcademicTerm(BaseModel):
     class Meta:
         ordering = ["-start_date"]
         unique_together = ("academic_year", "term", "level")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["level"],
+                condition=models.Q(is_current=True),
+                name="unique_current_academic_term_per_level",
+            )
+        ]
         verbose_name = "Academic Term / Semester"
         verbose_name_plural = "Academic Terms / Semesters"
 
@@ -189,14 +198,24 @@ class AcademicTerm(BaseModel):
             )
 
     def save(self, *args, **kwargs):
-        # Reset active status ONLY for other terms matching this specific level
-        if self.is_current:
-            AcademicTerm.objects.filter(is_current=True, level=self.level).exclude(
-                pk=self.pk
-            ).update(is_current=False)
+        with transaction.atomic():
+            if self.is_current:
+                from core.services.configuration import lock_academic_term_updates
 
-        self.full_clean()
-        super().save(*args, **kwargs)
+                lock_academic_term_updates()
+                list(
+                    AcademicTerm.objects.select_for_update()
+                    .filter(level=self.level)
+                    .order_by("pk")
+                    .values_list("pk", flat=True)
+                )
+                AcademicTerm.objects.filter(
+                    is_current=True,
+                    level=self.level,
+                ).exclude(pk=self.pk).update(is_current=False)
+
+            self.full_clean()
+            super().save(*args, **kwargs)
 
     def __str__(self):
         level_str = (
@@ -275,6 +294,32 @@ class Dormitory(BaseModel):
             from tenancy.entitlements import ensure_quota_available
 
             ensure_quota_available("max_dormitories", Dormitory.objects.count())
+        elif self.pk:
+            occupied = Student.objects.exclude(
+                status=Student.EnrollmentStatus.COMPLETED
+            ).filter(
+                dormitory_id=self.pk,
+                residency=Student.ResidencyStatus.BOARDING,
+            ).count()
+            now = timezone.now()
+            exception_places = sum(
+                DormitoryCapacityException.objects.filter(
+                    dormitory_id=self.pk,
+                    cancelled_at__isnull=True,
+                    starts_at__lte=now,
+                    ends_at__gte=now,
+                ).values_list("additional_capacity", flat=True)
+            )
+            if occupied > self.capacity + exception_places:
+                raise ValidationError(
+                    {
+                        "capacity": (
+                            f"Capacity cannot be lower than the {occupied} active "
+                            "boarding student(s) currently assigned to this "
+                            "dormitory, less any approved capacity exception."
+                        )
+                    }
+                )
 
     def __str__(self):
         return f"{self.house.name} - {self.name} ({self.get_gender_display()})"
@@ -287,8 +332,15 @@ class Dormitory(BaseModel):
             # transaction-scoped advisory lock so concurrent creates cannot
             # overshoot the plan limit.
             with reserve_quota("max_dormitories", Dormitory.objects.count):
+                self.full_clean()
                 return super().save(*args, **kwargs)
-        return super().save(*args, **kwargs)
+        with transaction.atomic():
+            # Serialize capacity reductions with placements.  Calling full_clean
+            # here is essential: admin forms already validate, but direct model
+            # saves must not be able to hide active boarders by lowering capacity.
+            type(self).objects.select_for_update().filter(pk=self.pk).exists()
+            self.full_clean()
+            return super().save(*args, **kwargs)
 
 
 class DormitoryRoom(BaseModel):
@@ -360,6 +412,134 @@ class DormitoryRoom(BaseModel):
         return f"{self.dormitory} - {self.name}"
 
 
+class DormitoryCapacityException(BaseModel):
+    """Time-bound senior approval to exceed a dormitory's normal capacity."""
+
+    dormitory = models.ForeignKey(
+        Dormitory,
+        on_delete=models.CASCADE,
+        related_name="capacity_exceptions",
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_dormitory_capacity_exceptions",
+    )
+    reason = models.TextField(
+        help_text="Why the normal capacity cannot be maintained and what mitigation is in place."
+    )
+    starts_at = models.DateTimeField(default=timezone.now)
+    ends_at = models.DateTimeField()
+    additional_capacity = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[MinValueValidator(1), MaxValueValidator(100)],
+        help_text="Number of additional boarders permitted during this exception.",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cancelled_dormitory_capacity_exceptions",
+    )
+
+    class Meta:
+        ordering = ["-starts_at"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(additional_capacity__gt=0),
+                name="dormitory_capacity_exception_positive",
+            )
+        ]
+        verbose_name = "Dormitory Capacity Exception"
+        verbose_name_plural = "Dormitory Capacity Exceptions"
+
+    def clean(self):
+        super().clean()
+        if not (self.reason or "").strip():
+            raise ValidationError(
+                {"reason": "Record the reason for the capacity exception."}
+            )
+        if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
+            raise ValidationError(
+                {"ends_at": "The exception must end after it starts."}
+            )
+        if self.starts_at and self.ends_at:
+            if self.ends_at - self.starts_at > timedelta(days=7):
+                raise ValidationError(
+                    {
+                        "ends_at": (
+                            "A single capacity exception cannot exceed seven days. "
+                            "Create a new, reviewed exception for a longer period."
+                        )
+                    }
+                )
+        if self.dormitory_id and self.starts_at and self.ends_at and not self.cancelled_at:
+            overlapping = DormitoryCapacityException.objects.filter(
+                dormitory_id=self.dormitory_id,
+                cancelled_at__isnull=True,
+                starts_at__lt=self.ends_at,
+                ends_at__gt=self.starts_at,
+            )
+            if self.pk:
+                overlapping = overlapping.exclude(pk=self.pk)
+            if overlapping.exists():
+                raise ValidationError(
+                    {
+                        "starts_at": (
+                            "This dormitory already has an overlapping capacity "
+                            "exception. Cancel it or wait for it to expire before "
+                            "creating another."
+                        )
+                    }
+                )
+        if not self.approved_by_id and not self.cancelled_at:
+            raise ValidationError(
+                {"approved_by": "A senior approver is required for a capacity exception."}
+            )
+        if self.approved_by_id and not self.cancelled_at:
+            profile = get_user_profile(self.approved_by)
+            if profile is None or not (
+                profile.is_admin or profile.is_senior_housemaster
+            ):
+                raise ValidationError(
+                    {
+                        "approved_by": (
+                            "Only the Headmaster/ADMIN or Senior Housemaster may "
+                            "approve a dormitory capacity exception."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        # Serialize capacity-exception changes with student placements and other
+        # exception changes for the same dormitory. This is the lock that makes
+        # the overlap and occupancy checks reliable under contention.
+        with transaction.atomic():
+            Dormitory.objects.select_for_update().filter(
+                pk=self.dormitory_id
+            ).exists()
+            self.full_clean()
+            super().save(*args, **kwargs)
+
+    def is_active_at(self, when=None):
+        when = when or timezone.now()
+        return bool(
+            self.cancelled_at is None
+            and self.starts_at <= when <= self.ends_at
+        )
+
+    @property
+    def is_active(self):
+        return self.is_active_at()
+
+    def __str__(self):
+        return f"{self.dormitory} +{self.additional_capacity} until {self.ends_at:%Y-%m-%d %H:%M}"
+
+
 class StaffRole(models.TextChoices):
     """Institutional system user roles for Eden High School."""
 
@@ -369,6 +549,7 @@ class StaffRole(models.TextChoices):
     HOUSEMASTER = "HOUSEMASTER", "Housemaster / Housemistress"
     HOUSE_TUTOR = "HOUSE_TUTOR", "House Tutor"
     GATE_OFFICER = "GATE_OFFICER", "Security / Gate Officer"
+    MEDICAL = "MEDICAL", "Medical / Infirmary Lead"
 
 
 class UserProfile(BaseModel):
@@ -422,13 +603,24 @@ class UserProfile(BaseModel):
     def is_gate_officer(self) -> bool:
         return self.role == StaffRole.GATE_OFFICER or self.is_admin
 
+    @property
+    def is_medical(self) -> bool:
+        return self.role == StaffRole.MEDICAL
+
     def can_approve_exeat(self, exeat) -> bool:
         """
         Determines whether this user has authorization to approve or reject
         a student's exeat leave request.
+
+        Medical leads are deliberately scoped to medical passes; they must never
+        inherit the broad house-management permissions by being assigned an
+        ADMIN or HOUSEMASTER role as a workaround. General emergency departures
+        remain with the Headmaster/ADMIN and Senior Housemaster (D2).
         """
         if self.is_admin or self.is_senior_housemaster:
             return True
+        if self.role == StaffRole.MEDICAL:
+            return exeat.exeat_type == Exeat.ExeatType.MEDICAL
         if hasattr(self.user, "housemaster") and self.user.housemaster:
             hm = self.user.housemaster
             if hm.is_senior_housemaster:
@@ -464,7 +656,9 @@ class UserProfile(BaseModel):
 
     def can_log_gate_movement(self) -> bool:
         """
-        Only system administrators and assigned Gate Officers can log gate movements.
+        System administrators and staff holding the Gate Officer role can log
+        gate movements. Shift/duty assignment enforcement is applied separately
+        by ``core.permissions.can_log_gate_check`` when the school enables it.
         """
         return self.is_admin or self.role == StaffRole.GATE_OFFICER
 
@@ -789,6 +983,39 @@ class Student(BaseModel):
                 raise ValidationError(
                     {"room": f"{self.room} is at its capacity of {self.room.capacity}."}
                 )
+        if self.dormitory and self.status != self.EnrollmentStatus.COMPLETED:
+            # Dormitory capacity is the safety limit; room capacity alone is
+            # not enough (F-13). A current senior exception may add a strictly
+            # time-bound number of extra places.
+            dormitory_occupancy = Student.objects.exclude(
+                status=self.EnrollmentStatus.COMPLETED
+            ).filter(
+                dormitory_id=self.dormitory_id,
+                residency=self.ResidencyStatus.BOARDING,
+            )
+            if self.pk:
+                dormitory_occupancy = dormitory_occupancy.exclude(pk=self.pk)
+            now = timezone.now()
+            exception_places = sum(
+                DormitoryCapacityException.objects.filter(
+                    dormitory_id=self.dormitory_id,
+                    cancelled_at__isnull=True,
+                    starts_at__lte=now,
+                    ends_at__gte=now,
+                ).values_list("additional_capacity", flat=True)
+            )
+            allowed = self.dormitory.capacity + exception_places
+            if dormitory_occupancy.count() >= allowed:
+                raise ValidationError(
+                    {
+                        "dormitory": (
+                            f"{self.dormitory} is at its capacity of "
+                            f"{self.dormitory.capacity}. A time-bound senior "
+                            "capacity exception is required before placing "
+                            "another boarder."
+                        )
+                    }
+                )
         if (
             self.class_group
             and self.class_group.programme_id
@@ -822,6 +1049,18 @@ class Student(BaseModel):
                 # Lock the target room so concurrent saves cannot overfill it.
                 DormitoryRoom.objects.select_for_update().filter(
                     pk=self.room_id
+                ).exists()
+            if self.dormitory_id:
+                # Serialize dormitory-capacity checks with other placements and
+                # with creation/cancellation of senior capacity exceptions.
+                Dormitory.objects.select_for_update().filter(
+                    pk=self.dormitory_id
+                ).exists()
+                DormitoryCapacityException.objects.select_for_update().filter(
+                    dormitory_id=self.dormitory_id,
+                    cancelled_at__isnull=True,
+                    starts_at__lte=timezone.now(),
+                    ends_at__gte=timezone.now(),
                 ).exists()
             previous_status = None
             if not self._state.adding:
@@ -998,6 +1237,27 @@ class Exeat(BaseModel):
         related_name="approved_exeats",
         help_text="Housemaster / Senior Housemaster who signed off this pass (Approved only).",
     )
+    approved_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_exeats_by_user",
+        help_text=(
+            "Authenticated authorizer for medical or emergency overrides where "
+            "the approver does not hold a HouseMaster profile."
+        ),
+    )
+    decided_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Immutable timestamp when the request was approved, rejected, or cancelled.",
+    )
+    is_emergency_override = models.BooleanField(
+        default=False,
+        help_text="True when approval used the documented emergency-override path.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -1070,15 +1330,40 @@ class Exeat(BaseModel):
                     }
                 )
 
-        # 3. Require approval details when status is Approved
-        if self.status == self.Status.APPROVED and not self.approved_by_id:
+        # 3. Require an authorizer when status is Approved. A HouseMaster
+        # profile is preferred for ordinary leave; a named user is allowed for
+        # medical/emergency override paths where the authorizer has no
+        # HouseMaster record.
+        if self.status == self.Status.APPROVED and not (
+            self.approved_by_id or self.approved_by_user_id
+        ):
             raise ValidationError(
                 {
-                    "approved_by": "An approving Housemaster must be specified when issuing an exeat pass."
+                    "approved_by": (
+                        "An approving Housemaster or named authorizer must be "
+                        "specified when issuing an exeat pass."
+                    )
                 }
             )
 
-        # 4. Jurisdiction guard: the signatory Housemaster must actually have authority over this student's house
+        # 3b. General emergency passes must use the documented override path so
+        # the immediate reason and the 24-hour post-hoc review always exist (D2).
+        if (
+            self.status == self.Status.APPROVED
+            and self.exeat_type == self.ExeatType.EMERGENCY
+            and not self.is_emergency_override
+        ):
+            raise ValidationError(
+                {
+                    "is_emergency_override": (
+                        "A general emergency pass must be approved through the "
+                        "emergency override workflow so the reason and 24-hour "
+                        "review are recorded."
+                    )
+                }
+            )
+
+        # 4. Jurisdiction guard: the signatory Housemaster must actually have authority over this student's house.
         if (
             self.status == self.Status.APPROVED
             and self.approved_by_id
@@ -1107,6 +1392,26 @@ class Exeat(BaseModel):
                             f"Approval is restricted to the student's own Housemaster or the Senior Housemaster."
                         }
                     )
+
+        # 4b. Named-user authorizers are checked against their scoped role.
+        if (
+            self.status == self.Status.APPROVED
+            and self.approved_by_user_id
+            and not self.approved_by_id
+            and self.student_id
+        ):
+            profile = get_user_profile(self.approved_by_user)
+            if profile is None or not profile.can_approve_exeat(self):
+                raise ValidationError(
+                    {
+                        "approved_by_user": (
+                            "This user is not authorized to approve this exeat. "
+                            "Medical leads may approve medical passes only; ordinary "
+                            "and general emergency passes require the student's "
+                            "Housemaster, the Senior Housemaster, or an administrator."
+                        )
+                    }
+                )
 
         # 5. One active (Approved and unreturned) pass per student (F-02).
         # The database partial unique constraint is the final guard for
@@ -1174,7 +1479,7 @@ class Exeat(BaseModel):
         # 1. Auto-generate unique Exeat Pass Number on creation
         if not self.exeat_number:
             timestamp_str = timezone.now().strftime("%Y%m%d")
-            random_uuid = str(self.id)[:4].upper()
+            random_uuid = str(self.id)[:8].upper()
             self.exeat_number = f"EXT-{timestamp_str}-{random_uuid}"
 
         # 2. Auto-assign active term matching the student's form level
@@ -1192,11 +1497,31 @@ class Exeat(BaseModel):
             if current_term:
                 self.academic_term = current_term
 
+        # Record the decision time once. Reports must not use updated_at,
+        # which moves whenever an unrelated field is edited later (F-20).
+        if (
+            self.status in (self.Status.APPROVED, self.Status.REJECTED, self.Status.CANCELLED)
+            and self.decided_at is None
+        ):
+            self.decided_at = timezone.now()
+
         # Keep the database guard in sync with the request state before the
         # model constraint validation runs.
         self.is_active = self._compute_is_active()
         self.full_clean()
         super().save(*args, **kwargs)
+
+    @property
+    def approver_display(self):
+        """Return the authorizer for display, supporting both approval paths."""
+        if self.approved_by_id:
+            return self.approved_by.full_name
+        if self.approved_by_user_id:
+            return (
+                self.approved_by_user.get_full_name()
+                or self.approved_by_user.get_username()
+            )
+        return "—"
 
     @property
     def is_approved(self):
@@ -1259,13 +1584,29 @@ class ExeatMovement(BaseModel):
         max_length=100,
         blank=True,
         null=True,
-        help_text="Gate officer or master name/ID.",
+        help_text="Gate officer or master name/ID snapshot for display.",
     )
     return_recorded_by = models.CharField(
         max_length=100,
         blank=True,
         null=True,
-        help_text="Gate officer or master name/ID.",
+        help_text="Gate officer or master name/ID snapshot for display.",
+    )
+    departure_recorded_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="exeat_departures_recorded",
+        help_text="Authenticated staff account that recorded the departure.",
+    )
+    return_recorded_by_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="exeat_returns_recorded",
+        help_text="Authenticated staff account that recorded the return.",
     )
 
     class Meta:
@@ -1485,6 +1826,385 @@ class ExeatReconciliation(BaseModel):
         )
 
 
+class ExeatScheduleChange(BaseModel):
+    """Append-only record of a formal change to an exeat's travel window."""
+
+    class ChangeType(models.TextChoices):
+        RESCHEDULE = "reschedule", "Rescheduled by authorized staff"
+        EARLY_DEPARTURE = "early_departure", "Approved early departure"
+
+    exeat = models.ForeignKey(
+        Exeat,
+        on_delete=models.CASCADE,
+        related_name="schedule_changes",
+    )
+    change_type = models.CharField(
+        max_length=20,
+        choices=ChangeType.choices,
+        default=ChangeType.RESCHEDULE,
+    )
+    previous_departure = models.DateTimeField()
+    previous_return = models.DateTimeField()
+    new_departure = models.DateTimeField()
+    new_return = models.DateTimeField()
+    reason = models.TextField()
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="exeat_schedule_changes",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Exeat Schedule Change"
+        verbose_name_plural = "Exeat Schedule Changes"
+
+    def clean(self):
+        super().clean()
+        if not (self.reason or "").strip():
+            raise ValidationError({"reason": "Record why the schedule changed."})
+        if self.new_departure and self.new_return:
+            if self.new_return <= self.new_departure:
+                raise ValidationError(
+                    {"new_return": "The new return time must be after departure."}
+                )
+        if self.previous_departure and self.previous_return:
+            if self.previous_return <= self.previous_departure:
+                raise ValidationError(
+                    {"previous_return": "The previous schedule is invalid."}
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.exeat.exeat_number}: {self.previous_departure} → {self.new_departure}"
+
+
+class ExeatReview(BaseModel):
+    """Post-hoc review item for an emergency override or after-hours medical approval."""
+
+    class ReviewType(models.TextChoices):
+        EMERGENCY_OVERRIDE = "emergency_override", "Emergency override"
+        MEDICAL_AFTER_HOURS = "medical_after_hours", "After-hours medical approval"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending review"
+        REVIEWED = "reviewed", "Reviewed"
+        ESCALATED = "escalated", "Escalated"
+
+    class Outcome(models.TextChoices):
+        UPHELD = "upheld", "Upheld - the emergency action was justified"
+        ESCALATED = "escalated", "Escalated for further action"
+        REJECTED = "rejected", "Not justified - follow-up required"
+
+    exeat = models.ForeignKey(
+        Exeat,
+        on_delete=models.CASCADE,
+        related_name="reviews",
+    )
+    review_type = models.CharField(max_length=30, choices=ReviewType.choices)
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    reason = models.TextField(
+        help_text="Immediate reason recorded by the authorizing staff member."
+    )
+    authorized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="authorized_exeat_reviews",
+    )
+    authorized_at = models.DateTimeField(default=timezone.now)
+    due_at = models.DateTimeField()
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_exeat_reviews",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    outcome = models.CharField(max_length=12, choices=Outcome.choices, blank=True)
+    review_notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["due_at", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["exeat", "review_type"],
+                name="unique_exeat_review_type",
+            )
+        ]
+        verbose_name = "Exeat Review"
+        verbose_name_plural = "Exeat Reviews"
+
+    def clean(self):
+        super().clean()
+        if not (self.reason or "").strip():
+            raise ValidationError(
+                {"reason": "A reason is required for every emergency or after-hours approval."}
+            )
+        if self.authorized_at and self.due_at and self.due_at <= self.authorized_at:
+            raise ValidationError({"due_at": "The review deadline must be in the future."})
+        if self.status != self.Status.PENDING:
+            if not self.reviewed_by_id or not self.reviewed_at or not self.outcome:
+                raise ValidationError(
+                    {
+                        "status": (
+                            "A completed review requires a reviewer, review time, "
+                            "and outcome."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        if not self.authorized_at:
+            self.authorized_at = timezone.now()
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @property
+    def is_overdue(self):
+        return self.status == self.Status.PENDING and timezone.now() >= self.due_at
+
+    def __str__(self):
+        return f"{self.exeat.exeat_number} - {self.get_review_type_display()}"
+
+
+class GateDutyAssignment(BaseModel):
+    """Time-bound gate shift or temporary cover assignment."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="gate_duty_assignments",
+    )
+    gate_name = models.CharField(max_length=100, default="Main Gate")
+    starts_at = models.DateTimeField(default=timezone.now)
+    ends_at = models.DateTimeField()
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approved_gate_duty_assignments",
+    )
+    reason = models.TextField(
+        blank=True,
+        help_text="Optional note, especially for temporary cover.",
+    )
+    is_temporary = models.BooleanField(default=False)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cancelled_gate_duty_assignments",
+    )
+
+    class Meta:
+        ordering = ["-starts_at", "user__username"]
+        verbose_name = "Gate Duty Assignment"
+        verbose_name_plural = "Gate Duty Assignments"
+
+    def clean(self):
+        super().clean()
+        if self.starts_at and self.ends_at and self.ends_at <= self.starts_at:
+            raise ValidationError({"ends_at": "The shift must end after it starts."})
+        if not self.approved_by_id and not self.cancelled_at:
+            raise ValidationError(
+                {"approved_by": "A duty assignment requires an approving officer."}
+            )
+        if self.user_id and not self.cancelled_at:
+            profile = get_user_profile(self.user)
+            if profile is None or not profile.can_log_gate_movement():
+                raise ValidationError(
+                    {
+                        "user": (
+                            "Only a Gate Officer or administrator can hold a gate "
+                            "duty assignment."
+                        )
+                    }
+                )
+        if self.approved_by_id and not self.cancelled_at:
+            approver_profile = get_user_profile(self.approved_by)
+            if approver_profile is None or not (
+                approver_profile.is_admin
+                or approver_profile.is_senior_housemaster
+            ):
+                raise ValidationError(
+                    {
+                        "approved_by": (
+                            "Only the Headmaster/ADMIN or Senior Housemaster may "
+                            "approve gate duty."
+                        )
+                    }
+                )
+        if self.user_id and self.starts_at and self.ends_at and not self.cancelled_at:
+            overlapping = GateDutyAssignment.objects.filter(
+                user_id=self.user_id,
+                cancelled_at__isnull=True,
+                starts_at__lt=self.ends_at,
+                ends_at__gt=self.starts_at,
+            )
+            if self.pk:
+                overlapping = overlapping.exclude(pk=self.pk)
+            if overlapping.exists():
+                raise ValidationError(
+                    {
+                        "starts_at": (
+                            "This staff member already has an overlapping gate "
+                            "assignment."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def is_active_at(self, when=None):
+        when = when or timezone.now()
+        return bool(
+            self.cancelled_at is None
+            and self.starts_at <= when <= self.ends_at
+        )
+
+    @property
+    def is_active(self):
+        return self.is_active_at()
+
+    def __str__(self):
+        return f"{self.user} at {self.gate_name} ({self.starts_at:%Y-%m-%d %H:%M})"
+
+
+class LateReturnIncident(BaseModel):
+    """Investigation trail for a student who returned after the expected time."""
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        INVESTIGATING = "investigating", "Investigating"
+        RESOLVED = "resolved", "Resolved"
+        CLOSED = "closed", "Closed"
+
+    class Escalation(models.IntegerChoices):
+        HOUSEMASTER = 1, "Housemaster"
+        SENIOR_HOUSEMASTER = 2, "Senior Housemaster"
+        HEADMASTER = 3, "Headmaster"
+
+    exeat = models.OneToOneField(
+        Exeat,
+        on_delete=models.CASCADE,
+        related_name="late_return_incident",
+    )
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="late_return_incidents",
+    )
+    expected_return = models.DateTimeField()
+    detected_at = models.DateTimeField(default=timezone.now)
+    actual_return = models.DateTimeField(null=True, blank=True)
+    escalation_level = models.PositiveSmallIntegerField(
+        choices=Escalation.choices,
+        default=Escalation.HOUSEMASTER,
+    )
+    owner = models.ForeignKey(
+        HouseMaster,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="late_return_incidents",
+    )
+    status = models.CharField(
+        max_length=15,
+        choices=Status.choices,
+        default=Status.OPEN,
+    )
+    summary = models.TextField(blank=True)
+    resolution = models.TextField(blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_late_return_incidents",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    last_notified_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-detected_at"]
+        verbose_name = "Late Return Incident"
+        verbose_name_plural = "Late Return Incidents"
+
+    def clean(self):
+        super().clean()
+        if self.status in (self.Status.RESOLVED, self.Status.CLOSED):
+            if not (self.resolution or "").strip():
+                raise ValidationError(
+                    {"resolution": "Record the investigation outcome before closing."}
+                )
+            if not self.resolved_by_id or not self.resolved_at:
+                raise ValidationError(
+                    {"status": "A closed incident requires a resolver and timestamp."}
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @property
+    def delay_hours(self):
+        if not self.expected_return:
+            return 0
+        end = self.actual_return or timezone.now()
+        return round(max(0, (end - self.expected_return).total_seconds() / 3600), 1)
+
+    def __str__(self):
+        return f"Late return: {self.student.full_name} ({self.exeat.exeat_number})"
+
+
+class StaffNotification(BaseModel):
+    """Small in-app notification for operational escalations and review queues."""
+
+    class Kind(models.TextChoices):
+        LATE_RETURN = "late_return", "Late return"
+        EXEAT_REVIEW = "exeat_review", "Exeat review"
+        ROLL_CALL_CORRECTION = "roll_call_correction", "Roll-call correction"
+        DISPUTE = "dispute", "Dispute"
+        GENERAL = "general", "General"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="staff_notifications",
+    )
+    kind = models.CharField(max_length=30, choices=Kind.choices, default=Kind.GENERAL)
+    title = models.CharField(max_length=150)
+    message = models.TextField()
+    url = models.CharField(max_length=500, blank=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "read_at"])]
+        verbose_name = "Staff Notification"
+        verbose_name_plural = "Staff Notifications"
+
+    def __str__(self):
+        return f"{self.title} for {self.user}"
+
+
 class SMSDelivery(BaseModel):
     """Durable per-recipient record for an outbound SMS notification."""
 
@@ -1621,6 +2341,10 @@ class ConfigurationAuditLog(models.Model):
             "housemaster_assignment_changed",
             "Housemaster assignment changed",
         )
+        OPERATIONAL_SETTINGS_CHANGED = (
+            "operational_settings_changed",
+            "Operational escalation settings changed",
+        )
 
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1641,6 +2365,241 @@ class ConfigurationAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.get_event_display()} - {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class OperationalSettings(models.Model):
+    """Tenant-level operational timing and escalation settings with safe defaults."""
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    roll_call_timeout_minutes = models.PositiveIntegerField(
+        default=60,
+        validators=[MinValueValidator(5), MaxValueValidator(240)],
+        help_text="Minutes after a muster starts before it is marked expired.",
+    )
+    late_return_incident_after_minutes = models.PositiveIntegerField(
+        default=120,
+        validators=[MinValueValidator(15), MaxValueValidator(1440)],
+        help_text="Minutes after expected return before a late-return incident opens.",
+    )
+    senior_housemaster_escalation_after_minutes = models.PositiveIntegerField(
+        default=120,
+        validators=[MinValueValidator(15), MaxValueValidator(1440)],
+        help_text="Minutes after expected return before the Senior Housemaster is notified.",
+    )
+    headmaster_escalation_after_minutes = models.PositiveIntegerField(
+        default=360,
+        validators=[MinValueValidator(30), MaxValueValidator(2880)],
+        help_text="Minutes after expected return before the Headmaster is notified.",
+    )
+    absence_follow_up_deadline_hours = models.PositiveIntegerField(
+        default=24,
+        validators=[MinValueValidator(1), MaxValueValidator(168)],
+        help_text="Target time to review an unresolved absence.",
+    )
+    gate_duty_enforcement_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "When enabled, Gate Officers must have an active GateDutyAssignment "
+            "to record movements. Keep disabled until the roster is populated."
+        ),
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_operational_settings",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Operational Settings"
+        verbose_name_plural = "Operational Settings"
+
+    def clean(self):
+        super().clean()
+        if (
+            self.senior_housemaster_escalation_after_minutes
+            < self.late_return_incident_after_minutes
+        ):
+            raise ValidationError(
+                {
+                    "senior_housemaster_escalation_after_minutes": (
+                        "The Senior Housemaster escalation cannot occur before "
+                        "the late-return incident threshold."
+                    )
+                }
+            )
+        if (
+            self.headmaster_escalation_after_minutes
+            <= self.senior_housemaster_escalation_after_minutes
+        ):
+            raise ValidationError(
+                {
+                    "headmaster_escalation_after_minutes": (
+                        "The Headmaster escalation must be later than the Senior "
+                        "Housemaster escalation."
+                    )
+                }
+            )
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        previous = (
+            type(self).objects.filter(pk=1)
+            .values(
+                "roll_call_timeout_minutes",
+                "late_return_incident_after_minutes",
+                "senior_housemaster_escalation_after_minutes",
+                "headmaster_escalation_after_minutes",
+                "absence_follow_up_deadline_hours",
+                "gate_duty_enforcement_enabled",
+            )
+            .first()
+        )
+        self.full_clean()
+        super().save(*args, **kwargs)
+        current = {
+            "roll_call_timeout_minutes": self.roll_call_timeout_minutes,
+            "late_return_incident_after_minutes": self.late_return_incident_after_minutes,
+            "senior_housemaster_escalation_after_minutes": (
+                self.senior_housemaster_escalation_after_minutes
+            ),
+            "headmaster_escalation_after_minutes": (
+                self.headmaster_escalation_after_minutes
+            ),
+            "absence_follow_up_deadline_hours": self.absence_follow_up_deadline_hours,
+            "gate_duty_enforcement_enabled": self.gate_duty_enforcement_enabled,
+        }
+        if previous is None:
+            details = {"created": current}
+        elif previous != current:
+            details = {
+                "before": {
+                    key: str(value) for key, value in previous.items()
+                },
+                "after": {key: str(value) for key, value in current.items()},
+            }
+        else:
+            return
+        ConfigurationAuditLog.objects.create(
+            actor=self.updated_by,
+            event=ConfigurationAuditLog.Event.OPERATIONAL_SETTINGS_CHANGED,
+            description="Operational escalation settings updated",
+            details=details,
+        )
+
+    @classmethod
+    def get_solo(cls):
+        return cls.objects.filter(pk=1).first() or cls()
+
+    def __str__(self):
+        return "Operational Settings"
+
+
+class AuditEvent(models.Model):
+    """Append-only audit event for sensitive operational actions."""
+
+    class Action(models.TextChoices):
+        EXEAT_CANCELLED = "exeat_cancelled", "Exeat cancelled"
+        EXEAT_RESCHEDULED = "exeat_rescheduled", "Exeat rescheduled"
+        EMERGENCY_OVERRIDE = "emergency_override", "Emergency override used"
+        EXEAT_REVIEW_DECIDED = "exeat_review_decided", "Exeat review decided"
+        GATE_DUTY_CHANGED = "gate_duty_changed", "Gate duty assignment changed"
+        LATE_RETURN_OPENED = "late_return_opened", "Late-return incident opened"
+        LATE_RETURN_UPDATED = "late_return_updated", "Late-return incident updated"
+        ROLL_CALL_CORRECTION_REQUESTED = (
+            "roll_call_correction_requested",
+            "Roll-call correction requested",
+        )
+        ROLL_CALL_CORRECTION_DECIDED = (
+            "roll_call_correction_decided",
+            "Roll-call correction decided",
+        )
+        DORMITORY_CAPACITY_EXCEPTION = (
+            "dormitory_capacity_exception",
+            "Dormitory capacity exception",
+        )
+        EXPORT = "export", "Sensitive report export"
+        ADMIN_EDIT = "admin_edit", "Administrative edit"
+        DISPUTE = "dispute", "Dispute case changed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_events",
+    )
+    action = models.CharField(max_length=40, choices=Action.choices)
+    target_type = models.CharField(max_length=80, blank=True)
+    target_id = models.CharField(max_length=64, blank=True)
+    summary = models.CharField(max_length=255)
+    before = models.JSONField(default=dict, blank=True)
+    after = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Audit Event"
+        verbose_name_plural = "Audit Events"
+        indexes = [
+            models.Index(fields=["action", "created_at"]),
+            models.Index(fields=["target_type", "target_id"]),
+        ]
+
+    @classmethod
+    def record(cls, *, actor, action, summary, target_type="", target_id="", before=None, after=None, metadata=None):
+        return cls.objects.create(
+            actor=actor if getattr(actor, "is_authenticated", False) else None,
+            action=action,
+            target_type=target_type,
+            target_id=str(target_id or "")[:64],
+            summary=summary[:255],
+            before=before or {},
+            after=after or {},
+            metadata=metadata or {},
+        )
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("Audit events are append-only and cannot be edited.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Audit events cannot be deleted.")
+
+    def __str__(self):
+        return f"{self.get_action_display()} - {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class DataExportLog(models.Model):
+    """Audit record for a report or bulk-data export."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="data_export_logs",
+    )
+    report_name = models.CharField(max_length=150)
+    file_format = models.CharField(max_length=10)
+    filters = models.JSONField(default=dict, blank=True)
+    row_count = models.PositiveIntegerField(default=0)
+    purpose = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Data Export Log"
+        verbose_name_plural = "Data Export Logs"
+
+    def __str__(self):
+        return f"{self.report_name} ({self.file_format}) by {self.actor}"
 
 
 class StudentIDExport(BaseModel):
@@ -1927,7 +2886,17 @@ class RollCallSession(BaseModel):
     def expires_at(self):
         if not self.created_at:
             return None
-        return self.created_at + ROLL_CALL_SESSION_TIMEOUT
+        configuration = (
+            OperationalSettings.objects.filter(pk=1)
+            .only("roll_call_timeout_minutes")
+            .first()
+        )
+        timeout_minutes = (
+            configuration.roll_call_timeout_minutes
+            if configuration is not None
+            else int(ROLL_CALL_SESSION_TIMEOUT.total_seconds() // 60)
+        )
+        return self.created_at + timedelta(minutes=timeout_minutes)
 
     @property
     def is_expired(self):
@@ -2096,6 +3065,236 @@ class RollCallAbsenceFollowUp(BaseModel):
         return f"{self.entry.student.full_name} - {self.get_status_display()}"
 
 
+class RollCallCorrection(BaseModel):
+    """Authorized, audited correction to a closed or expired roll-call entry."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending approval"
+        APPROVED = "approved", "Approved and applied"
+        REJECTED = "rejected", "Rejected"
+        CANCELLED = "cancelled", "Cancelled"
+
+    entry = models.ForeignKey(
+        RollCallEntry,
+        on_delete=models.CASCADE,
+        related_name="corrections",
+    )
+    previous_status = models.CharField(
+        max_length=20, choices=RollCallEntry.Status.choices
+    )
+    requested_status = models.CharField(
+        max_length=20, choices=RollCallEntry.Status.choices
+    )
+    previous_remarks = models.CharField(max_length=200, blank=True)
+    requested_remarks = models.CharField(max_length=200, blank=True)
+    reason = models.TextField(
+        help_text="Why the original attendance mark was wrong."
+    )
+    evidence = models.TextField(
+        blank=True,
+        help_text="Supporting evidence or verification for a sensitive correction.",
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requested_roll_call_corrections",
+    )
+    requires_second_approval = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_roll_call_corrections",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+    applied_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["entry"],
+                condition=models.Q(status="pending"),
+                name="one_pending_roll_call_correction_per_entry",
+            )
+        ]
+        verbose_name = "Roll Call Correction"
+        verbose_name_plural = "Roll Call Corrections"
+
+    def clean(self):
+        super().clean()
+        if self.previous_status == self.requested_status:
+            raise ValidationError(
+                {"requested_status": "Choose a different attendance status."}
+            )
+        if not (self.reason or "").strip():
+            raise ValidationError({"reason": "Record the reason for the correction."})
+        if self.requires_second_approval and not (self.evidence or "").strip():
+            raise ValidationError(
+                {
+                    "evidence": (
+                        "A sensitive correction (Present/Absent or conduct-linked) "
+                        "requires supporting evidence."
+                    )
+                }
+            )
+        if self.status == self.Status.APPROVED and not self.applied_at:
+            raise ValidationError(
+                {"status": "An approved correction must record when it was applied."}
+            )
+        if self.status in (self.Status.APPROVED, self.Status.REJECTED):
+            if not self.reviewed_by_id or not self.reviewed_at:
+                raise ValidationError(
+                    {"status": "A decided correction requires a reviewer and time."}
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.entry.student.full_name}: {self.previous_status} → {self.requested_status}"
+
+
+class DisputeCase(BaseModel):
+    """Formal review of an exeat, gate, or attendance decision (F-30)."""
+
+    class Category(models.TextChoices):
+        EXEAT = "exeat", "Exeat or gate decision"
+        ATTENDANCE = "attendance", "Roll-call / attendance"
+        OTHER = "other", "Other boarding record"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        UNDER_REVIEW = "under_review", "Under review"
+        RESOLVED = "resolved", "Resolved"
+        REJECTED = "rejected", "Not upheld"
+        CLOSED = "closed", "Closed"
+
+    class Outcome(models.TextChoices):
+        UPHELD = "upheld", "Upheld"
+        PARTIALLY_UPHELD = "partially_upheld", "Partially upheld"
+        NOT_UPHELD = "not_upheld", "Not upheld"
+        CORRECTED = "corrected", "Record corrected"
+
+    reference = models.CharField(max_length=30, unique=True, editable=False, blank=True)
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="dispute_cases",
+    )
+    category = models.CharField(max_length=20, choices=Category.choices)
+    exeat = models.ForeignKey(
+        Exeat,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dispute_cases",
+    )
+    roll_call_entry = models.ForeignKey(
+        RollCallEntry,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dispute_cases",
+    )
+    raised_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="raised_dispute_cases",
+    )
+    details = models.TextField(
+        help_text="What is disputed and what outcome the student/guardian is seeking."
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.OPEN,
+    )
+    assigned_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_dispute_cases",
+    )
+    outcome = models.CharField(max_length=20, choices=Outcome.choices, blank=True)
+    decision_notes = models.TextField(blank=True)
+    correction = models.ForeignKey(
+        RollCallCorrection,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="dispute_cases",
+    )
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_dispute_cases",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Dispute Case"
+        verbose_name_plural = "Dispute Cases"
+
+    def clean(self):
+        super().clean()
+        if not (self.details or "").strip():
+            raise ValidationError({"details": "Record what is being disputed."})
+        if self.category == self.Category.ATTENDANCE and not self.roll_call_entry_id:
+            raise ValidationError(
+                {"roll_call_entry": "Attendance disputes must link to the roll-call entry."}
+            )
+        if self.category == self.Category.EXEAT and not self.exeat_id:
+            raise ValidationError(
+                {"exeat": "Exeat disputes must link to the relevant pass."}
+            )
+        if self.exeat_id and self.student_id and self.exeat.student_id != self.student_id:
+            raise ValidationError({"exeat": "The exeat must belong to the selected student."})
+        if (
+            self.roll_call_entry_id
+            and self.student_id
+            and self.roll_call_entry.student_id != self.student_id
+        ):
+            raise ValidationError(
+                {"roll_call_entry": "The roll-call entry must belong to the selected student."}
+            )
+        if self.status in (self.Status.RESOLVED, self.Status.REJECTED, self.Status.CLOSED):
+            if not self.outcome:
+                raise ValidationError({"outcome": "Record the review outcome."})
+            if not (self.decision_notes or "").strip():
+                raise ValidationError({"decision_notes": "Record the decision reasoning."})
+            if not self.resolved_by_id or not self.resolved_at:
+                raise ValidationError(
+                    {"status": "A decided dispute requires a reviewer and decision time."}
+                )
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            timestamp = timezone.now().strftime("%Y%m%d")
+            self.reference = f"DSP-{timestamp}-{str(self.id)[:8].upper()}"
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.reference} - {self.student.full_name}"
+
+
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def ensure_user_profile(sender, instance, created, **kwargs):
     """Automatically provisions a UserProfile whenever a new User is registered."""
@@ -2188,6 +3387,7 @@ def get_approvable_pending_for_user(user):
       * Superusers / System Administrators -> ALL pending exeats
       * Senior Housemaster -> ALL pending exeats (school-wide oversight)
       * Regular Housemaster -> pending exeats for students in their assigned House only
+      * Medical/Infirmary Lead -> Medical passes only
       * Tutors / Gate Officers / any other role -> empty QuerySet
 
     Args:
@@ -2217,15 +3417,22 @@ def get_approvable_pending_for_user(user):
 
     profile = get_user_profile(user)
 
-    # Role guard — only Admin / Senior HM / Housemaster can approve anything
+    # Role guard — only Admin / Senior HM / Housemaster can approve anything.
+    # A Medical/Infirmary Lead is a scoped approver for medical passes.
     if not profile:
         return base_qs.none()
     if profile.role not in (
         StaffRole.ADMIN,
         StaffRole.SENIOR_HOUSEMASTER,
         StaffRole.HOUSEMASTER,
+        StaffRole.MEDICAL,
     ):
         return base_qs.none()
+
+    # A Medical/Infirmary Lead sees only medical requests. General emergency
+    # departures stay with the Headmaster/ADMIN and Senior Housemaster.
+    if profile.role == StaffRole.MEDICAL:
+        return base_qs.filter(exeat_type=Exeat.ExeatType.MEDICAL)
 
     # ADMIN and SENIOR_HOUSEMASTER: school-wide
     if profile.role in (StaffRole.ADMIN, StaffRole.SENIOR_HOUSEMASTER):
@@ -2259,7 +3466,7 @@ def get_exeat_queue_stats(scoped_pending_qs, user):
         user: the currently-logged-in Django User instance (used to attribute
             'Approved Today' to the current signatory, for SLA-awareness).
     """
-    from django.db.models import Avg, Min, Count, Q as _Q, F
+    from django.db.models import Min, Count, F, Q as _Q
     from django.utils import timezone
 
     now = timezone.now()
@@ -2276,42 +3483,36 @@ def get_exeat_queue_stats(scoped_pending_qs, user):
     }
 
     # --- Oldest + average age (in hours) for the SLA gauges ---
-    agg = scoped_pending_qs.aggregate(
-        oldest_created=Min("created_at"),
-        avg_created=Avg("created_at"),
+    # PostgreSQL has no AVG(timestamptz); averaging in Python keeps this
+    # compatible with PostgreSQL 14 and avoids a fragile database-specific
+    # epoch conversion. Pending queues are small by design.
+    pending_timestamps = list(
+        scoped_pending_qs.order_by().values_list("created_at", flat=True)
     )
-    if agg["oldest_created"]:
-        age_delta = now - agg["oldest_created"]
-        stats["oldest_pending_hours"] = round(age_delta.total_seconds() / 3600, 1)
-    if agg["avg_created"]:
-        avg_delta = now - agg["avg_created"]
-        stats["avg_queue_age_hours"] = round(avg_delta.total_seconds() / 3600, 1)
+    if pending_timestamps:
+        oldest = min(pending_timestamps)
+        stats["oldest_pending_hours"] = round(
+            (now - oldest).total_seconds() / 3600, 1
+        )
+        total_age_seconds = sum(
+            (now - created_at).total_seconds() for created_at in pending_timestamps
+        )
+        stats["avg_queue_age_hours"] = round(
+            total_age_seconds / len(pending_timestamps) / 3600, 1
+        )
 
     # --- Today's throughput for the current approver (SLA context) ---
-    # Approved_today attributed to the currently-logged-in approver so each
-    # HM sees *their own* desk stats, not a system-wide pool.
+    # Use the immutable decision timestamp and the named decision-maker, so a
+    # Senior Housemaster without a HouseMaster profile still gets desk stats.
     today_by_me = (
         Exeat.objects.filter(
-            updated_at__gte=today_start,
-            approved_by__in=(
-                list(
-                    HouseMaster.objects.filter(
-                        _Q(staff_id__iexact=user.username)
-                        | _Q(full_name__icontains=user.username)
-                    ).values_list("id", flat=True)
-                )
-                if user.is_authenticated
-                else _Q(pk__in=[])
-            ),
+            decided_at__gte=today_start,
+        ).filter(
+            _Q(approved_by_user=user) | _Q(approved_by__user=user)
         )
         if user.is_authenticated
         else Exeat.objects.none()
     )
-    if getattr(user, "housemaster", None):
-        today_by_me = Exeat.objects.filter(
-            updated_at__gte=today_start,
-            approved_by_id=user.housemaster.id,
-        )
     stats["approved_today"] = today_by_me.filter(status=Exeat.Status.APPROVED).count()
     stats["rejected_today"] = today_by_me.filter(status=Exeat.Status.REJECTED).count()
 

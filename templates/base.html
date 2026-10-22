@@ -54,6 +54,23 @@
 
   <style nonce="{{ request.csp_nonce }}">
     [x-cloak] { display: none !important; }
+    .skip-link {
+      position: fixed;
+      top: -4rem;
+      left: 1rem;
+      z-index: 100;
+      padding: 0.75rem 1rem;
+      border-radius: 0.5rem;
+      background: #0f172a;
+      color: #fff;
+      font-weight: 700;
+      transition: top 120ms ease-in-out;
+    }
+    .skip-link:focus { top: 1rem; }
+    :focus-visible {
+      outline: 3px solid #2563eb;
+      outline-offset: 2px;
+    }
     .htmx-indicator { display: none; }
     .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-flex !important; }
     /* Custom scrollbars for enterprise high-density feel */
@@ -91,7 +108,7 @@
   {% block extra_head %}{% endblock %}
 </head>
 
-<body class="h-full text-slate-800 antialiased flex overflow-hidden text-xs selection:bg-brand-500 selection:text-white" 
+<body class="h-full text-slate-800 antialiased flex overflow-hidden text-sm selection:bg-brand-500 selection:text-white"
       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
       x-data="{
         sidebarCollapsed: false,
@@ -108,6 +125,8 @@
       }"
       :class="{ 'mobile-nav-open': mobileNavOpen }"
       @keydown.escape.window="mobileNavOpen = false">
+
+  <a href="#main-content" class="skip-link">Skip to main content</a>
 
   <!-- FLOATING TOAST NOTIFICATION SYSTEM -->
   {% include "components/toasts.html" %}
@@ -293,6 +312,55 @@
         </svg>
         <span x-show="!sidebarCollapsed" class="truncate">Reports & Stats</span>
       </a>
+      {% endif %}
+
+      <!-- Governance & operational review queues -->
+      {% if can_view_exeat_reviews or can_view_late_returns or can_view_roll_call_corrections or can_view_disputes or can_manage_gate_duty or can_manage_capacity_exceptions or can_view_config %}
+      <div class="pt-2 pb-1">
+        <div class="h-px bg-slate-800/60 mx-1"></div>
+      </div>
+      {% if can_view_exeat_reviews %}
+      <a href="{% url 'core:exeat_review_queue' %}" class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg transition-all {% if request.resolver_match.url_name in 'exeat_review_queue exeat_review_decision' %}bg-brand-600/10 text-brand-400{% else %}text-slate-400 hover:bg-slate-800/70 hover:text-slate-200{% endif %}">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Exeat Reviews</span>
+      </a>
+      {% endif %}
+      {% if can_view_late_returns %}
+      <a href="{% url 'core:late_return_incidents' %}" class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg transition-all {% if '/operations/late-returns/' in request.path %}bg-brand-600/10 text-brand-400{% else %}text-slate-400 hover:bg-slate-800/70 hover:text-slate-200{% endif %}">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Late Returns</span>
+      </a>
+      {% endif %}
+      {% if can_view_roll_call_corrections %}
+      <a href="{% url 'core:roll_call_corrections' %}" class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg transition-all {% if '/roll-call/corrections/' in request.path %}bg-brand-600/10 text-brand-400{% else %}text-slate-400 hover:bg-slate-800/70 hover:text-slate-200{% endif %}">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Attendance Corrections</span>
+      </a>
+      {% endif %}
+      {% if can_view_disputes %}
+      <a href="{% url 'core:dispute_cases' %}" class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg transition-all {% if '/disputes/' in request.path %}bg-brand-600/10 text-brand-400{% else %}text-slate-400 hover:bg-slate-800/70 hover:text-slate-200{% endif %}">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16h6M4 4h16v12a2 2 0 01-2 2H7l-3 3V4z"/></svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Dispute Cases</span>
+      </a>
+      {% endif %}
+      {% if can_manage_gate_duty %}
+      <a href="{% url 'core:gate_duty_assignments' %}" class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg transition-all {% if '/gate-duty/' in request.path %}bg-brand-600/10 text-brand-400{% else %}text-slate-400 hover:bg-slate-800/70 hover:text-slate-200{% endif %}">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Gate Duty Roster</span>
+      </a>
+      {% endif %}
+      {% if can_manage_capacity_exceptions %}
+      <a href="{% url 'core:dormitory_capacity_exceptions' %}" class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg transition-all {% if '/capacity-exceptions/' in request.path %}bg-brand-600/10 text-brand-400{% else %}text-slate-400 hover:bg-slate-800/70 hover:text-slate-200{% endif %}">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Capacity Exceptions</span>
+      </a>
+      {% endif %}
+      {% if can_view_config %}
+      <a href="{% url 'core:operational_settings' %}" class="group flex items-center gap-3 px-2.5 py-2.5 rounded-lg transition-all {% if '/operations/settings/' in request.path %}bg-brand-600/10 text-brand-400{% else %}text-slate-400 hover:bg-slate-800/70 hover:text-slate-200{% endif %}">
+        <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+        <span x-show="!sidebarCollapsed" class="truncate">Escalation Settings</span>
+      </a>
+      {% endif %}
       {% endif %}
 
       <!-- Settings / Configuration -->
@@ -532,7 +600,7 @@
     </header>
 
     <!-- WORKSPACE CANVAS (High-Density Content Area) -->
-    <main class="flex-1 min-w-0 overflow-y-auto p-2.5 sm:p-4 md:p-5 space-y-4">
+    <main id="main-content" tabindex="-1" class="flex-1 min-w-0 overflow-y-auto p-2.5 sm:p-4 md:p-5 space-y-4">
       {% block content %}
       {% endblock %}
     </main>

@@ -1,7 +1,6 @@
 from datetime import timedelta
-from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
@@ -57,14 +56,11 @@ class PublicTokenExpiryTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
 
-    def test_public_photo_is_gated_by_the_tenant_feature(self):
+    def test_public_student_photo_endpoint_is_not_exposed(self):
         student = self._student("TOK-004")
 
-        with override_settings(TENANCY_ENABLED=True), patch(
-            "tenancy.entitlements.feature_enabled", return_value=False
-        ):
-            response = self.client.get(
-                reverse("core:public_student_photo", args=[student.public_token])
-            )
+        response = self.client.get(
+            f"/verify/student/{student.public_token}/photo/"
+        )
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 404)

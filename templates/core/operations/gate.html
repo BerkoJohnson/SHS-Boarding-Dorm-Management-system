@@ -16,6 +16,12 @@
     </p>
   </div>
 
+  {% if not can_log_gate %}
+  <div role="status" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    Movement logging is unavailable because you do not have an active gate-duty assignment. You can still verify passes.
+  </div>
+  {% endif %}
+
   {% include "core/operations/partials/gate_terminal_body.html" %}
 </div>
 {% endblock %}
