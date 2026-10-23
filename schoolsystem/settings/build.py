@@ -13,6 +13,7 @@ already selects WhiteNoise's ``CompressedManifestStaticFilesStorage``, so the
 collected manifest matches production. Runtime still uses
 ``schoolsystem.settings.production`` (see ``render.yaml`` startCommand).
 """
+
 import os
 
 # Force the secrets-free profiles *before* importing base. ``python-dotenv``
@@ -20,6 +21,12 @@ import os
 # re-introduce a required secret here.
 os.environ["DATABASE_PROFILE"] = "local"
 os.environ["MEDIA_STORAGE_BACKEND"] = "filesystem"
+# Render still injects runtime env vars into the build container. Populate the
+# minimal cache/mail values that production guards expect so static collection
+# can run cleanly even when the web service is configured for production.
+os.environ.setdefault("CACHE_BACKEND", "django.core.cache.backends.redis.RedisCache")
+os.environ.setdefault("CACHE_LOCATION", "redis://localhost:6379/1")
+os.environ.setdefault("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 
 from .base import *  # noqa: E402,F401,F403
 
