@@ -70,6 +70,41 @@ class BootstrapTests(TestCase):
         self.assertEqual(data["counts"]["houses"], 1)
         self.assertNotIn("phone_number", data["staff"][0])
 
+    def test_housemaster_reference_is_limited_to_assigned_house(self):
+        other_house = create_house("Integrity")
+        other_dormitory = Dormitory.objects.create(
+            house=other_house,
+            name="Block B",
+            gender=Dormitory.GenderBlock.FEMALE,
+        )
+        create_staff(
+            "housemaster-unity",
+            role=StaffRole.HOUSEMASTER,
+            house=self.house,
+        )
+        create_staff(
+            "housemaster-integrity",
+            role=StaffRole.HOUSEMASTER,
+            house=other_house,
+        )
+        token = token_from(login(self.client, "housemaster-unity"))
+
+        response = self.client.get("/api/v1/reference/", **auth(token))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual([row["name"] for row in data["houses"]], ["Unity"])
+        self.assertEqual(
+            [row["name"] for row in data["dormitories"]],
+            ["Block A"],
+        )
+        self.assertTrue(
+            all(row["house_id"] == str(self.house.pk) for row in data["staff"])
+        )
+        self.assertEqual(data["counts"]["houses"], 1)
+        self.assertEqual(data["counts"]["dormitories"], 1)
+        self.assertEqual(other_dormitory.house_id, other_house.pk)
+
     def test_unassigned_staff_are_not_listed(self):
         create_staff("unassigned", role=StaffRole.UNASSIGNED)
         response = self.client.get("/api/v1/reference/", **auth(self.token))

@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Q
 
 from core.api.base import APIError, api_endpoint, error, success
-from core.api.auth import feature_flags
+from core.api.auth import capabilities, feature_flags
 from core.api.serializers import (
     reference_payload,
     school_payload,
@@ -117,14 +117,40 @@ def reference(request):
         )
     )
     years = list(AcademicYear.objects.order_by("-start_date"))
-    houses = list(House.objects.order_by("display_order", "name"))
+    access = capabilities(request.api_user)
+    house_id = access["house_id"]
+    school_wide = access["is_admin"] or access["is_senior_housemaster"]
+    if school_wide:
+        houses_queryset = House.objects.all()
+        dormitories_queryset = Dormitory.objects.all()
+        rooms_queryset = DormitoryRoom.objects.all()
+        staff_queryset = User.objects.filter(is_active=True, profile__isnull=False)
+        student_queryset = Student.objects.all()
+    elif house_id:
+        houses_queryset = House.objects.filter(pk=house_id)
+        dormitories_queryset = Dormitory.objects.filter(house_id=house_id)
+        rooms_queryset = DormitoryRoom.objects.filter(dormitory__house_id=house_id)
+        staff_queryset = User.objects.filter(
+            is_active=True,
+            profile__isnull=False,
+            housemaster__house_id=house_id,
+        )
+        student_queryset = Student.objects.filter(house_id=house_id)
+    else:
+        houses_queryset = House.objects.none()
+        dormitories_queryset = Dormitory.objects.none()
+        rooms_queryset = DormitoryRoom.objects.none()
+        staff_queryset = User.objects.none()
+        student_queryset = Student.objects.none()
+
+    houses = list(houses_queryset.order_by("display_order", "name"))
     dormitories = list(
-        Dormitory.objects.select_related("house").order_by(
+        dormitories_queryset.select_related("house").order_by(
             "house__display_order", "house__name", "gender", "name"
         )
     )
     rooms = list(
-        DormitoryRoom.objects.select_related("dormitory", "dormitory__house").order_by(
+        rooms_queryset.select_related("dormitory", "dormitory__house").order_by(
             "dormitory__house__display_order", "dormitory__name", "name"
         )
     )
@@ -142,7 +168,7 @@ def reference(request):
     )
     data["staff"] = [
         staff_payload(user)
-        for user in User.objects.filter(is_active=True, profile__isnull=False)
+        for user in staff_queryset
         .exclude(profile__role="UNASSIGNED")
         .select_related("profile", "housemaster__house")
         .order_by("first_name", "last_name", "username")
@@ -150,7 +176,7 @@ def reference(request):
     data["counts"] = {
         "houses": len(houses),
         "dormitories": len(dormitories),
-        "students": Student.objects.filter(
+        "students": student_queryset.filter(
             status=Student.EnrollmentStatus.ENROLLED
         ).count(),
     }
