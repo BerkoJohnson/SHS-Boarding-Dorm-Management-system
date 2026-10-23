@@ -16,9 +16,11 @@ cannot expose school operations, student records, or tenant data.
 """
 from django.urls import include, path
 
+from core.api.views import meta as public_api
 from website import views
 
 urlpatterns = [
+    path("api/v1/public/schools/", public_api.public_schools, name="public_schools"),
     path("robots.txt", views.robots_txt, name="public_robots_txt"),
     path("sitemap.xml", views.sitemap_xml, name="public_sitemap_xml"),
     path("", include("website.urls")),

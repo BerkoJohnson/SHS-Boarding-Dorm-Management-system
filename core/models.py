@@ -1,6 +1,8 @@
+import hashlib
 import posixpath
+import secrets
 import uuid
-from datetime import date, timedelta
+from datetime import date, time as datetime_time, timedelta
 from django.db import models, transaction
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.core.validators import (
@@ -212,7 +214,9 @@ class AcademicTerm(BaseModel):
                 AcademicTerm.objects.filter(
                     is_current=True,
                     level=self.level,
-                ).exclude(pk=self.pk).update(is_current=False)
+                ).exclude(
+                    pk=self.pk
+                ).update(is_current=False)
 
             self.full_clean()
             super().save(*args, **kwargs)
@@ -295,12 +299,14 @@ class Dormitory(BaseModel):
 
             ensure_quota_available("max_dormitories", Dormitory.objects.count())
         elif self.pk:
-            occupied = Student.objects.exclude(
-                status=Student.EnrollmentStatus.COMPLETED
-            ).filter(
-                dormitory_id=self.pk,
-                residency=Student.ResidencyStatus.BOARDING,
-            ).count()
+            occupied = (
+                Student.objects.exclude(status=Student.EnrollmentStatus.COMPLETED)
+                .filter(
+                    dormitory_id=self.pk,
+                    residency=Student.ResidencyStatus.BOARDING,
+                )
+                .count()
+            )
             now = timezone.now()
             exception_places = sum(
                 DormitoryCapacityException.objects.filter(
@@ -477,7 +483,12 @@ class DormitoryCapacityException(BaseModel):
                         )
                     }
                 )
-        if self.dormitory_id and self.starts_at and self.ends_at and not self.cancelled_at:
+        if (
+            self.dormitory_id
+            and self.starts_at
+            and self.ends_at
+            and not self.cancelled_at
+        ):
             overlapping = DormitoryCapacityException.objects.filter(
                 dormitory_id=self.dormitory_id,
                 cancelled_at__isnull=True,
@@ -498,7 +509,9 @@ class DormitoryCapacityException(BaseModel):
                 )
         if not self.approved_by_id and not self.cancelled_at:
             raise ValidationError(
-                {"approved_by": "A senior approver is required for a capacity exception."}
+                {
+                    "approved_by": "A senior approver is required for a capacity exception."
+                }
             )
         if self.approved_by_id and not self.cancelled_at:
             profile = get_user_profile(self.approved_by)
@@ -519,17 +532,14 @@ class DormitoryCapacityException(BaseModel):
         # exception changes for the same dormitory. This is the lock that makes
         # the overlap and occupancy checks reliable under contention.
         with transaction.atomic():
-            Dormitory.objects.select_for_update().filter(
-                pk=self.dormitory_id
-            ).exists()
+            Dormitory.objects.select_for_update().filter(pk=self.dormitory_id).exists()
             self.full_clean()
             super().save(*args, **kwargs)
 
     def is_active_at(self, when=None):
         when = when or timezone.now()
         return bool(
-            self.cancelled_at is None
-            and self.starts_at <= when <= self.ends_at
+            self.cancelled_at is None and self.starts_at <= when <= self.ends_at
         )
 
     @property
@@ -1452,9 +1462,7 @@ class Exeat(BaseModel):
             )
 
         movement = (
-            ExeatMovement.objects.filter(exeat_id=self.pk)
-            .only("actual_return")
-            .first()
+            ExeatMovement.objects.filter(exeat_id=self.pk).only("actual_return").first()
         )
         return not (movement is not None and movement.actual_return is not None)
 
@@ -1500,7 +1508,8 @@ class Exeat(BaseModel):
         # Record the decision time once. Reports must not use updated_at,
         # which moves whenever an unrelated field is edited later (F-20).
         if (
-            self.status in (self.Status.APPROVED, self.Status.REJECTED, self.Status.CANCELLED)
+            self.status
+            in (self.Status.APPROVED, self.Status.REJECTED, self.Status.CANCELLED)
             and self.decided_at is None
         ):
             self.decided_at = timezone.now()
@@ -1950,10 +1959,14 @@ class ExeatReview(BaseModel):
         super().clean()
         if not (self.reason or "").strip():
             raise ValidationError(
-                {"reason": "A reason is required for every emergency or after-hours approval."}
+                {
+                    "reason": "A reason is required for every emergency or after-hours approval."
+                }
             )
         if self.authorized_at and self.due_at and self.due_at <= self.authorized_at:
-            raise ValidationError({"due_at": "The review deadline must be in the future."})
+            raise ValidationError(
+                {"due_at": "The review deadline must be in the future."}
+            )
         if self.status != self.Status.PENDING:
             if not self.reviewed_by_id or not self.reviewed_at or not self.outcome:
                 raise ValidationError(
@@ -2038,8 +2051,7 @@ class GateDutyAssignment(BaseModel):
         if self.approved_by_id and not self.cancelled_at:
             approver_profile = get_user_profile(self.approved_by)
             if approver_profile is None or not (
-                approver_profile.is_admin
-                or approver_profile.is_senior_housemaster
+                approver_profile.is_admin or approver_profile.is_senior_housemaster
             ):
                 raise ValidationError(
                     {
@@ -2075,8 +2087,7 @@ class GateDutyAssignment(BaseModel):
     def is_active_at(self, when=None):
         when = when or timezone.now()
         return bool(
-            self.cancelled_at is None
-            and self.starts_at <= when <= self.ends_at
+            self.cancelled_at is None and self.starts_at <= when <= self.ends_at
         )
 
     @property
@@ -2182,6 +2193,7 @@ class StaffNotification(BaseModel):
         EXEAT_REVIEW = "exeat_review", "Exeat review"
         ROLL_CALL_CORRECTION = "roll_call_correction", "Roll-call correction"
         DISPUTE = "dispute", "Dispute"
+        SMS_ALERT = "sms_alert", "SMS delivery alert"
         GENERAL = "general", "General"
 
     user = models.ForeignKey(
@@ -2205,6 +2217,58 @@ class StaffNotification(BaseModel):
         return f"{self.title} for {self.user}"
 
 
+class GroupSMSCampaign(BaseModel):
+    """Audited approval record for a guardian group message."""
+
+    class Scope(models.TextChoices):
+        ALL_BOARDERS = "all_boarders", "All active boarders"
+        HOUSE = "house", "Boarders in one house"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending approval"
+        APPROVED = "approved", "Approved and queued"
+        REJECTED = "rejected", "Rejected"
+
+    scope = models.CharField(max_length=20, choices=Scope.choices)
+    house = models.ForeignKey(
+        House,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="sms_campaigns",
+    )
+    message = models.CharField(max_length=500)
+    status = models.CharField(
+        max_length=15,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    recipient_count = models.PositiveIntegerField(default=0)
+    decision_note = models.CharField(max_length=240, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_sms_campaigns",
+    )
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="decided_sms_campaigns",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Group SMS Campaign"
+        verbose_name_plural = "Group SMS Campaigns"
+
+    def __str__(self):
+        return f"SMS campaign {self.pk} ({self.get_status_display()})"
+
+
 class SMSDelivery(BaseModel):
     """Durable per-recipient record for an outbound SMS notification."""
 
@@ -2215,6 +2279,7 @@ class SMSDelivery(BaseModel):
         DEPARTURE = "departure", "Student departed campus"
         RETURN = "return", "Student returned to campus"
         OVERDUE = "overdue", "Exeat overdue"
+        GROUP = "group", "Approved group message"
 
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
@@ -2228,6 +2293,13 @@ class SMSDelivery(BaseModel):
         null=True,
         blank=True,
         related_name="sms_deliveries",
+    )
+    campaign = models.ForeignKey(
+        GroupSMSCampaign,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deliveries",
     )
     event_type = models.CharField(max_length=30, choices=EventType.choices)
     recipient_name = models.CharField(max_length=150, blank=True)
@@ -2446,7 +2518,8 @@ class OperationalSettings(models.Model):
     def save(self, *args, **kwargs):
         self.pk = 1
         previous = (
-            type(self).objects.filter(pk=1)
+            type(self)
+            .objects.filter(pk=1)
             .values(
                 "roll_call_timeout_minutes",
                 "late_return_incident_after_minutes",
@@ -2475,9 +2548,7 @@ class OperationalSettings(models.Model):
             details = {"created": current}
         elif previous != current:
             details = {
-                "before": {
-                    key: str(value) for key, value in previous.items()
-                },
+                "before": {key: str(value) for key, value in previous.items()},
                 "after": {key: str(value) for key, value in current.items()},
             }
         else:
@@ -2523,6 +2594,10 @@ class AuditEvent(models.Model):
         EXPORT = "export", "Sensitive report export"
         ADMIN_EDIT = "admin_edit", "Administrative edit"
         DISPUTE = "dispute", "Dispute case changed"
+        STAFF_INVITE_CREATED = "staff_invite_created", "Staff invite created"
+        STAFF_INVITE_REDEEMED = "staff_invite_redeemed", "Staff invite redeemed"
+        API_TOKEN_REVOKED = "api_token_revoked", "API token revoked"
+        STUDENT_SCAN = "student_scan", "Student record scanned"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(
@@ -2551,7 +2626,18 @@ class AuditEvent(models.Model):
         ]
 
     @classmethod
-    def record(cls, *, actor, action, summary, target_type="", target_id="", before=None, after=None, metadata=None):
+    def record(
+        cls,
+        *,
+        actor,
+        action,
+        summary,
+        target_type="",
+        target_id="",
+        before=None,
+        after=None,
+        metadata=None,
+    ):
         return cls.objects.create(
             actor=actor if getattr(actor, "is_authenticated", False) else None,
             action=action,
@@ -2600,6 +2686,85 @@ class DataExportLog(models.Model):
 
     def __str__(self):
         return f"{self.report_name} ({self.file_format}) by {self.actor}"
+
+
+class ScheduledReportEmail(models.Model):
+    """An opt-in report delivery to the subscribing staff member's own email."""
+
+    class ReportType(models.TextChoices):
+        HOUSING = "housing", "Boarding occupancy & placement"
+        ATTENDANCE = "attendance", "Roll-call attendance & follow-up"
+        EXEATS = "exeats", "Exeat & gate compliance"
+        DISCIPLINE = "discipline", "Disciplinary trends"
+        PLACEMENT_EXCEPTIONS = "placement_exceptions", "Placement exception queue"
+        ATTENDANCE_LEAGUE = "attendance_league", "House attendance league"
+        OVERDUE_REGISTER = "overdue_register", "Overdue & late-return register"
+        GATE_CONFLICTS = "gate_conflicts", "Gate / roll-call conflicts"
+        APPROVAL_TURNAROUND = "approval_turnaround", "Exeat approval turnaround"
+        EXEAT_ANALYTICS = "exeat_analytics", "Exeat type & destination analytics"
+        ROOM_REGISTER = "room_register", "Room bed-allocation register"
+        STAFF_ACTIVITY = "staff_activity", "Staff activity & workload"
+        WELFARE_INFIRMARY = "welfare_infirmary", "Welfare & infirmary referrals"
+        DATA_COMPLETENESS = "data_completeness", "Data completeness / register hygiene"
+        MOVEMENT_CONCERNS = "movement_concerns", "Movement concern reports"
+        CONDUCT_NORMALIZED = "conduct_normalized", "Conduct normalized by house size"
+        INTERVENTION_EFFECTIVENESS = (
+            "intervention_effectiveness",
+            "Intervention effectiveness",
+        )
+
+    class Frequency(models.TextChoices):
+        DAILY = "daily", "Daily"
+        WEEKLY = "weekly", "Weekly"
+
+    class FileFormat(models.TextChoices):
+        CSV = "csv", "CSV"
+        XLSX = "xlsx", "Excel workbook"
+
+    class Weekday(models.IntegerChoices):
+        MONDAY = 0, "Monday"
+        TUESDAY = 1, "Tuesday"
+        WEDNESDAY = 2, "Wednesday"
+        THURSDAY = 3, "Thursday"
+        FRIDAY = 4, "Friday"
+        SATURDAY = 5, "Saturday"
+        SUNDAY = 6, "Sunday"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="scheduled_report_emails",
+    )
+    report_type = models.CharField(max_length=40, choices=ReportType.choices)
+    frequency = models.CharField(max_length=10, choices=Frequency.choices)
+    weekday = models.PositiveSmallIntegerField(
+        choices=Weekday.choices,
+        default=Weekday.MONDAY,
+    )
+    send_at = models.TimeField(default=datetime_time(7, 0))
+    file_format = models.CharField(
+        max_length=4,
+        choices=FileFormat.choices,
+        default=FileFormat.CSV,
+    )
+    next_run_at = models.DateTimeField(db_index=True)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=240, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["send_at", "report_type"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("user", "report_type", "frequency"),
+                name="unique_user_scheduled_report_frequency",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.get_report_type_display()} ({self.get_frequency_display()}) for {self.user}"
 
 
 class StudentIDExport(BaseModel):
@@ -3087,9 +3252,7 @@ class RollCallCorrection(BaseModel):
     )
     previous_remarks = models.CharField(max_length=200, blank=True)
     requested_remarks = models.CharField(max_length=200, blank=True)
-    reason = models.TextField(
-        help_text="Why the original attendance mark was wrong."
-    )
+    reason = models.TextField(help_text="Why the original attendance mark was wrong.")
     evidence = models.TextField(
         blank=True,
         help_text="Supporting evidence or verification for a sensitive correction.",
@@ -3258,30 +3421,48 @@ class DisputeCase(BaseModel):
             raise ValidationError({"details": "Record what is being disputed."})
         if self.category == self.Category.ATTENDANCE and not self.roll_call_entry_id:
             raise ValidationError(
-                {"roll_call_entry": "Attendance disputes must link to the roll-call entry."}
+                {
+                    "roll_call_entry": "Attendance disputes must link to the roll-call entry."
+                }
             )
         if self.category == self.Category.EXEAT and not self.exeat_id:
             raise ValidationError(
                 {"exeat": "Exeat disputes must link to the relevant pass."}
             )
-        if self.exeat_id and self.student_id and self.exeat.student_id != self.student_id:
-            raise ValidationError({"exeat": "The exeat must belong to the selected student."})
+        if (
+            self.exeat_id
+            and self.student_id
+            and self.exeat.student_id != self.student_id
+        ):
+            raise ValidationError(
+                {"exeat": "The exeat must belong to the selected student."}
+            )
         if (
             self.roll_call_entry_id
             and self.student_id
             and self.roll_call_entry.student_id != self.student_id
         ):
             raise ValidationError(
-                {"roll_call_entry": "The roll-call entry must belong to the selected student."}
+                {
+                    "roll_call_entry": "The roll-call entry must belong to the selected student."
+                }
             )
-        if self.status in (self.Status.RESOLVED, self.Status.REJECTED, self.Status.CLOSED):
+        if self.status in (
+            self.Status.RESOLVED,
+            self.Status.REJECTED,
+            self.Status.CLOSED,
+        ):
             if not self.outcome:
                 raise ValidationError({"outcome": "Record the review outcome."})
             if not (self.decision_notes or "").strip():
-                raise ValidationError({"decision_notes": "Record the decision reasoning."})
+                raise ValidationError(
+                    {"decision_notes": "Record the decision reasoning."}
+                )
             if not self.resolved_by_id or not self.resolved_at:
                 raise ValidationError(
-                    {"status": "A decided dispute requires a reviewer and decision time."}
+                    {
+                        "status": "A decided dispute requires a reviewer and decision time."
+                    }
                 )
 
     def save(self, *args, **kwargs):
@@ -3293,6 +3474,272 @@ class DisputeCase(BaseModel):
 
     def __str__(self):
         return f"{self.reference} - {self.student.full_name}"
+
+
+class APIAccessToken(models.Model):
+    """Opaque bearer token for the mobile API, stored per tenant schema.
+
+    The raw token is shown to the client exactly once. Only a SHA-256 hash and a
+    short display prefix are persisted, so a database read cannot recover a
+    usable credential.
+    """
+
+    class Platform(models.TextChoices):
+        ANDROID = "android", "Android"
+        IOS = "ios", "iOS"
+        OTHER = "other", "Other"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="api_tokens",
+    )
+    key_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    key_prefix = models.CharField(max_length=12)
+    device_id = models.CharField(max_length=128, blank=True)
+    device_name = models.CharField(max_length=150, blank=True)
+    platform = models.CharField(
+        max_length=10, choices=Platform.choices, default=Platform.OTHER
+    )
+    app_version = models.CharField(max_length=30, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(db_index=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "API Access Token"
+        verbose_name_plural = "API Access Tokens"
+        indexes = [
+            models.Index(
+                fields=["user", "revoked_at"], name="api_token_user_revoked_idx"
+            ),
+            models.Index(fields=["expires_at"], name="api_token_expires_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.key_prefix}… for {self.user}"
+
+    @staticmethod
+    def hash_key(raw_key):
+        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def issue(
+        cls,
+        user,
+        *,
+        device_id="",
+        device_name="",
+        platform=None,
+        app_version="",
+        ttl_days=None,
+    ):
+        """Create a token and return ``(token, raw_key)``."""
+        raw_key = secrets.token_urlsafe(32)
+        if ttl_days is None:
+            ttl_days = getattr(settings, "API_TOKEN_TTL_DAYS", 30)
+        ttl_days = max(1, int(ttl_days))
+        token = cls.objects.create(
+            user=user,
+            key_hash=cls.hash_key(raw_key),
+            key_prefix=raw_key[:10],
+            device_id=(device_id or "")[:128],
+            device_name=(device_name or "")[:150],
+            platform=platform or cls.Platform.OTHER,
+            app_version=(app_version or "")[:30],
+            expires_at=timezone.now() + timedelta(days=ttl_days),
+        )
+        return token, raw_key
+
+    @classmethod
+    def resolve(cls, raw_key):
+        """Return the matching token, or ``None`` when it is unusable."""
+        if not raw_key:
+            return None
+        token = (
+            cls.objects.select_related("user")
+            .filter(key_hash=cls.hash_key(raw_key))
+            .first()
+        )
+        if token is None or not token.is_valid:
+            return None
+        return token
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+    @property
+    def is_valid(self):
+        return (
+            self.revoked_at is None
+            and not self.is_expired
+            and bool(self.user and self.user.is_active)
+        )
+
+    def revoke(self, reason=""):
+        if self.revoked_at is None:
+            self.revoked_at = timezone.now()
+            self.revoked_reason = (reason or "")[:100]
+            self.save(update_fields=["revoked_at", "revoked_reason"])
+        return self
+
+
+class StaffInvite(models.Model):
+    """One-time onboarding invite issued by an administrator.
+
+    The code is stored as a hash so a leaked database snapshot cannot be used
+    to create staff accounts. The raw code is returned to the administrator
+    exactly once, at creation time.
+    """
+
+    CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    code_prefix = models.CharField(max_length=16)
+    role = models.CharField(max_length=30, choices=StaffRole.choices)
+    first_name = models.CharField(max_length=150, blank=True)
+    last_name = models.CharField(max_length=150, blank=True)
+    email = models.EmailField(blank=True)
+    phone_number = models.CharField(max_length=17, blank=True)
+    staff_id = models.CharField(
+        max_length=30,
+        blank=True,
+        help_text="Staff identifier to copy onto the HouseMaster record, when applicable.",
+    )
+    house = models.ForeignKey(
+        House,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="staff_invites",
+        help_text="Required for Housemaster and House Tutor invites.",
+    )
+    note = models.CharField(max_length=200, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_staff_invites",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(db_index=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    accepted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="accepted_staff_invites",
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Staff Invite"
+        verbose_name_plural = "Staff Invites"
+
+    def __str__(self):
+        return f"{self.code_prefix}… ({self.get_role_display()})"
+
+    @staticmethod
+    def hash_code(raw_code):
+        normalized = (raw_code or "").strip().upper().replace(" ", "")
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _generate_code(cls):
+        groups = [
+            "".join(secrets.choice(cls.CODE_ALPHABET) for _ in range(4))
+            for _ in range(2)
+        ]
+        return "EDEN-" + "-".join(groups)
+
+    @classmethod
+    def issue(cls, *, role, created_by=None, house=None, ttl_days=None, **fields):
+        if ttl_days is None:
+            ttl_days = getattr(settings, "API_INVITE_TTL_DAYS", 7)
+        for _ in range(5):
+            raw_code = cls._generate_code()
+            code_hash = cls.hash_code(raw_code)
+            if not cls.objects.filter(code_hash=code_hash).exists():
+                break
+        else:  # pragma: no cover - astronomically unlikely
+            raise RuntimeError("Could not generate a unique staff invite code.")
+        invite = cls.objects.create(
+            code_hash=code_hash,
+            code_prefix=raw_code[:9],
+            role=role,
+            house=house,
+            created_by=created_by,
+            expires_at=timezone.now() + timedelta(days=max(1, int(ttl_days))),
+            **fields,
+        )
+        return invite, raw_code
+
+    @classmethod
+    def resolve(cls, raw_code):
+        code_hash = cls.hash_code(raw_code)
+        if not code_hash:
+            return None
+        invite = cls.objects.filter(code_hash=code_hash).first()
+        if invite is None or not invite.is_open:
+            return None
+        return invite
+
+    @property
+    def is_open(self):
+        return (
+            self.revoked_at is None
+            and self.accepted_at is None
+            and timezone.now() < self.expires_at
+        )
+
+    def accept(self, user):
+        self.accepted_at = timezone.now()
+        self.accepted_by = user
+        self.save(update_fields=["accepted_at", "accepted_by"])
+
+
+class PushDevice(BaseModel):
+    """A mobile device registered to receive push notifications."""
+
+    class Platform(models.TextChoices):
+        ANDROID = "android", "Android"
+        IOS = "ios", "iOS"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="push_devices",
+    )
+    token = models.CharField(max_length=255, unique=True)
+    platform = models.CharField(max_length=10, choices=Platform.choices)
+    device_id = models.CharField(max_length=128, blank=True)
+    app_version = models.CharField(max_length=30, blank=True)
+    is_active = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-last_seen_at"]
+        verbose_name = "Push Device"
+        verbose_name_plural = "Push Devices"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "device_id"],
+                condition=~models.Q(device_id=""),
+                name="unique_push_device_per_user",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.get_platform_display()} device for {self.user}"
 
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
@@ -3491,9 +3938,7 @@ def get_exeat_queue_stats(scoped_pending_qs, user):
     )
     if pending_timestamps:
         oldest = min(pending_timestamps)
-        stats["oldest_pending_hours"] = round(
-            (now - oldest).total_seconds() / 3600, 1
-        )
+        stats["oldest_pending_hours"] = round((now - oldest).total_seconds() / 3600, 1)
         total_age_seconds = sum(
             (now - created_at).total_seconds() for created_at in pending_timestamps
         )
@@ -3507,9 +3952,7 @@ def get_exeat_queue_stats(scoped_pending_qs, user):
     today_by_me = (
         Exeat.objects.filter(
             decided_at__gte=today_start,
-        ).filter(
-            _Q(approved_by_user=user) | _Q(approved_by__user=user)
-        )
+        ).filter(_Q(approved_by_user=user) | _Q(approved_by__user=user))
         if user.is_authenticated
         else Exeat.objects.none()
     )

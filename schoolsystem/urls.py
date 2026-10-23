@@ -27,6 +27,7 @@ def serve_tenant_school_logo(request, schema, path):
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/v1/', include('core.api.urls')),
     path('', include('core.urls')),
 ]
 

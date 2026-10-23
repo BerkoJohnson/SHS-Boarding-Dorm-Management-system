@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import posixpath
 import shutil
 import subprocess
 import tarfile
@@ -84,6 +85,14 @@ class Command(BaseCommand):
             help="Verify the generated dump file's table-of-contents using pg_restore.",
         )
         parser.add_argument(
+            "--offsite",
+            action="store_true",
+            help=(
+                "Upload backup artifacts to the configured offsite S3 bucket "
+                "using server-side KMS encryption."
+            ),
+        )
+        parser.add_argument(
             "--operator",
             type=str,
             default="cli",
@@ -103,6 +112,20 @@ class Command(BaseCommand):
             )
         if options.get("allow_empty_media") and not options.get("include_media"):
             raise CommandError("--allow-empty-media requires --include-media.")
+        if options.get("offsite") and not all(
+            (
+                settings.BACKUP_OFFSITE_BUCKET,
+                settings.BACKUP_KMS_KEY_ID,
+                settings.BACKUP_S3_REGION,
+                settings.BACKUP_S3_ACCESS_KEY_ID,
+                settings.BACKUP_S3_SECRET_ACCESS_KEY,
+            )
+        ):
+            raise CommandError(
+                "--offsite requires BACKUP_OFFSITE_BUCKET, BACKUP_KMS_KEY_ID, "
+                "BACKUP_S3_REGION, BACKUP_S3_ACCESS_KEY_ID, and "
+                "BACKUP_S3_SECRET_ACCESS_KEY."
+            )
 
         pg_dump_path = shutil.which("pg_dump")
         if not pg_dump_path:
@@ -121,7 +144,9 @@ class Command(BaseCommand):
 
         # Determine target tenants
         if options.get("all"):
-            tenants = list(Tenant.objects.filter(is_active=True).order_by("schema_name"))
+            tenants = list(
+                Tenant.objects.filter(is_active=True).order_by("schema_name")
+            )
             if not tenants:
                 self.stdout.write(
                     self.style.WARNING("No active tenants found to back up.")
@@ -144,6 +169,7 @@ class Command(BaseCommand):
                 include_media=options["include_media"],
                 allow_empty_media=options["allow_empty_media"],
                 verify=options["verify"],
+                offsite=options["offsite"],
                 operator=options["operator"],
             )
             results.append(result)
@@ -170,6 +196,7 @@ class Command(BaseCommand):
         include_media: bool,
         allow_empty_media: bool,
         verify: bool,
+        offsite: bool,
         operator: str,
     ) -> Dict[str, Any]:
         """Perform database and media backup for a single tenant."""
@@ -209,14 +236,20 @@ class Command(BaseCommand):
         fmt_flag = "c" if dump_format == "custom" else "p"
         cmd = [
             "pg_dump",
-            "-h", db_host,
-            "-p", db_port,
-            "-U", db_user,
-            "-d", db_name,
+            "-h",
+            db_host,
+            "-p",
+            db_port,
+            "-U",
+            db_user,
+            "-d",
+            db_name,
             f"--schema={schema_name}",
-            "-F", fmt_flag,
+            "-F",
+            fmt_flag,
             "-b",
-            "-f", str(dump_path),
+            "-f",
+            str(dump_path),
         ]
 
         env = os.environ.copy()
@@ -266,7 +299,7 @@ class Command(BaseCommand):
                     text=True,
                     check=False,
                 )
-                verification_passed = (vproc.returncode == 0)
+                verification_passed = vproc.returncode == 0
 
         # Media archive if requested
         media_path_str: Optional[str] = None
@@ -293,6 +326,43 @@ class Command(BaseCommand):
             media_path_str = str(media_archive_path)
             media_size = media_archive_path.stat().st_size
 
+        offsite_upload = None
+        if offsite:
+            files_to_upload = [(dump_path, checksum), (sha_path, None)]
+            if include_media and media_path_str:
+                media_path = Path(media_path_str)
+                files_to_upload.append((media_path, None))
+            try:
+                offsite_upload = self._upload_offsite_files(
+                    schema_name,
+                    files_to_upload,
+                )
+            except Exception as error:
+                PlatformAuditLog.objects.create(
+                    action="tenant_backup_offsite_failed",
+                    tenant_schema=schema_name,
+                    detail="Local tenant backup completed, but offsite KMS upload failed.",
+                    operator=operator,
+                    metadata={
+                        "dump_path": str(dump_path),
+                        "sha256": checksum,
+                        "error_type": type(error).__name__,
+                    },
+                )
+                return {
+                    "schema_name": schema_name,
+                    "school_name": tenant.name,
+                    "status": "failed",
+                    "dump_file": str(dump_path),
+                    "sha256": checksum,
+                    "error": (
+                        "Local backup exists, but offsite KMS upload failed. "
+                        "Review platform logs and retry: "
+                        f"{type(error).__name__}"
+                    ),
+                    "duration_seconds": round(time.time() - start_time, 2),
+                }
+
         duration = round(time.time() - start_time, 2)
 
         # Record audit log
@@ -314,6 +384,7 @@ class Command(BaseCommand):
                 "media_files": media_count,
                 "media_sources": media_sources,
                 "duration_seconds": duration,
+                "offsite": offsite_upload,
             },
         )
 
@@ -331,13 +402,72 @@ class Command(BaseCommand):
             "media_files_count": media_count,
             "media_sources": media_sources,
             "duration_seconds": duration,
+            "offsite": offsite_upload,
         }
+
+    def _upload_offsite_files(self, schema_name, files):
+        """Upload each artifact and verify S3 KMS encryption and object size."""
+        import boto3
+
+        bucket = settings.BACKUP_OFFSITE_BUCKET
+        kms_key_id = settings.BACKUP_KMS_KEY_ID
+        client = boto3.client(
+            "s3",
+            region_name=settings.BACKUP_S3_REGION,
+            endpoint_url=settings.BACKUP_S3_ENDPOINT_URL or None,
+            aws_access_key_id=settings.BACKUP_S3_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.BACKUP_S3_SECRET_ACCESS_KEY,
+        )
+        uploaded = []
+        for path, known_checksum in files:
+            checksum = known_checksum or self._sha256_file(path)
+            object_key = posixpath.join(
+                "tenant-backups",
+                schema_name,
+                path.name,
+            )
+            client.upload_file(
+                str(path),
+                bucket,
+                object_key,
+                ExtraArgs={
+                    "ServerSideEncryption": "aws:kms",
+                    "SSEKMSKeyId": kms_key_id,
+                    "Metadata": {"sha256": checksum},
+                },
+            )
+            metadata = client.head_object(Bucket=bucket, Key=object_key)
+            if metadata.get("ServerSideEncryption") != "aws:kms":
+                raise RuntimeError(
+                    f"S3 did not confirm KMS encryption for {object_key}."
+                )
+            if not metadata.get("SSEKMSKeyId"):
+                raise RuntimeError(f"S3 did not report a KMS key for {object_key}.")
+            if metadata.get("ContentLength") != path.stat().st_size:
+                raise RuntimeError(f"S3 object size mismatch for {object_key}.")
+            if (metadata.get("Metadata") or {}).get("sha256") != checksum:
+                raise RuntimeError(f"S3 checksum metadata mismatch for {object_key}.")
+            uploaded.append(
+                {
+                    "key": object_key,
+                    "size_bytes": metadata["ContentLength"],
+                    "sha256": checksum,
+                    "kms_encrypted": True,
+                }
+            )
+        return {"bucket": bucket, "objects": uploaded}
+
+    @staticmethod
+    def _sha256_file(path):
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as source:
+            for block in iter(lambda: source.read(65536), b""):
+                digest.update(block)
+        return digest.hexdigest()
 
     @staticmethod
     def _uses_s3_media() -> bool:
-        return (
-            getattr(settings, "MEDIA_STORAGE_BACKEND", "filesystem") == "neon_s3"
-        )
+        return getattr(settings, "MEDIA_STORAGE_BACKEND", "filesystem") == "neon_s3"
 
     @staticmethod
     def _require_media_files(
@@ -401,9 +531,7 @@ class Command(BaseCommand):
                 )
                 count += self._add_local_tree(
                     tar,
-                    Path(settings.PRIVATE_STUDENT_PHOTO_ROOT)
-                    / "tenants"
-                    / schema_name,
+                    Path(settings.PRIVATE_STUDENT_PHOTO_ROOT) / "tenants" / schema_name,
                     "private_student_photos",
                     sources,
                 )
@@ -455,9 +583,7 @@ class Command(BaseCommand):
             return 0
         location = str(getattr(storage, "location", "") or "").strip("/")
         key_prefix = (
-            f"{location}/{relative_prefix}".strip("/")
-            if location
-            else relative_prefix
+            f"{location}/{relative_prefix}".strip("/") if location else relative_prefix
         )
         added = 0
         for obj in bucket.objects.filter(Prefix=key_prefix):
@@ -465,7 +591,7 @@ class Command(BaseCommand):
             if key.endswith("/"):
                 continue
             name = (
-                key[len(key_prefix):].lstrip("/")
+                key[len(key_prefix) :].lstrip("/")
                 if key.startswith(key_prefix)
                 else key
             )
@@ -478,7 +604,7 @@ class Command(BaseCommand):
             if last_modified is not None:
                 tarinfo.mtime = last_modified.timestamp()
             relative_name = (
-                key[len(location) + 1:]
+                key[len(location) + 1 :]
                 if location and key.startswith(f"{location}/")
                 else key
             )
@@ -535,12 +661,18 @@ class Command(BaseCommand):
                 f"        Files: {result['media_files_count']} archived ({media_mb:.2f} MB)"
             )
         else:
-            self.stdout.write("  [3/3] Media Assets:         [SKIPPED] (use --include-media to archive)")
+            self.stdout.write(
+                "  [3/3] Media Assets:         [SKIPPED] (use --include-media to archive)"
+            )
 
         if result["verified"] is True:
-            self.stdout.write(f"  Dump Header Verification:  {self.style.SUCCESS('[VERIFIED]')}")
+            self.stdout.write(
+                f"  Dump Header Verification:  {self.style.SUCCESS('[VERIFIED]')}"
+            )
         elif result["verified"] is False:
-            self.stdout.write(f"  Dump Header Verification:  {self.style.ERROR('[VERIFICATION FAILED]')}")
+            self.stdout.write(
+                f"  Dump Header Verification:  {self.style.ERROR('[VERIFICATION FAILED]')}"
+            )
 
         self.stdout.write(sep_line)
         self.stdout.write(

@@ -8,7 +8,6 @@ from django.test import RequestFactory, SimpleTestCase, override_settings
 
 from schoolsystem.security import ContentSecurityPolicyReportOnlyMiddleware
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_SECRET_KEY = "test-only-secret-key-for-production-settings-checks"
 
@@ -39,6 +38,7 @@ class ProductionSettingsTests(SimpleTestCase):
         environment["PGSSLMODE"] = pg_sslmode
         environment["CACHE_BACKEND"] = cache_backend
         environment["CACHE_LOCATION"] = cache_location
+        environment["EMAIL_BACKEND"] = "django.core.mail.backends.smtp.EmailBackend"
         # Blank values keep settings.base from loading a developer's local
         # .env values, so this test exercises the production defaults.
         environment["SECURE_HSTS_SECONDS"] = ""
@@ -83,7 +83,9 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_production_settings_require_a_secret_key(self):
-        result = self.run_settings_import(secret_key="", allowed_hosts="school.example.org")
+        result = self.run_settings_import(
+            secret_key="", allowed_hosts="school.example.org"
+        )
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("DJANGO_SECRET_KEY must be at least 50 characters", result.stderr)
@@ -129,7 +131,9 @@ class ProductionSettingsTests(SimpleTestCase):
         self.assertIn("schoolsystem.settings.production", result.stdout)
 
     def test_production_settings_require_allowed_hosts(self):
-        result = self.run_settings_import(secret_key=TEST_SECRET_KEY, allowed_hosts=" , ")
+        result = self.run_settings_import(
+            secret_key=TEST_SECRET_KEY, allowed_hosts=" , "
+        )
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Set ALLOWED_HOSTS", result.stderr)
@@ -159,6 +163,41 @@ class ProductionSettingsTests(SimpleTestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("explicit CACHE_BACKEND and CACHE_LOCATION", result.stderr)
+
+    def test_production_settings_reject_console_email_backend(self):
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DJANGO_SECRET_KEY": TEST_SECRET_KEY,
+                "ALLOWED_HOSTS": "school.example.org",
+                "DATABASE_PROFILE": "neon",
+                "PGHOST": "neon.example.neon.tech",
+                "PGDATABASE": "neon_db",
+                "PGUSER": "neon_user",
+                "PGPASSWORD": "test-password",
+                "PGSSLMODE": "require",
+                "CACHE_BACKEND": "django.core.cache.backends.redis.RedisCache",
+                "CACHE_LOCATION": "redis://localhost:6379/1",
+                "EMAIL_BACKEND": "django.core.mail.backends.console.EmailBackend",
+                "TENANCY_ENABLED": "false",
+            }
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import schoolsystem.settings.production as settings",
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Production requires a real EMAIL_BACKEND", result.stderr)
 
     def test_tenant_mode_uses_verified_domain_routing_for_dynamic_hosts(self):
         result = subprocess.run(

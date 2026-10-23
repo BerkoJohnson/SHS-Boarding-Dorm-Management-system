@@ -11,12 +11,38 @@ from django.db import transaction
 from django.utils import timezone
 from django_pgschemas.schema import get_current_schema
 
-from core.models import Exeat, HouseMaster, SMSConfiguration, SMSDelivery, SchoolConfiguration
+from core.models import (
+    Exeat,
+    HouseMaster,
+    SMSConfiguration,
+    SMSDelivery,
+    SchoolConfiguration,
+)
 from tenancy.entitlements import quota_guard, sms_quota_allows
 
 logger = logging.getLogger(__name__)
 GUARDIAN_AUDIENCE = "guardian"
 HOUSEMASTER_AUDIENCE = "housemaster"
+GSM_03_38_BASIC = (
+    "@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r"
+    "\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e"
+    "\u00c6\u00e6\u00df\u00c9 !\"#\u00a4%&'()*+,-./0123456789:;<=>?"
+    "\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bf"
+    "abcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0"
+)
+GSM_03_38_EXTENDED = "\f^{}\\[~]|\u20ac"
+
+
+def sms_segment_count(message: str) -> int:
+    """Return the standard GSM-7 or UCS-2 segment count for a message."""
+    if all(character in GSM_03_38_BASIC for character in message):
+        septets = sum(
+            2 if character in GSM_03_38_EXTENDED else 1 for character in message
+        )
+        return 1 if septets <= 160 else (septets + 152) // 153
+
+    code_units = len(message.encode("utf-16-be")) // 2
+    return 1 if code_units <= 70 else (code_units + 66) // 67
 
 
 def _school_short_name() -> str:
@@ -56,7 +82,9 @@ def normalize_phone_number(value: str | None) -> str:
     if not value:
         return ""
 
-    digits = "".join(character for character in str(value).strip() if character.isdigit())
+    digits = "".join(
+        character for character in str(value).strip() if character.isdigit()
+    )
     if digits.startswith("0"):
         digits = f"233{digits[1:]}"
     if not 9 <= len(digits) <= 15:
@@ -105,7 +133,9 @@ def build_exeat_event_message(
     audience: str = GUARDIAN_AUDIENCE,
 ) -> str:
     if audience == GUARDIAN_AUDIENCE:
-        guardian_name = (exeat.student.guardian.full_name or "Guardian").strip() or "Guardian"
+        guardian_name = (
+            exeat.student.guardian.full_name or "Guardian"
+        ).strip() or "Guardian"
         student_name = exeat.student.full_name
         short_name = _school_short_name()
         return_by = timezone.localtime(
@@ -202,10 +232,14 @@ def enqueue_exeat_event_sms(
         if existing is not None:
             deliveries.append(existing)
             continue
+        message = build_exeat_event_message(exeat, event_type, audience=audience)
         with transaction.atomic():
             # Serialize the monthly-SMS check with the row that consumes budget.
             with quota_guard("max_sms_monthly", schema_name=tenant_schema):
-                if not sms_quota_allows(schema_name=tenant_schema):
+                if not sms_quota_allows(
+                    sms_segment_count(message),
+                    schema_name=tenant_schema,
+                ):
                     logger.warning(
                         "SMS delivery for exeat %s was not queued because the "
                         "tenant monthly SMS limit was reached",
@@ -219,20 +253,21 @@ def enqueue_exeat_event_sms(
                         "event_type": event_type,
                         "recipient_name": recipient_name,
                         "phone_number": phone_number,
-                        "message": build_exeat_event_message(
-                            exeat,
-                            event_type,
-                            audience=audience,
-                        ),
+                        "message": message,
                         "status": SMSDelivery.Status.QUEUED,
                     },
                 )
         deliveries.append(delivery)
         if created:
             transaction.on_commit(
-                lambda delivery_id=delivery.pk, schema=tenant_schema:
-                    enqueue_sms_delivery_task(delivery_id, tenant_schema=schema)
+                lambda delivery_id=delivery.pk, schema=tenant_schema: enqueue_sms_delivery_task(
+                    delivery_id, tenant_schema=schema
+                )
             )
+    if deliveries:
+        from core.services.sms_alerts import notify_sms_quota_low
+
+        notify_sms_quota_low()
     return deliveries
 
 
@@ -257,7 +292,9 @@ def enqueue_sms_delivery_task(delivery_id: str, *, tenant_schema=None) -> None:
         else:
             send_sms_delivery_task.delay(str(delivery_id))
     except Exception:
-        logger.exception("Could not queue SMS delivery %s; it remains in the outbox", delivery_id)
+        logger.exception(
+            "Could not queue SMS delivery %s; it remains in the outbox", delivery_id
+        )
 
 
 def send_bulk_sms(
@@ -272,16 +309,20 @@ def send_bulk_sms(
         if (normalized := normalize_phone_number(number))
     ]
     if not cleaned_numbers:
-        logger.warning("SMS was not sent because the recipient list contains no valid numbers")
+        logger.warning(
+            "SMS was not sent because the recipient list contains no valid numbers"
+        )
         return False
     if not SMSConfiguration.is_enabled():
         logger.warning("SMS was not sent because SMS dispatch is disabled")
         return False
     if not sms_quota_allows(
-        len(cleaned_numbers),
+        len(cleaned_numbers) * sms_segment_count(message),
         exclude_delivery_id=delivery_id,
     ):
-        logger.warning("SMS was not sent because the tenant monthly SMS limit was reached")
+        logger.warning(
+            "SMS was not sent because the tenant monthly SMS limit was reached"
+        )
         return False
 
     api_key = getattr(settings, "SMS_ONLINE_GH_API_KEY", "")

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Guardian Group SMS - {{ school_configuration.name }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <header>
+    <h1 class="text-2xl font-bold text-slate-900">Guardian Group SMS</h1>
+    <p class="mt-1 text-sm text-slate-600">Messages require approval from a different Headmaster account before delivery.</p>
+  </header>
+
+  {% if messages %}
+    <ul class="space-y-2" role="status">
+      {% for message in messages %}
+        <li class="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800">{{ message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <section class="border-b border-slate-200 pb-6">
+    <h2 class="text-base font-bold text-slate-900">New campaign</h2>
+    <form method="post" class="mt-4 max-w-2xl space-y-4">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="text-sm text-rose-700" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label for="{{ form.scope.id_for_label }}" class="mb-1 block text-sm font-semibold text-slate-800">{{ form.scope.label }}</label>
+          {{ form.scope }}
+          {% for error in form.scope.errors %}<p class="mt-1 text-xs text-rose-700">{{ error }}</p>{% endfor %}
+        </div>
+        <div>
+          <label for="{{ form.house.id_for_label }}" class="mb-1 block text-sm font-semibold text-slate-800">{{ form.house.label }}</label>
+          {{ form.house }}
+          {% for error in form.house.errors %}<p class="mt-1 text-xs text-rose-700">{{ error }}</p>{% endfor %}
+        </div>
+      </div>
+      <div>
+        <label for="{{ form.message.id_for_label }}" class="mb-1 block text-sm font-semibold text-slate-800">{{ form.message.label }}</label>
+        {{ form.message }}
+        <p class="mt-1 text-xs text-slate-500">Maximum 500 characters. Message text is retained with the approval record.</p>
+        {% for error in form.message.errors %}<p class="mt-1 text-xs text-rose-700">{{ error }}</p>{% endfor %}
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="submit" name="action" value="preview" class="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50">Preview recipients</button>
+        <button type="submit" name="action" value="submit" class="rounded-md bg-brand-700 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-800">Submit for approval</button>
+      </div>
+      {% if estimated_recipients != None %}
+        <p class="text-sm font-semibold text-slate-800">Recipient estimate: {{ estimated_recipients }} unique guardian numbers. Approval rechecks the group and monthly quota.</p>
+        <ul class="max-h-48 overflow-y-auto divide-y divide-slate-200 border-y border-slate-200 text-sm" aria-label="Recipient preview">
+          {% for name, masked_phone in preview_recipients %}
+            <li class="flex justify-between gap-4 py-2"><span>{{ name }}</span><span class="shrink-0 font-mono text-slate-500">{{ masked_phone }}</span></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </form>
+  </section>
+
+  <section>
+    <h2 class="text-base font-bold text-slate-900">Recent campaigns</h2>
+    <div class="mt-3 overflow-x-auto">
+      <table class="min-w-full text-left text-sm">
+        <thead class="border-b border-slate-300 text-xs uppercase text-slate-500">
+          <tr><th class="py-2 pr-4">Submitted</th><th class="py-2 pr-4">Group</th><th class="py-2 pr-4">Message</th><th class="py-2 pr-4">Recipients</th><th class="py-2 pr-4">Status</th><th class="py-2">Decision</th></tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200">
+          {% for campaign in campaigns %}
+            <tr class="align-top">
+              <td class="py-3 pr-4 whitespace-nowrap">{{ campaign.created_at|date:"Y-m-d H:i" }}<span class="block text-xs text-slate-500">{{ campaign.created_by.get_full_name|default:campaign.created_by.username }}</span></td>
+              <td class="py-3 pr-4">{{ campaign.get_scope_display }}{% if campaign.house %}<span class="block text-xs text-slate-500">{{ campaign.house.name }}</span>{% endif %}</td>
+              <td class="max-w-md py-3 pr-4 whitespace-pre-wrap">{{ campaign.message }}</td>
+              <td class="py-3 pr-4">{{ campaign.recipient_count }}</td>
+              <td class="py-3 pr-4">{{ campaign.get_status_display }}{% if campaign.decision_note %}<span class="block text-xs text-slate-500">{{ campaign.decision_note }}</span>{% endif %}</td>
+              <td class="py-3">
+                {% if campaign.status == "pending" and campaign.created_by_id != user.id %}
+                  <form method="post" class="flex min-w-48 flex-col gap-2">
+                    {% csrf_token %}
+                    <input type="hidden" name="campaign_id" value="{{ campaign.pk }}">
+                    <input type="text" name="decision_note" maxlength="240" aria-label="Decision note" placeholder="Decision note" class="rounded-md border border-slate-300 px-2 py-1 text-xs">
+                    <div class="flex gap-2">
+                      <button type="submit" name="action" value="approve" class="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800">Approve and queue</button>
+                      <button type="submit" name="action" value="reject" class="rounded-md border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">Reject</button>
+                    </div>
+                  </form>
+                {% elif campaign.decided_by %}
+                  <span>{{ campaign.decided_by.get_full_name|default:campaign.decided_by.username }}</span>
+                  <span class="block text-xs text-slate-500">{{ campaign.decided_at|date:"Y-m-d H:i" }}</span>
+                {% else %}
+                  <span class="text-xs text-slate-500">Awaiting a different approver</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="py-6 text-center text-slate-500">No group campaigns have been submitted.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <a href="{% url 'core:sms_usage' %}" class="text-sm font-semibold text-brand-700 hover:text-brand-900">Back to SMS delivery report</a>
+</div>
+{% endblock %}

@@ -35,10 +35,12 @@
   target name. A backup of `atebubu_shs` cannot be restored directly as `atebubu_shs_spare`.
 - **Restoring the `public` registry automatically.** `tenant_restore` restores one tenant schema;
   `Tenant` and `Domain` rows are separate. Registering the restored schema is a deliberate step.
-- **Encrypted, offsite, scheduled backups.** `tenant_backup` writes plaintext archives to local
-  storage (`.private/backups/tenants/` by default). Encryption, offsite upload, retention, and
-  scheduling remain open under audit finding **F-26**. Treat every archive as sensitive student
-  data.
+- **Encrypted offsite upload (opt-in).** `tenant_backup --offsite` uploads the dump, checksum,
+  and optional media archive to `BACKUP_OFFSITE_BUCKET` using S3 server-side KMS encryption and
+  verifies the returned encryption state, object size, and checksum metadata. Configure a dedicated
+  bucket, KMS key, access pair, versioning/Object Lock, and key policy first. The local archive is
+  retained and remains sensitive data. Split-key custody, automated scheduling, retention controls,
+  and an offsite restore drill remain open under **F-26/D7/D8**.
 - **Point-in-time recovery (PITR).** Neon PITR may be available on the database plan, but this
   runbook has not tested it. Confirm the plan's retention window before relying on it.
 
@@ -73,6 +75,7 @@ $env:TENANCY_ENABLED = "true"
   --schema=<schema> `
   --include-media `
   --verify `
+  --offsite `
   --operator="<name>" `
   --json
 ```
@@ -80,9 +83,10 @@ $env:TENANCY_ENABLED = "true"
 - If the school has no media files, add `--allow-empty-media`; otherwise the command refuses
   rather than silently omitting files.
 - The JSON output must show `"status": "success"` and `"verified": true`. Record the `sha256`.
-- Copy the dump, checksum, and media archive **off the application host immediately**. A backup on
-  Render's ephemeral disk is lost on redeploy (F-26).
-- Encrypt the copies at rest and restrict access. Do not paste credentials into a committed file.
+- Configure the dedicated `BACKUP_*` variables in the runtime secret store; never place values in
+  `.env.example` or source control.
+- `--offsite` fails closed unless bucket, KMS key, region, and dedicated access credentials are set.
+- A KMS upload is not a restore drill and does not prove split-key custody or object retention.
 
 For a full-database backup, follow README section 10.2:
 

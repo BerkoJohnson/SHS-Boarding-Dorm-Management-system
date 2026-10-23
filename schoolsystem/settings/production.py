@@ -34,17 +34,16 @@ if "locmem" in cache_backend:
         "Production requires a shared CACHE_BACKEND for rate limiting; "
         "LocMemCache is process-local."
     )
-if not os.getenv("CACHE_BACKEND", "").strip() or not os.getenv(
-    "CACHE_LOCATION", ""
-).strip():
+if (
+    not os.getenv("CACHE_BACKEND", "").strip()
+    or not os.getenv("CACHE_LOCATION", "").strip()
+):
     raise ImproperlyConfigured(
         "Production requires explicit CACHE_BACKEND and CACHE_LOCATION settings."
     )
 
 ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv("ALLOWED_HOSTS", "").split(",")
-    if host.strip()
+    host.strip() for host in os.getenv("ALLOWED_HOSTS", "").split(",") if host.strip()
 ]
 if not ALLOWED_HOSTS and not TENANCY_ENABLED:
     raise ImproperlyConfigured(
@@ -75,10 +74,20 @@ MIDDLEWARE.insert(
     "schoolsystem.security.ContentSecurityPolicyReportOnlyMiddleware",
 )
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+
+email_backend = os.getenv("EMAIL_BACKEND", "").strip()
+if (
+    not email_backend
+    or email_backend == "django.core.mail.backends.console.EmailBackend"
+):
+    raise ImproperlyConfigured(
+        "Production requires a real EMAIL_BACKEND; the console backend is only "
+        "safe for local or staging testing and must not be left active."
+    )
 
 CSP_REPORT_ONLY_POLICY = (
     "default-src 'self'; "
@@ -108,9 +117,8 @@ if csp_report_uri:
         and parsed_report_uri.username is None
         and parsed_report_uri.password is None
     )
-    if (
-        any(character.isspace() for character in csp_report_uri)
-        or not (relative_report_uri or absolute_report_uri)
+    if any(character.isspace() for character in csp_report_uri) or not (
+        relative_report_uri or absolute_report_uri
     ):
         raise ImproperlyConfigured(
             "CSP_REPORT_URI must be a safe relative or HTTPS URL."
@@ -134,12 +142,8 @@ except ValueError as error:
         "SECURE_HSTS_SECONDS must be a non-negative integer."
     ) from error
 if SECURE_HSTS_SECONDS < 0:
-    raise ImproperlyConfigured(
-        "SECURE_HSTS_SECONDS must be a non-negative integer."
-    )
-SECURE_HSTS_INCLUDE_SUBDOMAINS = _environment_flag(
-    "SECURE_HSTS_INCLUDE_SUBDOMAINS"
-)
+    raise ImproperlyConfigured("SECURE_HSTS_SECONDS must be a non-negative integer.")
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _environment_flag("SECURE_HSTS_INCLUDE_SUBDOMAINS")
 SECURE_HSTS_PRELOAD = _environment_flag("SECURE_HSTS_PRELOAD")
 if SECURE_HSTS_INCLUDE_SUBDOMAINS or SECURE_HSTS_PRELOAD:
     if SECURE_HSTS_SECONDS == 0:

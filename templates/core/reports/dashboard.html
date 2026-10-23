@@ -24,6 +24,8 @@
 
   {% include "core/reports/partials/report_nav.html" with active_report="occupancy" %}
 
+  <p><a href="{% url 'core:scheduled_report_emails' %}" class="text-sm font-semibold text-brand-700 hover:text-brand-900">Scheduled report emails</a></p>
+
   <section class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
     <div class="flex flex-wrap items-end gap-3">
       {% include "core/reports/partials/report_filter_bar.html" with filter_url_name="core:reports" filter_anchor="#report-results" filter_submit_label="View report" %}

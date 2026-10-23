@@ -1347,9 +1347,7 @@ def get_boarding_kpi_pack(house_id=None, term=None, date_from=None, date_to=None
         "dormitory__house", "approved_by"
     ).filter(cancelled_at__isnull=True)
     if house_id is not None:
-        capacity_exceptions = capacity_exceptions.filter(
-            dormitory__house_id=house_id
-        )
+        capacity_exceptions = capacity_exceptions.filter(dormitory__house_id=house_id)
     if start is not None:
         capacity_exceptions = capacity_exceptions.filter(ends_at__date__gte=start)
     if end is not None:
@@ -1365,11 +1363,13 @@ def get_boarding_kpi_pack(house_id=None, term=None, date_from=None, date_to=None
             timezone.localtime(exception.starts_at).strftime("%d %b %Y %H:%M"),
             timezone.localtime(exception.ends_at).strftime("%d %b %Y %H:%M"),
             (
-                exception.approved_by.get_full_name()
-                or exception.approved_by.get_username()
-            )
-            if exception.approved_by
-            else "—",
+                (
+                    exception.approved_by.get_full_name()
+                    or exception.approved_by.get_username()
+                )
+                if exception.approved_by
+                else "—"
+            ),
             exception.reason,
         )
         for exception in capacity_exceptions.order_by("-starts_at")[:100]
@@ -1679,12 +1679,26 @@ def _overdue_register_report(house_id=None, date_from=None, date_to=None, term_i
     exeats = Exeat.objects.filter(status=Exeat.Status.APPROVED)
     if house_id is not None:
         exeats = exeats.filter(student__house_id=house_id)
-    if date_from:
-        exeats = exeats.filter(expected_return__date__gte=date_from)
-    if date_to:
-        exeats = exeats.filter(expected_return__date__lte=date_to)
     if term_id:
         exeats = exeats.filter(academic_term_id=term_id)
+
+    if date_from or date_to:
+        in_period = Q()
+        if date_from:
+            in_period &= Q(expected_return__date__gte=date_from)
+        if date_to:
+            in_period &= Q(expected_return__date__lte=date_to)
+        still_out = (
+            Q(
+                movement__actual_departure__isnull=False,
+                movement__actual_return__isnull=True,
+            )
+            | Q(
+                reconciliation__outcome=ExeatReconciliation.Outcome.STUDENT_OUT,
+                reconciliation__actual_return__isnull=True,
+            )
+        ) & Q(expected_return__lte=now)
+        exeats = exeats.filter(in_period | still_out)
 
     records = exeats.values(
         "exeat_number",
@@ -2463,7 +2477,7 @@ def get_sms_usage_summary(house_id=None, date_from=None, date_to=None, term_id=N
             ("Processing", processing),
             ("Failed", failed),
             ("Success rate", f"{success_rate}%"),
-            ("This month", f"{used}" + (f" / {limit}" if limit else "")),
+            ("This month (segments)", f"{used}" + (f" / {limit}" if limit else "")),
         ),
         "sections": (
             {
@@ -2478,7 +2492,7 @@ def get_sms_usage_summary(house_id=None, date_from=None, date_to=None, term_id=N
             },
         ),
         "highlights": (
-            "This-month usage counts sent messages plus outstanding queued/processing items, matching the platform quota calculation.",
+            "This-month usage counts SMS segments from sent deliveries plus recent queued/processing reservations, matching the platform quota calculation.",
             "The monthly quota is tenant-wide; the other delivery figures follow the selected filters.",
             "A null monthly limit means the plan has no SMS cap configured.",
         ),
@@ -2582,9 +2596,7 @@ def _staff_activity_report(house_id=None, date_from=None, date_to=None, term_id=
                 approved_by_user__isnull=True,
                 approved_by_id=housemaster.pk,
             )
-        approval_ids = set(
-            approvals.filter(actor_filter).values_list("pk", flat=True)
-        )
+        approval_ids = set(approvals.filter(actor_filter).values_list("pk", flat=True))
         matched_approval_ids.update(approval_ids)
         approval_count = len(approval_ids)
         incident_count = incident_counts.get(housemaster.pk, 0)
@@ -2721,13 +2733,15 @@ def _welfare_infirmary_report(
     }
     medical_by_student = {row["student_id"]: row["count"] for row in medical_rows}
     student_ids = set(infirmary_by_student) | set(medical_by_student)
-    students = Student.objects.filter(pk__in=student_ids).exclude(
-        status=Student.EnrollmentStatus.COMPLETED
-    ).values(
-        "id",
-        "full_name",
-        "house__name",
-        "dormitory__name",
+    students = (
+        Student.objects.filter(pk__in=student_ids)
+        .exclude(status=Student.EnrollmentStatus.COMPLETED)
+        .values(
+            "id",
+            "full_name",
+            "house__name",
+            "dormitory__name",
+        )
     )
     student_info = {student["id"]: student for student in students}
     # Do not let a completed/left student remain on a current welfare
@@ -2957,6 +2971,7 @@ def _conduct_normalized_report(
     )
     active_records = DisciplinaryRecord.objects.filter(
         corrected_at__isnull=True,
+        student__residency=Student.ResidencyStatus.BOARDING,
         student__status__in=(
             Student.EnrollmentStatus.ENROLLED,
             Student.EnrollmentStatus.APPROVED,

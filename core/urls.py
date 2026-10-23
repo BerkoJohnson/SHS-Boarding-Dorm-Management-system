@@ -205,6 +205,11 @@ urlpatterns = [
     path("reports/", views.reports_dashboard_view, name="reports"),
     path("reports/print/", views.reports_print_view, name="reports_print"),
     path("reports/export/", views.report_export_view, name="report_export"),
+    path(
+        "reports/scheduled-email/",
+        views.scheduled_report_emails_view,
+        name="scheduled_report_emails",
+    ),
     path("reports/boarding-kpi/", views.boarding_kpi_view, name="boarding_kpi"),
     path(
         "reports/boarding-kpi/export/",
@@ -217,6 +222,7 @@ urlpatterns = [
         name="boarding_demographics",
     ),
     path("reports/sms-usage/", views.sms_usage_view, name="sms_usage"),
+    path("reports/sms-group/", views.group_sms_view, name="group_sms"),
     path("reports/config-audit/", views.config_audit_view, name="config_audit"),
     path("configuration/", views.configuration_hub_view, name="configuration"),
     path(

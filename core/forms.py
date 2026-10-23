@@ -14,11 +14,13 @@ from .models import (
     Exeat,
     ExeatReconciliation,
     ExeatReview,
+    GroupSMSCampaign,
     GateDutyAssignment,
     LateReturnIncident,
     OperationalSettings,
     RollCallCorrection,
     RollCallEntry,
+    ScheduledReportEmail,
     StaffRole,
     Student,
     Programme,
@@ -946,6 +948,7 @@ class StudentRosterUploadForm(forms.Form):
             raise ValidationError("Roster files must be 10 MB or smaller.")
         return roster_file
 
+
 # ---------------------------------------------------------------------------
 # Full P1 operational workflows
 # ---------------------------------------------------------------------------
@@ -988,9 +991,7 @@ class ExeatRescheduleForm(forms.Form):
         if exeat is not None and not self.is_bound:
             self.initial.setdefault(
                 "expected_departure",
-                timezone.localtime(exeat.expected_departure).strftime(
-                    "%Y-%m-%dT%H:%M"
-                ),
+                timezone.localtime(exeat.expected_departure).strftime("%Y-%m-%dT%H:%M"),
             )
             self.initial.setdefault(
                 "expected_return",
@@ -1061,9 +1062,7 @@ class GateDutyAssignmentForm(forms.ModelForm):
             "is_temporary": forms.CheckboxInput(
                 attrs={"class": "h-4 w-4 rounded border-slate-300"}
             ),
-            "reason": forms.Textarea(
-                attrs={"rows": 2, "class": _TEXTAREA_CLASS}
-            ),
+            "reason": forms.Textarea(attrs={"rows": 2, "class": _TEXTAREA_CLASS}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -1176,9 +1175,7 @@ class DormitoryCapacityExceptionForm(forms.ModelForm):
             "additional_capacity": forms.NumberInput(
                 attrs={"min": 1, "max": 100, "class": _INPUT_CLASS}
             ),
-            "reason": forms.Textarea(
-                attrs={"rows": 3, "class": _TEXTAREA_CLASS}
-            ),
+            "reason": forms.Textarea(attrs={"rows": 3, "class": _TEXTAREA_CLASS}),
         }
 
 
@@ -1242,10 +1239,14 @@ class DisputeCaseForm(forms.ModelForm):
         exeat = cleaned.get("exeat")
         entry = cleaned.get("roll_call_entry")
         if student and exeat and exeat.student_id != student.pk:
-            raise ValidationError({"exeat": "This pass belongs to a different student."})
+            raise ValidationError(
+                {"exeat": "This pass belongs to a different student."}
+            )
         if student and entry and entry.student_id != student.pk:
             raise ValidationError(
-                {"roll_call_entry": "This roll-call entry belongs to a different student."}
+                {
+                    "roll_call_entry": "This roll-call entry belongs to a different student."
+                }
             )
         return cleaned
 
@@ -1304,4 +1305,87 @@ class DisputeDecisionForm(forms.Form):
                 raise ValidationError(
                     {"decision_notes": "Record the reasoning for the decision."}
                 )
+        return cleaned
+
+
+class GroupSMSForm(forms.Form):
+    scope = forms.ChoiceField(
+        label="Recipient group",
+        choices=GroupSMSCampaign.Scope.choices,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    house = forms.ModelChoiceField(
+        label="House",
+        queryset=House.objects.none(),
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    message = forms.CharField(
+        label="Message",
+        max_length=500,
+        widget=forms.Textarea(
+            attrs={
+                "rows": 4,
+                "class": _TEXTAREA_CLASS,
+                "placeholder": "Write the approved message for guardians.",
+            }
+        ),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["house"].queryset = House.objects.order_by("display_order", "name")
+
+    def clean(self):
+        cleaned = super().clean()
+        scope = cleaned.get("scope")
+        house = cleaned.get("house")
+        if scope == GroupSMSCampaign.Scope.HOUSE and not house:
+            self.add_error("house", "Choose a house for this recipient group.")
+        if scope == GroupSMSCampaign.Scope.ALL_BOARDERS:
+            cleaned["house"] = None
+        cleaned["message"] = (cleaned.get("message") or "").strip()
+        return cleaned
+
+
+class ScheduledReportEmailForm(forms.Form):
+    report_type = forms.ChoiceField(
+        label="Report",
+        choices=ScheduledReportEmail.ReportType.choices,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    frequency = forms.ChoiceField(
+        choices=ScheduledReportEmail.Frequency.choices,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    weekday = forms.ChoiceField(
+        choices=(("", "Select a weekday"),)
+        + tuple(ScheduledReportEmail.Weekday.choices),
+        required=False,
+        initial=ScheduledReportEmail.Weekday.MONDAY,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+    send_at = forms.TimeField(
+        label="Delivery time",
+        initial="07:00",
+        input_formats=["%H:%M"],
+        widget=forms.TimeInput(
+            format="%H:%M",
+            attrs={"type": "time", "class": _INPUT_CLASS},
+        ),
+    )
+    file_format = forms.ChoiceField(
+        label="Attachment format",
+        choices=ScheduledReportEmail.FileFormat.choices,
+        widget=forms.Select(attrs={"class": _INPUT_CLASS}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get(
+            "frequency"
+        ) == ScheduledReportEmail.Frequency.WEEKLY and not cleaned.get("weekday"):
+            self.add_error("weekday", "Choose a weekday for weekly delivery.")
+        if cleaned.get("frequency") == ScheduledReportEmail.Frequency.DAILY:
+            cleaned["weekday"] = ScheduledReportEmail.Weekday.MONDAY
         return cleaned

@@ -76,7 +76,10 @@ class AdvancedReportsTests(TestCase):
             "ADV-002", "Second Report Student", cls.house, cls.dormitory
         )
         cls.other_student = cls.create_student(
-            "ADV-003", "Other House Report Student", cls.other_house, cls.other_dormitory
+            "ADV-003",
+            "Other House Report Student",
+            cls.other_house,
+            cls.other_dormitory,
         )
         cls.unplaced_student = cls.create_student(
             "ADV-004", "Unplaced Report Student", cls.house, cls.dormitory
@@ -153,9 +156,7 @@ class AdvancedReportsTests(TestCase):
         self.create_student(
             "ADV-005", "Over-capacity Report Student", self.house, self.dormitory
         )
-        Student.objects.filter(pk=day_student.pk).update(
-            dormitory=self.dormitory
-        )
+        Student.objects.filter(pk=day_student.pk).update(dormitory=self.dormitory)
         Student.objects.filter(pk=self.second_student.pk).update(
             dormitory=self.other_dormitory
         )
@@ -230,10 +231,25 @@ class AdvancedReportsTests(TestCase):
         self.assertEqual(len(report["rows"]), 2)
         self.assertEqual(report["rows"][0][0], late.exeat_number)
         self.assertEqual(report["rows"][1][0], overdue.exeat_number)
-        self.assertEqual(
-            dict(report["summary"])["Currently overdue (still out)"], 1
-        )
+        self.assertEqual(dict(report["summary"])["Currently overdue (still out)"], 1)
         self.assertEqual(dict(report["summary"])["Returned late in period"], 1)
+
+    def test_overdue_register_keeps_currently_out_passes_outside_date_window(self):
+        overdue = self.create_exeat(
+            self.student,
+            expected_return=timezone.now() - timedelta(days=10),
+        )
+
+        report = get_detailed_report(
+            "overdue_register",
+            house_id=self.house.pk,
+            date_from=timezone.localdate() - timedelta(days=2),
+            date_to=timezone.localdate(),
+            term_id=self.term.pk,
+        )
+
+        self.assertEqual([row[0] for row in report["rows"]], [overdue.exeat_number])
+        self.assertEqual(dict(report["summary"])["Currently overdue (still out)"], 1)
 
     def test_kpi_pack_aggregates_metrics_for_selected_house_and_term(self):
         now = timezone.now()
@@ -397,7 +413,9 @@ class AdvancedReportsTests(TestCase):
         empty_house = House.objects.create(name="Empty Report House")
         empty_report = get_boarding_demographics(house_id=empty_house.pk)
         self.assertEqual(dict(empty_report["summary"])["Boarders"], 0)
-        self.assertEqual(empty_report["distribution"][0]["rows"], [("Male", 0), ("Female", 0)])
+        self.assertEqual(
+            empty_report["distribution"][0]["rows"], [("Male", 0), ("Female", 0)]
+        )
 
     def test_sms_usage_filters_delivery_data_and_keeps_quota_tenant_wide(self):
         now = timezone.now()
@@ -426,7 +444,11 @@ class AdvancedReportsTests(TestCase):
             status=SMSDelivery.Status.FAILED,
             last_error="Provider rejected destination",
             dedupe_key="advanced-report-sms-other-house",
-            **{key: value for key, value in shared_fields.items() if key != "dedupe_key"},
+            **{
+                key: value
+                for key, value in shared_fields.items()
+                if key != "dedupe_key"
+            },
         )
 
         from unittest.mock import patch
@@ -661,7 +683,9 @@ class AdvancedReportsTests(TestCase):
         self.assertEqual(report["sections"][0]["rows"], [])
         self.assertEqual(session.house_id, self.house.pk)
 
-    def test_data_completeness_applies_house_scope_and_excludes_day_placement_gaps(self):
+    def test_data_completeness_applies_house_scope_and_excludes_day_placement_gaps(
+        self,
+    ):
         day_student = Student.objects.create(
             admission_no="ADV-DAY-COMPLETE",
             index_number="IDX-ADV-DAY-COMPLETE",
@@ -737,6 +761,34 @@ class AdvancedReportsTests(TestCase):
         self.assertEqual(len(report["rows"]), 1)
         self.assertEqual(report["rows"][0], (self.house.name, 3, 2, 66.7, 1, 1))
         self.assertEqual(dict(report["summary"])["Boarders"], 3)
+
+    def test_conduct_normalized_excludes_day_student_incidents(self):
+        day_student = Student.objects.create(
+            admission_no="ADV-DAY-CONDUCT",
+            index_number="IDX-ADV-DAY-CONDUCT",
+            full_name="Day Student Conduct Record",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=self.house,
+            residency=Student.ResidencyStatus.DAY,
+        )
+        DisciplinaryRecord.objects.create(
+            student=day_student,
+            academic_term=self.term,
+            offense="Day student incident",
+            severity=DisciplinaryRecord.Severity.MAJOR,
+            action_taken="Warning",
+        )
+
+        report = get_detailed_report(
+            "conduct_normalized",
+            house_id=self.house.pk,
+            term_id=self.term.pk,
+        )
+
+        self.assertEqual(report["rows"][0][1], 3)
+        self.assertEqual(report["rows"][0][2], 0)
+        self.assertEqual(report["rows"][0][3], 0)
 
     def test_intervention_effectiveness_detects_recurrence_after_correction(self):
         corrected = DisciplinaryRecord.objects.create(
@@ -875,9 +927,7 @@ class AdvancedReportsTests(TestCase):
         self.assertTemplateUsed(page, "core/reports/boarding_kpi.html")
         self.assertContains(page, "Boarding Termly KPI Pack")
         self.assertEqual(print_page.status_code, 200)
-        self.assertTemplateUsed(
-            print_page, "core/reports/boarding_kpi_print.html"
-        )
+        self.assertTemplateUsed(print_page, "core/reports/boarding_kpi_print.html")
         self.assertEqual(export.status_code, 200)
         self.assertEqual(export["Content-Type"], "text/csv; charset=utf-8")
         self.assertIn(b"Boarding Termly KPI Pack", export.content)
@@ -964,7 +1014,9 @@ class AdvancedReportsTests(TestCase):
             reverse("core:boarding_kpi_export"),
             {"term": str(self.term.pk)},
         )
-        tiles = {label: value for label, value, _tone in page.context["report"]["kpi_tiles"]}
+        tiles = {
+            label: value for label, value, _tone in page.context["report"]["kpi_tiles"]
+        }
 
         self.assertEqual(page.status_code, 200)
         self.assertEqual(tiles["Boarders"], 3)
@@ -1052,15 +1104,17 @@ class ReportFilterBarAndPaginationTests(TestCase):
         self.assertTrue(fields["term"].disabled)
 
     def test_kpi_and_sms_keep_all_period_filters_enabled(self):
-        kpi_fields = self.client.get(reverse("core:boarding_kpi")).context[
-            "report_filters"
-        ].fields
+        kpi_fields = (
+            self.client.get(reverse("core:boarding_kpi"))
+            .context["report_filters"]
+            .fields
+        )
         self.assertFalse(kpi_fields["term"].disabled)
         self.assertFalse(kpi_fields["date_from"].disabled)
 
-        sms_fields = self.client.get(reverse("core:sms_usage")).context[
-            "report_filters"
-        ].fields
+        sms_fields = (
+            self.client.get(reverse("core:sms_usage")).context["report_filters"].fields
+        )
         self.assertFalse(sms_fields["date_from"].disabled)
         self.assertFalse(sms_fields["term"].disabled)
 
@@ -1146,15 +1200,11 @@ class ReportFilterBarAndPaginationTests(TestCase):
             HTTP_HX_REQUEST="true",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertTemplateUsed(
-            response, "core/reports/partials/report_results.html"
-        )
+        self.assertTemplateUsed(response, "core/reports/partials/report_results.html")
         html = response.content.decode()
         self.assertNotIn("<html", html.lower())
         self.assertIn("Showing 11\u201312 of 12", html)
-        self.assertEqual(
-            len(response.context["report"]["rows_page"].object_list), 2
-        )
+        self.assertEqual(len(response.context["report"]["rows_page"].object_list), 2)
 
     def test_htmx_requests_render_each_pages_own_fragment(self):
         cases = (

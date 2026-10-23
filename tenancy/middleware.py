@@ -9,6 +9,7 @@ to trust verified tenant domains automatically.
 import ipaddress
 import logging
 import time
+import uuid
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -25,6 +26,27 @@ logger = logging.getLogger(__name__)
 
 # Paths that bypass tenant resolution for health checks and platform probes.
 HEALTH_CHECK_PATHS = frozenset({"/healthz", "/healthz/", "/live", "/live/"})
+
+# The mobile API requires machine-readable tenant-resolution failures. Web
+# routes keep their existing HTML 404 behaviour.
+API_PATH_PREFIX = "/api/"
+PUBLIC_API_PATHS = frozenset(
+    {"/api/v1/public/schools", "/api/v1/public/schools/"}
+)
+
+
+def _api_error(request, *, code, message, status):
+    request_id = (request.META.get("HTTP_X_REQUEST_ID") or "").strip()[:64]
+    return JsonResponse(
+        {
+            "error": {
+                "code": code,
+                "message": message,
+                "request_id": request_id or uuid.uuid4().hex,
+            }
+        },
+        status=status,
+    )
 
 
 class VerifiedDomainRoutingMiddleware:
@@ -57,6 +79,7 @@ class VerifiedDomainRoutingMiddleware:
     def __call__(self, request):
         activate_public()
         set_urlconf(None)
+        is_api = request.path.startswith(API_PATH_PREFIX)
 
         # Bypass tenant resolution for health-check probes.
         if request.path in HEALTH_CHECK_PATHS:
@@ -65,6 +88,13 @@ class VerifiedDomainRoutingMiddleware:
         try:
             host = self._extract_hostname(request)
         except (DisallowedHost, ValidationError) as error:
+            if is_api:
+                return _api_error(
+                    request,
+                    code="tenant_not_found",
+                    message="No active school is configured for this hostname.",
+                    status=404,
+                )
             raise Http404(
                 "No active school is configured for this hostname."
             ) from error
@@ -77,6 +107,13 @@ class VerifiedDomainRoutingMiddleware:
             settings, "PLATFORM_ADMIN_DOMAIN", None
         )
         if platform_admin_domain and host == platform_admin_domain:
+            if is_api:
+                return _api_error(
+                    request,
+                    code="platform_api_unavailable",
+                    message="The mobile API is served from each school's own hostname.",
+                    status=404,
+                )
             tenant_count = Domain.objects.values("tenant").distinct().count()
             return JsonResponse({
                 "status": "ok",
@@ -93,6 +130,16 @@ class VerifiedDomainRoutingMiddleware:
         # public schema. Marketing pages therefore cannot reach any school's
         # tables, and tenant hosts are completely unaffected.
         if host in self._public_website_hosts():
+            if is_api and request.path not in PUBLIC_API_PATHS:
+                return _api_error(
+                    request,
+                    code="tenant_not_found",
+                    message=(
+                        "The mobile API is served from your school's own hostname, "
+                        "not the public website."
+                    ),
+                    status=404,
+                )
             # The public schema has no session table, so drop any session
             # cookie before AuthenticationMiddleware runs. This keeps the
             # public site stateless, prevents a lookup against a table that
@@ -120,6 +167,13 @@ class VerifiedDomainRoutingMiddleware:
             .first()
         )
         if domain is None:
+            if is_api:
+                return _api_error(
+                    request,
+                    code="tenant_not_found",
+                    message="No active school is configured for this hostname.",
+                    status=404,
+                )
             raise Http404(
                 "No active school is configured for this hostname."
             )

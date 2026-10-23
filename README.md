@@ -670,6 +670,33 @@ configuration that would break either rule.
 | :--- | :--- | :--- |
 | `SYNTHETIC_PILOT_DATABASE` | *(empty)* | Guard for `seed_synthetic_pilot`. Must exactly equal the database name you are seeding. |
 
+### 6.11 Mobile staff API
+
+The mobile API is mounted at `/api/v1/` on every verified school hostname. It
+uses opaque per-tenant bearer tokens; session cookies are never accepted. The
+full endpoint, onboarding and QR-scan contract is in
+[`docs/API.md`](docs/API.md).
+
+| Variable | Default | Controls |
+| :--- | :--- | :--- |
+| `API_ENABLED` | `true` | Master switch. `false` returns `503 api_disabled` from every API endpoint. |
+| `API_TOKEN_TTL_DAYS` | `30` | Bearer-token lifetime. Refresh rotates the token. |
+| `API_TOKEN_MAX_PER_USER` | `8` | Maximum active device tokens per staff member. The oldest is revoked on login. |
+| `API_TOKEN_TOUCH_INTERVAL` | `300` | Seconds between `last_used_at` writes on a busy token. |
+| `API_LOGIN_RATE_LIMIT` / `API_LOGIN_RATE_WINDOW` | `10` / `300` | Login attempts per client IP + username; invite validation/redemption per client IP. |
+| `API_PUBLIC_RATE_LIMIT` / `API_PUBLIC_RATE_WINDOW` | `60` / `60` | Public school-directory requests per client IP per window. |
+| `API_PAGE_SIZE` / `API_MAX_PAGE_SIZE` | `25` / `100` | Default and maximum `?page_size=`. |
+| `API_INVITE_TTL_DAYS` | `7` | Lifetime of a hashed, single-use staff onboarding invite. |
+| `API_IDEMPOTENCY_TTL` | `86400` | Replay window for state-changing requests carrying an `Idempotency-Key`. |
+| `API_MIN_APP_VERSION` | *(empty)* | Minimum mobile build. Older clients receive `426 upgrade_required`; empty disables the gate. |
+| `API_MAX_UPLOAD_BYTES` | `10485760` | Upload ceiling for student photos and roster imports (10 MiB). |
+| `API_SCHOOL_DIRECTORY_LIMIT` | `25` | Maximum schools returned by the public onboarding directory. |
+
+> **Tenant boundary:** a token issued by School A must never work on School B.
+> The app pins the canonical origin returned at onboarding/login and must not
+> accept a user-supplied API URL afterwards. See
+> `tenancy/test_api_isolation.py` for the two-school regression test.
+
 > **Never** commit a populated `.env`. Never paste real API keys, passwords or connection strings
 > into this README, tickets or chat.
 

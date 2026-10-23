@@ -1,5 +1,6 @@
 import hashlib
 from contextlib import contextmanager
+from datetime import timedelta
 from functools import wraps
 
 from django.conf import settings
@@ -37,9 +38,7 @@ def entitlement_value(key, *, schema_name=None):
     """Read a tenant override, falling back to the configured plan defaults."""
     subscription = _subscription(schema_name)
     if subscription is None:
-        if settings.TENANCY_ENABLED and (
-            schema_name or _current_schema_name()
-        ):
+        if settings.TENANCY_ENABLED and (schema_name or _current_schema_name()):
             return PLAN_DEFAULTS["free"].get(key)
         return None
     features = subscription.features or {}
@@ -69,9 +68,7 @@ def ensure_quota_available(key, current, additional=1, *, schema_name=None):
     limit = quota_limit(key, schema_name=schema_name)
     if limit is not None and current + additional > limit:
         label = key.removeprefix("max_").replace("_", " ")
-        raise ValidationError(
-            f"The tenant {label} limit of {limit} has been reached."
-        )
+        raise ValidationError(f"The tenant {label} limit of {limit} has been reached.")
 
 
 def quota_lock_key(schema_name, key):
@@ -152,16 +149,25 @@ def current_month_start():
 
 def sms_monthly_usage(*, schema_name=None, exclude_delivery_id=None):
     from core.models import SMSDelivery
+    from core.services.sms import sms_segment_count
 
     month_start = current_month_start()
+    reservation_cutoff = timezone.now() - timedelta(
+        hours=max(1, int(getattr(settings, "SMS_STALE_DELIVERY_HOURS", 24)))
+    )
     deliveries = SMSDelivery.objects.filter(
         Q(status=SMSDelivery.Status.SENT, sent_at__gte=month_start)
-        | Q(status=SMSDelivery.Status.QUEUED)
-        | Q(status=SMSDelivery.Status.PROCESSING)
+        | Q(
+            status__in=(SMSDelivery.Status.QUEUED, SMSDelivery.Status.PROCESSING),
+            created_at__gte=reservation_cutoff,
+        )
     )
     if exclude_delivery_id is not None:
         deliveries = deliveries.exclude(pk=exclude_delivery_id)
-    return deliveries.count()
+    return sum(
+        sms_segment_count(message)
+        for message in deliveries.values_list("message", flat=True)
+    )
 
 
 def sms_quota_allows(additional=1, *, schema_name=None, exclude_delivery_id=None):

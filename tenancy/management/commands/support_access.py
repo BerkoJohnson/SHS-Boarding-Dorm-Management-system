@@ -31,7 +31,9 @@ class Command(BaseCommand):
 
     help = (
         "Generate, verify, inspect, or revoke time-bound support access tokens "
-        "for troubleshooting a tenant schema."
+        "for troubleshooting a tenant schema. This is intentionally a CLI-only "
+        "audit token flow; it does not create a remote support session or live "
+        "interactive access channel."
     )
 
     def add_arguments(self, parser):
@@ -134,7 +136,9 @@ class Command(BaseCommand):
         reason = options.get("reason", "").strip()
         if not reason:
             self.stderr.write(
-                self.style.WARNING("Notice: Consider specifying --reason for compliance audit.")
+                self.style.WARNING(
+                    "Notice: Consider specifying --reason for compliance audit."
+                )
             )
 
         operator = options.get("operator", "cli")
@@ -142,7 +146,9 @@ class Command(BaseCommand):
         # Generate 32 bytes (256 bits) of entropy
         plaintext_token = secrets.token_urlsafe(32)
         token_bytes = plaintext_token.encode("utf-8")
-        token_hash = bcrypt.hashpw(token_bytes, bcrypt.gensalt(rounds=12)).decode("ascii")
+        token_hash = bcrypt.hashpw(token_bytes, bcrypt.gensalt(rounds=12)).decode(
+            "ascii"
+        )
 
         now = timezone.now()
         expires_at = now + timedelta(hours=ttl)
@@ -187,14 +193,28 @@ class Command(BaseCommand):
             self.stdout.write(self.style.NOTICE("+" + header_line + "+"))
             self.stdout.write(
                 self.style.NOTICE("|  ")
-                + self.style.SUCCESS(f"SUPPORT ACCESS TOKEN GENERATED: {tenant.schema_name}")
+                + self.style.SUCCESS(
+                    f"SUPPORT ACCESS TOKEN GENERATED: {tenant.schema_name}"
+                )
             )
             self.stdout.write(self.style.NOTICE("+" + header_line + "+"))
             self.stdout.write("")
-            self.stdout.write(self.style.WARNING("  +------------------------------------------------------+"))
+            self.stdout.write(
+                self.style.WARNING(
+                    "  +------------------------------------------------------+"
+                )
+            )
             self.stdout.write(f"  |  Token:  {self.style.SUCCESS(plaintext_token)}  |")
-            self.stdout.write(self.style.WARNING("  |  COPY THIS TOKEN NOW -- it will NEVER be shown again! |"))
-            self.stdout.write(self.style.WARNING("  +------------------------------------------------------+"))
+            self.stdout.write(
+                self.style.WARNING(
+                    "  |  COPY THIS TOKEN NOW -- it will NEVER be shown again! |"
+                )
+            )
+            self.stdout.write(
+                self.style.WARNING(
+                    "  +------------------------------------------------------+"
+                )
+            )
             self.stdout.write("")
             self.stdout.write(f"  Granted by:  {operator}")
             self.stdout.write(f"  TTL:         {ttl} hours")
@@ -205,7 +225,7 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"  To verify this token:\n"
                 f"    python manage.py support_access --schema={tenant.schema_name} \\\n"
-                f"        --verify=\"{plaintext_token}\"\n"
+                f'        --verify="{plaintext_token}"\n'
             )
 
     def _handle_verify(
@@ -290,7 +310,9 @@ class Command(BaseCommand):
     ):
         """Immediately invalidate and clear active support token."""
         if not sub.support_token_hash:
-            raise CommandError(f"No active support token exists for tenant '{tenant.schema_name}'.")
+            raise CommandError(
+                f"No active support token exists for tenant '{tenant.schema_name}'."
+            )
 
         operator = options.get("operator", "cli")
         reason = options.get("reason", "").strip()
@@ -376,12 +398,16 @@ class Command(BaseCommand):
                 f"  Granted by:  {sub.support_token_granted_by}\n"
             )
         else:
-            self.stdout.write(f"  Token:       {self.style.ERROR('[NO ACTIVE TOKEN]')}\n")
+            self.stdout.write(
+                f"  Token:       {self.style.ERROR('[NO ACTIVE TOKEN]')}\n"
+            )
 
         self.stdout.write(self.style.NOTICE("  Recent Support Access Audit Trail:"))
         self.stdout.write("  " + "-" * 66)
         col_fmt = "  {:<20} {:<24} {:<15}"
-        self.stdout.write(self.style.SQL_FIELD(col_fmt.format("Timestamp", "Action", "Operator")))
+        self.stdout.write(
+            self.style.SQL_FIELD(col_fmt.format("Timestamp", "Action", "Operator"))
+        )
         self.stdout.write("  " + "-" * 66)
 
         if not recent_logs:

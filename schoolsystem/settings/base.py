@@ -38,6 +38,15 @@ def env_float(name, default):
         raise ValueError(f"{name} must be a number, got {raw!r}.") from error
 
 
+def env_bool(name, default=False):
+    """Read a boolean setting, falling back to *default* when unset or blank."""
+    raw = os.getenv(name, "")
+    value = raw.strip().lower()
+    if not value:
+        return bool(default)
+    return value in {"1", "true", "yes", "on"}
+
+
 DATABASE_PROFILE = os.getenv("DATABASE_PROFILE", "local").strip().lower() or "local"
 if DATABASE_PROFILE not in {"local", "neon"}:
     raise ValueError("DATABASE_PROFILE must be either 'local' or 'neon'")
@@ -264,6 +273,46 @@ TRUSTED_PROXY_COUNT = max(1, env_int("TRUSTED_PROXY_COUNT", 1))
 STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS = env_int("STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS", 0)
 
 
+# -----------------------------------------------------------------------------
+# MOBILE API (v1)
+# -----------------------------------------------------------------------------
+# The API is mounted at /api/v1/ on every verified tenant host. Tokens are
+# stored per tenant schema, so a credential issued by one school can never
+# resolve against another school's data.
+API_ENABLED = env_bool("API_ENABLED", True)
+API_VERSION = "v1"
+
+# Opaque bearer-token lifetime. Refresh rotates the token; logout revokes it.
+API_TOKEN_TTL_DAYS = env_int("API_TOKEN_TTL_DAYS", 30)
+API_TOKEN_MAX_PER_USER = env_int("API_TOKEN_MAX_PER_USER", 8)
+# Throttle the last_used_at write so a busy client does not update the row on
+# every single request.
+API_TOKEN_TOUCH_INTERVAL = env_int("API_TOKEN_TOUCH_INTERVAL", 300)
+
+API_LOGIN_RATE_LIMIT = env_int("API_LOGIN_RATE_LIMIT", 10)
+API_LOGIN_RATE_WINDOW = env_int("API_LOGIN_RATE_WINDOW", 300)
+API_PUBLIC_RATE_LIMIT = env_int("API_PUBLIC_RATE_LIMIT", 60)
+API_PUBLIC_RATE_WINDOW = env_int("API_PUBLIC_RATE_WINDOW", 60)
+
+API_PAGE_SIZE = env_int("API_PAGE_SIZE", 25)
+API_MAX_PAGE_SIZE = env_int("API_MAX_PAGE_SIZE", 100)
+
+# Staff onboarding invites.
+API_INVITE_TTL_DAYS = env_int("API_INVITE_TTL_DAYS", 7)
+
+# Idempotency-Key replay window for state-transition endpoints.
+API_IDEMPOTENCY_TTL = env_int("API_IDEMPOTENCY_TTL", 86400)
+
+# Mobile clients below this version receive 426 Upgrade Required.
+API_MIN_APP_VERSION = os.getenv("API_MIN_APP_VERSION", "").strip()
+
+# Upload limits for student photos and roster imports.
+API_MAX_UPLOAD_BYTES = env_int("API_MAX_UPLOAD_BYTES", 10 * 1024 * 1024)
+
+# Maximum number of schools returned by the public onboarding directory.
+API_SCHOOL_DIRECTORY_LIMIT = env_int("API_SCHOOL_DIRECTORY_LIMIT", 25)
+
+
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
@@ -372,6 +421,19 @@ if MEDIA_STORAGE_BACKEND == "neon_s3":
         },
     }
 
+BACKUP_OFFSITE_BUCKET = os.getenv("BACKUP_OFFSITE_BUCKET", "").strip()
+BACKUP_KMS_KEY_ID = os.getenv("BACKUP_KMS_KEY_ID", "").strip()
+BACKUP_S3_ENDPOINT_URL = os.getenv(
+    "BACKUP_S3_ENDPOINT_URL",
+    os.getenv("AWS_ENDPOINT_URL_S3", ""),
+).strip()
+BACKUP_S3_REGION = os.getenv(
+    "BACKUP_S3_REGION",
+    os.getenv("AWS_REGION", ""),
+).strip()
+BACKUP_S3_ACCESS_KEY_ID = os.getenv("BACKUP_S3_ACCESS_KEY_ID", "").strip()
+BACKUP_S3_SECRET_ACCESS_KEY = os.getenv("BACKUP_S3_SECRET_ACCESS_KEY", "").strip()
+
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -395,6 +457,7 @@ SMS_ENABLED = os.getenv("SMS_ENABLED", "false").strip().lower() in {
 SMS_TIME_ZONE = os.getenv("SMS_TIME_ZONE", TIME_ZONE)
 SMS_HTTP_TIMEOUT = env_float("SMS_HTTP_TIMEOUT", 10)
 SMS_MAX_ATTEMPTS = env_int("SMS_MAX_ATTEMPTS", 5)
+SMS_STALE_DELIVERY_HOURS = env_int("SMS_STALE_DELIVERY_HOURS", 24)
 
 # Celery / Redis
 #
@@ -436,6 +499,10 @@ CELERY_BEAT_SCHEDULE = {
     "cleanup-expired-student-id-exports": {
         "task": "core.tasks.cleanup_expired_student_id_exports",
         "schedule": 24 * 60 * 60.0,
+    },
+    "send-scheduled-report-emails": {
+        "task": "core.tasks.send_scheduled_report_emails",
+        "schedule": 15 * 60.0,
     },
     "phase-out-shs3-students-after-academic-year": {
         "task": "core.tasks.phase_out_shs3_students",

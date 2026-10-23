@@ -116,6 +116,65 @@ class TenantBackupCommandTests(BasePlatformCommandTestCase):
             self._call("tenant_backup", "--schema=nonexistent_xyz")
         self.assertIn("not found", str(ctx.exception))
 
+    @override_settings(
+        BACKUP_OFFSITE_BUCKET="school-backups",
+        BACKUP_KMS_KEY_ID="arn:aws:kms:region:account:key/test-key",
+        BACKUP_S3_REGION="region-1",
+        BACKUP_S3_ENDPOINT_URL="https://objects.example.test",
+        BACKUP_S3_ACCESS_KEY_ID="access-key-placeholder",
+        BACKUP_S3_SECRET_ACCESS_KEY="secret-key-placeholder",
+    )
+    @patch("boto3.client")
+    def test_offsite_upload_requires_kms_and_verifies_object(self, make_client):
+        from tenancy.management.commands.tenant_backup import Command
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            artifact = Path(temporary_directory) / "tenant.dump"
+            artifact.write_bytes(b"synthetic backup bytes")
+            checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            client = Mock()
+            client.head_object.return_value = {
+                "ServerSideEncryption": "aws:kms",
+                "SSEKMSKeyId": "arn:aws:kms:region:account:key/test-key",
+                "ContentLength": artifact.stat().st_size,
+                "Metadata": {"sha256": checksum},
+            }
+            make_client.return_value = client
+
+            result = Command()._upload_offsite_files(
+                "atebubu_test",
+                [(artifact, None)],
+            )
+
+        self.assertEqual(result["bucket"], "school-backups")
+        self.assertEqual(result["objects"][0]["sha256"], checksum)
+        make_client.assert_called_once_with(
+            "s3",
+            region_name="region-1",
+            endpoint_url="https://objects.example.test",
+            aws_access_key_id="access-key-placeholder",
+            aws_secret_access_key="secret-key-placeholder",
+        )
+        self.assertEqual(
+            client.upload_file.call_args.kwargs["ExtraArgs"]["ServerSideEncryption"],
+            "aws:kms",
+        )
+
+    @override_settings(
+        BACKUP_OFFSITE_BUCKET="",
+        BACKUP_KMS_KEY_ID="",
+        BACKUP_S3_REGION="",
+        BACKUP_S3_ACCESS_KEY_ID="",
+        BACKUP_S3_SECRET_ACCESS_KEY="",
+    )
+    def test_offsite_backup_fails_closed_without_bucket_and_kms_configuration(self):
+        with self.assertRaisesMessage(CommandError, "BACKUP_OFFSITE_BUCKET"):
+            self._call(
+                "tenant_backup",
+                "--schema=atebubu_test",
+                "--offsite",
+            )
+
     @patch("shutil.which", return_value="/usr/bin/pg_dump")
     @patch("subprocess.run")
     def test_backup_json_mode(self, mock_run, mock_which):
@@ -155,7 +214,9 @@ class TenantUsageCommandTests(BasePlatformCommandTestCase):
 
     def test_invalid_date_format_raises_error(self):
         with self.assertRaises(CommandError) as ctx:
-            self._call("tenant_usage", "--schema=atebubu_test", "--start-date=invalid-date")
+            self._call(
+                "tenant_usage", "--schema=atebubu_test", "--start-date=invalid-date"
+            )
         self.assertIn("Invalid date format", str(ctx.exception))
 
     def test_start_date_after_end_date_raises_error(self):
@@ -171,7 +232,9 @@ class TenantUsageCommandTests(BasePlatformCommandTestCase):
     def test_all_tenants_summary_json(self):
         out, _ = self._call("tenant_usage", "--all", "--json")
         data = json.loads(out)
-        self.assertEqual(data["total_tenants"], 1)  # only active tenants included in --all
+        self.assertEqual(
+            data["total_tenants"], 1
+        )  # only active tenants included in --all
 
     def _report_for(self, schema="atebubu_test"):
         out, _ = self._call("tenant_usage", f"--schema={schema}", "--json")
@@ -258,7 +321,9 @@ class TenantInvoiceCommandTests(BasePlatformCommandTestCase):
         # 3. Cannot cancel paid invoice
         with self.assertRaises(CommandError) as ctx:
             self._call("tenant_invoice", "--schema=atebubu_test", f"--cancel={inv_no}")
-        self.assertIn("Cannot cancel an invoice that has already been paid", str(ctx.exception))
+        self.assertIn(
+            "Cannot cancel an invoice that has already been paid", str(ctx.exception)
+        )
 
 
 class TenantFeaturesCommandTests(BasePlatformCommandTestCase):
@@ -276,14 +341,18 @@ class TenantFeaturesCommandTests(BasePlatformCommandTestCase):
         self.assertFalse(self.sub.features.get("sms_dispatch"))
 
     def test_set_limit_quota(self):
-        self._call("tenant_features", "--schema=atebubu_test", "--set-limit=max_students=1200")
+        self._call(
+            "tenant_features", "--schema=atebubu_test", "--set-limit=max_students=1200"
+        )
         self.sub.refresh_from_db()
         self.assertEqual(self.sub.features.get("max_students"), 1200)
 
     def test_reset_to_plan_defaults(self):
         self._call("tenant_features", "--schema=atebubu_test", "--reset-to-plan")
         self.sub.refresh_from_db()
-        self.assertEqual(self.sub.features.get("max_students"), 2000)  # Pilot default is 2000
+        self.assertEqual(
+            self.sub.features.get("max_students"), 2000
+        )  # Pilot default is 2000
 
 
 class SupportAccessCommandTests(BasePlatformCommandTestCase):
@@ -400,8 +469,7 @@ class TenantRestoreCommandTests(BasePlatformCommandTestCase):
             proc.stdout = ""
             if "-l" in cmd:
                 proc.stdout = (
-                    "; dummy archive\n"
-                    f"1; 2615 2200 SCHEMA - {toc_schema} postgres\n"
+                    "; dummy archive\n" f"1; 2615 2200 SCHEMA - {toc_schema} postgres\n"
                 )
             return proc
 
@@ -518,11 +586,7 @@ class TenantRestoreCommandTests(BasePlatformCommandTestCase):
             schema,
             name=f"{schema}_{timestamp}.dump",
         )
-        media_archive = (
-            self.backup_root
-            / schema
-            / f"{schema}_media_{timestamp}.tar.gz"
-        )
+        media_archive = self.backup_root / schema / f"{schema}_media_{timestamp}.tar.gz"
         media_archive.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(media_archive, "w:gz") as archive:
             contents = b"restored crest"
@@ -569,12 +633,7 @@ class TenantRestoreCommandTests(BasePlatformCommandTestCase):
         self.assertEqual(data["media_files_count"], 1)
         self.assertEqual(
             (
-                media_root
-                / "tenants"
-                / schema
-                / "school"
-                / "logos"
-                / "crest.png"
+                media_root / "tenants" / schema / "school" / "logos" / "crest.png"
             ).read_bytes(),
             b"restored crest",
         )

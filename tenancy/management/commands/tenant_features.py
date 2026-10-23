@@ -37,8 +37,9 @@ LIMIT_FEATURES = {
     "max_students": "Maximum enrolled students",
     "max_staff": "Maximum staff accounts",
     "max_dormitories": "Maximum configured dormitories",
-    "max_sms_monthly": "Monthly SMS send limit (0=unlimited)",
+    "max_sms_monthly": "Monthly SMS segment limit (0=unlimited)",
 }
+
 
 class Command(BaseCommand):
     """Manage tenant feature flags and quota allocations."""
@@ -98,7 +99,9 @@ class Command(BaseCommand):
             )
 
         if options.get("enable") and options.get("disable"):
-            raise CommandError("Cannot specify both --enable and --disable in the same command.")
+            raise CommandError(
+                "Cannot specify both --enable and --disable in the same command."
+            )
 
         schema_name = options["schema"]
         tenant = Tenant.objects.filter(schema_name=schema_name).first()
@@ -157,7 +160,9 @@ class Command(BaseCommand):
                 metadata={"feature": key, "old": old_val, "new": True},
             )
             self.stdout.write(
-                self.style.SUCCESS(f"[ENABLED] Feature '{key}' is now ENABLED for '{schema_name}'.")
+                self.style.SUCCESS(
+                    f"[ENABLED] Feature '{key}' is now ENABLED for '{schema_name}'."
+                )
             )
 
         # 3. Action: Disable
@@ -190,7 +195,9 @@ class Command(BaseCommand):
         elif options.get("set_limit"):
             expr = options["set_limit"].strip()
             if "=" not in expr:
-                raise CommandError("Provide limit in key=value format (e.g. max_students=2000).")
+                raise CommandError(
+                    "Provide limit in key=value format (e.g. max_students=2000)."
+                )
             key, val_str = expr.split("=", 1)
             key = key.strip()
             val_str = val_str.strip()
@@ -206,7 +213,9 @@ class Command(BaseCommand):
                 if val < 0:
                     raise ValueError
             except ValueError:
-                raise CommandError(f"Limit value must be a non-negative integer: '{val_str}'")
+                raise CommandError(
+                    f"Limit value must be a non-negative integer: '{val_str}'"
+                )
 
             old_val = features.get(key)
             features[key] = val
@@ -233,7 +242,9 @@ class Command(BaseCommand):
                 "plan_tier": sub.plan_tier,
                 "features": sub.features or {},
                 "boolean_features": {
-                    k: sub.features.get(k, PLAN_DEFAULTS.get(sub.plan_tier, {}).get(k, False))
+                    k: sub.features.get(
+                        k, PLAN_DEFAULTS.get(sub.plan_tier, {}).get(k, False)
+                    )
                     for k in BOOLEAN_FEATURES
                 },
                 "limit_features": {
@@ -270,7 +281,11 @@ class Command(BaseCommand):
         col_fmt = "  {:<24} {:<12} {:<36}"
         for key, desc in BOOLEAN_FEATURES.items():
             val = features.get(key, plan_defs.get(key, False))
-            status_str = self.style.SUCCESS("[ENABLED]") if val else self.style.ERROR("[DISABLED]")
+            status_str = (
+                self.style.SUCCESS("[ENABLED]")
+                if val
+                else self.style.ERROR("[DISABLED]")
+            )
             self.stdout.write(col_fmt.format(key, status_str, desc))
 
         self.stdout.write("")

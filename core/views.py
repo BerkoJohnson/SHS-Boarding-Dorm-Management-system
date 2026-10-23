@@ -39,6 +39,7 @@ from .models import (
     ExeatReconciliation,
     SMSConfiguration,
     SMSDelivery,
+    GroupSMSCampaign,
     House,
     Dormitory,
     DormitoryRoom,
@@ -72,6 +73,7 @@ from .models import (
     DataExportLog,
     AuditEvent,
     DisputeCase,
+    ScheduledReportEmail,
 )
 from .forms import (
     ExeatCreateForm,
@@ -87,6 +89,8 @@ from .forms import (
     OperationalSettingsForm,
     DisputeCaseForm,
     DisputeDecisionForm,
+    GroupSMSForm,
+    ScheduledReportEmailForm,
     DisciplinaryRecordForm,
     ReportFilterForm,
     report_uses_period_filters,
@@ -124,6 +128,12 @@ from .services.roll_call import (
     resolve_absence_follow_up,
 )
 from .services.sms import enqueue_exeat_event_sms
+from .services.group_sms import (
+    create_group_sms_campaign,
+    decide_group_sms_campaign,
+    get_group_sms_recipients,
+)
+from .services.scheduled_reports import next_report_run
 from .services.student_import import (
     commit_student_roster,
     validate_student_roster,
@@ -816,8 +826,7 @@ def house_list_view(request):
             )
             dorm.is_over_capacity = dorm.boarder_count > dorm.authorized_capacity
             dorm.uses_capacity_exception = (
-                dorm.active_exception_places > 0
-                and dorm.boarder_count > dorm.capacity
+                dorm.active_exception_places > 0 and dorm.boarder_count > dorm.capacity
             )
             for room in dorm.rooms.all():
                 room.occupancy_rate = (
@@ -828,9 +837,7 @@ def house_list_view(request):
             housed_boarders += dorm.boarder_count
             house_capacity += dorm.authorized_capacity
             if dorm.uses_capacity_exception:
-                house.attention_items.append(
-                    f"Using temporary capacity: {dorm.name}"
-                )
+                house.attention_items.append(f"Using temporary capacity: {dorm.name}")
             if dorm.is_over_capacity:
                 over_capacity_dormitories.append(dorm.name)
             elif dorm.authorized_capacity and dorm.occupancy_rate >= 90:
@@ -875,8 +882,7 @@ def house_list_view(request):
     if house_scope is not None:
         boarders = boarders.filter(house_id=house_scope.pk)
         unassigned_boarders = boarders.filter(
-            Q(dormitory__isnull=True)
-            | ~Q(dormitory__house_id=F("house_id"))
+            Q(dormitory__isnull=True) | ~Q(dormitory__house_id=F("house_id"))
         ).count()
         capacity_qs = capacity_qs.filter(house_id=house_scope.pk)
     else:
@@ -1193,10 +1199,9 @@ def student_roster_import_view(request):
     error_count = 0
     imported_count = 0
     preview = None
-    is_json_request = (
-        request.headers.get("x-requested-with") == "XMLHttpRequest"
-        and "application/json" in request.headers.get("accept", "")
-    )
+    is_json_request = request.headers.get(
+        "x-requested-with"
+    ) == "XMLHttpRequest" and "application/json" in request.headers.get("accept", "")
     if request.method == "POST" and form.is_valid():
         preview = validate_student_roster(form.cleaned_data["roster_file"])
         errors = preview.errors
@@ -1232,9 +1237,7 @@ def student_roster_import_view(request):
             )
     elif request.method == "POST" and is_json_request:
         errors = [
-            error
-            for field_errors in form.errors.values()
-            for error in field_errors
+            error for field_errors in form.errors.values() for error in field_errors
         ]
         return JsonResponse(
             {
@@ -3827,9 +3830,7 @@ def gate_verify_pass_view(request):
                     status=Exeat.Status.APPROVED,
                 ).exclude(movement__actual_return__isnull=False)
             )
-            candidates.sort(
-                key=lambda candidate: _gate_lookup_sort_key(candidate, now)
-            )
+            candidates.sort(key=lambda candidate: _gate_lookup_sort_key(candidate, now))
             if len(candidates) == 1:
                 exeat = candidates[0]
             else:
@@ -3995,6 +3996,104 @@ def report_export_view(request):
 @login_required
 @role_required(*REPORT_ROLES)
 @tenant_feature_required("advanced_reports")
+def scheduled_report_emails_view(request):
+    """Manage report subscriptions delivered only to the current staff account."""
+    form = ScheduledReportEmailForm(request.POST or None)
+    if request.method == "POST":
+        action = request.POST.get("action", "subscribe")
+        if action == "deactivate":
+            subscription = get_object_or_404(
+                ScheduledReportEmail,
+                pk=request.POST.get("subscription_id"),
+                user=request.user,
+            )
+            subscription.is_active = False
+            subscription.save(update_fields=("is_active", "updated_at"))
+            AuditEvent.record(
+                actor=request.user,
+                action=AuditEvent.Action.ADMIN_EDIT,
+                summary="Scheduled report email subscription deactivated.",
+                target_type="ScheduledReportEmail",
+                target_id=subscription.pk,
+                metadata={"report": subscription.report_type},
+            )
+            messages.success(request, "Scheduled report email deactivated.")
+            return redirect("core:scheduled_report_emails")
+
+        if not request.user.email:
+            form.add_error(None, "Add an email address to your staff account first.")
+        elif form.is_valid():
+            cleaned = form.cleaned_data
+            weekday = int(cleaned["weekday"])
+            next_run_at = next_report_run(
+                cleaned["frequency"],
+                cleaned["send_at"],
+                weekday,
+            )
+            subscription, created = ScheduledReportEmail.objects.get_or_create(
+                user=request.user,
+                report_type=cleaned["report_type"],
+                frequency=cleaned["frequency"],
+                defaults={
+                    "weekday": weekday,
+                    "send_at": cleaned["send_at"],
+                    "file_format": cleaned["file_format"],
+                    "next_run_at": next_run_at,
+                },
+            )
+            if not created:
+                subscription.weekday = weekday
+                subscription.send_at = cleaned["send_at"]
+                subscription.file_format = cleaned["file_format"]
+                subscription.next_run_at = next_run_at
+                subscription.last_error = ""
+                subscription.is_active = True
+                subscription.save(
+                    update_fields=(
+                        "weekday",
+                        "send_at",
+                        "file_format",
+                        "next_run_at",
+                        "last_error",
+                        "is_active",
+                        "updated_at",
+                    )
+                )
+            AuditEvent.record(
+                actor=request.user,
+                action=AuditEvent.Action.ADMIN_EDIT,
+                summary=(
+                    "Scheduled report email subscription created."
+                    if created
+                    else "Scheduled report email subscription updated."
+                ),
+                target_type="ScheduledReportEmail",
+                target_id=subscription.pk,
+                metadata={
+                    "report": subscription.report_type,
+                    "frequency": subscription.frequency,
+                    "format": subscription.file_format,
+                },
+            )
+            messages.success(
+                request,
+                "Report subscription saved. Delivery is sent only to your staff email.",
+            )
+            return redirect("core:scheduled_report_emails")
+
+    context = {
+        "form": form,
+        "subscriptions": ScheduledReportEmail.objects.filter(user=request.user),
+        "user_email": request.user.email,
+        "active_tab": "reports",
+        "school_configuration": SchoolConfiguration.get_solo(),
+    }
+    return render(request, "core/reports/scheduled_emails.html", context)
+
+
+@login_required
+@role_required(*REPORT_ROLES)
+@tenant_feature_required("advanced_reports")
 def boarding_kpi_view(request):
     """Show a scoped boarding KPI pack for the selected term or date range."""
     from core.services.reports import get_boarding_kpi_pack
@@ -4145,6 +4244,7 @@ def boarding_demographics_view(request):
 @tenant_feature_required("advanced_reports")
 def sms_usage_view(request):
     """Show filtered SMS delivery health and the tenant-wide monthly quota."""
+    from core.models import StaffNotification
     from core.services.reports import get_sms_usage_summary
     from tenancy.entitlements import quota_limit, sms_monthly_usage
 
@@ -4181,6 +4281,11 @@ def sms_usage_view(request):
         report = paginate_report(report, request)
     context = {
         "report": report,
+        "sms_alerts": StaffNotification.objects.filter(
+            user=request.user,
+            kind=StaffNotification.Kind.SMS_ALERT,
+            read_at__isnull=True,
+        )[:5],
         "report_filters": report_filters,
         "report_filter_fields": ("date_from", "date_to", "term"),
         "report_filters_valid": report_filters_valid,
@@ -4208,6 +4313,79 @@ def sms_usage_view(request):
     if request.htmx and request.GET.get("print") != "1":
         return render(request, "core/reports/partials/sms_usage_results.html", context)
     return render(request, template, context)
+
+
+@login_required
+@role_required(StaffRole.ADMIN)
+@tenant_feature_required("advanced_reports")
+def group_sms_view(request):
+    """Compose guardian group messages and review campaign approvals."""
+    form = GroupSMSForm(request.POST or None)
+    estimated_recipients = None
+    preview_recipients = []
+    if request.method == "POST":
+        action = request.POST.get("action", "preview")
+        if action in ("approve", "reject"):
+            campaign = get_object_or_404(
+                GroupSMSCampaign,
+                pk=request.POST.get("campaign_id"),
+            )
+            try:
+                decide_group_sms_campaign(
+                    campaign_id=campaign.pk,
+                    actor=request.user,
+                    approve=action == "approve",
+                    decision_note=request.POST.get("decision_note", ""),
+                )
+            except ValidationError as error:
+                messages.error(request, " ".join(error.messages))
+            else:
+                messages.success(
+                    request,
+                    (
+                        "Campaign approved and queued."
+                        if action == "approve"
+                        else "Campaign rejected."
+                    ),
+                )
+            return redirect("core:group_sms")
+
+        if form.is_valid():
+            cleaned = form.cleaned_data
+            try:
+                recipients = get_group_sms_recipients(
+                    cleaned["scope"], cleaned.get("house")
+                )
+                estimated_recipients = len(recipients)
+                preview_recipients = [
+                    (name, f"...{phone[-4:]}") for phone, name in recipients.items()
+                ]
+                if action == "submit":
+                    campaign = create_group_sms_campaign(
+                        actor=request.user,
+                        scope=cleaned["scope"],
+                        house=cleaned.get("house"),
+                        message=cleaned["message"],
+                    )
+                    messages.success(
+                        request,
+                        f"Campaign submitted for approval ({campaign.recipient_count} recipients).",
+                    )
+                    return redirect("core:group_sms")
+            except ValidationError as error:
+                form.add_error(None, error)
+
+    context = {
+        "form": form,
+        "estimated_recipients": estimated_recipients,
+        "preview_recipients": preview_recipients,
+        "campaigns": GroupSMSCampaign.objects.select_related(
+            "house", "created_by", "decided_by"
+        )[:30],
+        "school_configuration": SchoolConfiguration.get_solo(),
+        "active_tab": "reports",
+    }
+    return render(request, "core/reports/group_sms.html", context)
 
 
 @login_required
@@ -4383,6 +4561,12 @@ def set_sms_enabled_view(request):
     if enabled_value not in {"true", "false"}:
         messages.error(
             request, "Choose whether SMS notifications should be enabled or disabled."
+        )
+        return redirect("core:configuration")
+    if enabled_value == "true" and not settings.BACKGROUND_JOBS_ENABLED:
+        messages.error(
+            request,
+            "Cannot enable SMS while background jobs are disabled. Add a worker and Beat service first.",
         )
         return redirect("core:configuration")
 
@@ -4679,10 +4863,9 @@ def gate_duty_assignments_view(request):
             )
             messages.success(request, "Gate duty assignment created.")
             return redirect("core:gate_duty_assignments")
-    assignments = (
-        GateDutyAssignment.objects.select_related("user", "approved_by")
-        .order_by("-starts_at")[:100]
-    )
+    assignments = GateDutyAssignment.objects.select_related(
+        "user", "approved_by"
+    ).order_by("-starts_at")[:100]
     return render(
         request,
         "core/operations/gate_duty.html",
@@ -4691,9 +4874,7 @@ def gate_duty_assignments_view(request):
             "assignments": assignments,
             "enforcement_enabled": gate_duty_enforcement_enabled(),
             "active_assignments": [
-                assignment
-                for assignment in assignments
-                if assignment.is_active_at()
+                assignment for assignment in assignments if assignment.is_active_at()
             ],
         },
     )
@@ -5020,9 +5201,9 @@ def operational_settings_view(request):
 
 @login_required
 def notifications_view(request):
-    notifications = request.user.staff_notifications.select_related(
-        "user"
-    ).order_by("-created_at")
+    notifications = request.user.staff_notifications.select_related("user").order_by(
+        "-created_at"
+    )
     unread = notifications.filter(read_at__isnull=True)
     if request.method == "POST":
         if request.POST.get("action") == "read_all":

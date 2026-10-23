@@ -175,6 +175,9 @@ def send_sms_delivery_task(
         delivery_id,
         delivery.attempts,
     )
+    from core.services.sms_alerts import notify_sms_delivery_failed
+
+    notify_sms_delivery_failed(delivery)
     return False
 
 
@@ -187,12 +190,23 @@ def dispatch_queued_sms_deliveries(tenant_schema: str | None = None) -> int:
     )
 
 
+@shared_task
+def send_scheduled_report_emails(
+    tenant_schema: str | None = None,
+) -> int | dict[str, int]:
+    from core.services.scheduled_reports import dispatch_due_report_emails
+
+    return _run_for_each_tenant(
+        send_scheduled_report_emails,
+        tenant_schema,
+        dispatch_due_report_emails,
+    )
+
+
 def _dispatch_queued_sms_deliveries_for_current_tenant() -> int:
     from core.models import SMSConfiguration, SMSDelivery
     from core.services.sms import enqueue_sms_delivery_task
-
-    if not SMSConfiguration.is_enabled():
-        return 0
+    from core.services.sms_alerts import notify_sms_delivery_failed
 
     tenant_schema = None
     if settings.TENANCY_ENABLED:
@@ -202,6 +216,39 @@ def _dispatch_queued_sms_deliveries_for_current_tenant() -> int:
         tenant_schema = getattr(schema, "schema_name", None) if schema else None
 
     now = timezone.now()
+    stale_cutoff = now - timedelta(
+        hours=max(1, int(getattr(settings, "SMS_STALE_DELIVERY_HOURS", 24)))
+    )
+    stale_deliveries = list(
+        SMSDelivery.objects.filter(
+            status__in=(SMSDelivery.Status.QUEUED, SMSDelivery.Status.PROCESSING),
+            created_at__lt=stale_cutoff,
+        ).order_by("updated_at")[:500]
+    )
+    for delivery in stale_deliveries:
+        claimed = SMSDelivery.objects.filter(
+            pk=delivery.pk,
+            status__in=(SMSDelivery.Status.QUEUED, SMSDelivery.Status.PROCESSING),
+            created_at__lt=stale_cutoff,
+        ).update(
+            status=SMSDelivery.Status.FAILED,
+            last_error="Expired stale SMS reservation",
+            updated_at=now,
+        )
+        if claimed:
+            delivery.status = SMSDelivery.Status.FAILED
+            delivery.last_error = "Expired stale SMS reservation"
+            notify_sms_delivery_failed(
+                delivery,
+                failure_reason=(
+                    f"Delivery {delivery.pk} expired from the outbox after "
+                    f"{getattr(settings, 'SMS_STALE_DELIVERY_HOURS', 24)} hours without sending."
+                ),
+            )
+
+    if not SMSConfiguration.is_enabled():
+        return 0
+
     SMSDelivery.objects.filter(
         status=SMSDelivery.Status.PROCESSING,
         last_attempted_at__lt=now - timedelta(minutes=5),
@@ -367,9 +414,7 @@ def _expire_unfinished_roll_calls_for_current_tenant() -> int:
                 "records retained for review."
             )
             session.notes = (
-                f"{session.notes.rstrip()}\n{note}"
-                if session.notes
-                else note
+                f"{session.notes.rstrip()}\n{note}" if session.notes else note
             )
             session.save(update_fields=["status", "notes", "updated_at"])
             expired_count += 1
