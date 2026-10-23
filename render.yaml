@@ -37,6 +37,11 @@
 # `website.W001` system check, because no page here may link to a tenant.
 
 services:
+  - type: redis
+    name: shs-boarding-staging-cache
+    plan: free
+    maxmemoryPolicy: noeviction
+
   - type: web
     name: shs-boarding-staging
     runtime: python
@@ -191,12 +196,18 @@ services:
         value: "1"
       # Shared cache for cluster-wide rate limits (required in production).
       - key: CACHE_BACKEND
-        sync: false
+        value: django.core.cache.backends.redis.RedisCache
       - key: CACHE_LOCATION
-        sync: false
+        fromService:
+          type: redis
+          name: shs-boarding-staging-cache
+          property: connectionString
       # Celery broker (needed only if the worker/beat services are enabled).
       - key: REDIS_URL
-        sync: false
+        fromService:
+          type: redis
+          name: shs-boarding-staging-cache
+          property: connectionString
       # This staging blueprint intentionally deploys the web service only.
       # Setting this to False makes that choice explicit: `manage.py check`
       # emits core.W003, Celery Beat refuses to load periodic rows, and the
