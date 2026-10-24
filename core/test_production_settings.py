@@ -582,3 +582,35 @@ class BuildSettingsTests(SimpleTestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_build_settings_preserve_explicit_neon_profile(self):
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DATABASE_PROFILE": "neon",
+                "PGHOST": "neon.example.neon.tech",
+                "PGDATABASE": "neon_db",
+                "PGUSER": "neon_user",
+                "PGPASSWORD": "test-password",
+                "PGSSLMODE": "require",
+                "MEDIA_STORAGE_BACKEND": "filesystem",
+                "TENANCY_ENABLED": "true",
+            }
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import schoolsystem.settings.build as settings; "
+                "assert settings.DATABASE_PROFILE == 'neon'; "
+                "assert settings.DATABASES['default']['HOST'] == "
+                "'neon.example.neon.tech'",
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)

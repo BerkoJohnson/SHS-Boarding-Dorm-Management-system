@@ -6,20 +6,23 @@ secrets (database, object storage, or ``DJANGO_SECRET_KEY``). Importing
 with a non-zero exit whenever a required secret is missing or blank in the
 dashboard, which aborts the whole deploy.
 
-This module forces the secrets-free ``local``/``filesystem`` profiles before
-importing ``base`` (which validates the selected profiles at import time) and
-supplies a throwaway secret key. The static-file pipeline is unchanged: ``base``
-already selects WhiteNoise's ``CompressedManifestStaticFilesStorage``, so the
-collected manifest matches production. Runtime still uses
+This module defaults to the secrets-free ``local``/``filesystem`` profiles
+before importing ``base`` and supplies a throwaway secret key. An explicitly
+configured database profile (such as Render's ``neon`` profile) is preserved,
+so build-time checks that inspect the database use the configured database
+instead of localhost. The static-file pipeline is unchanged: ``base`` already
+selects WhiteNoise's ``CompressedManifestStaticFilesStorage``, so the collected
+manifest matches production. Runtime still uses
 ``schoolsystem.settings.production`` (see ``render.yaml`` startCommand).
 """
 
 import os
 
-# Force the secrets-free profiles *before* importing base. ``python-dotenv``
-# never overrides variables that are already set, so a local ``.env`` cannot
-# re-introduce a required secret here.
-os.environ["DATABASE_PROFILE"] = "local"
+# Default to the secrets-free profile when no database profile is configured.
+# Preserve an explicit hosting profile so database checks don't fall back to
+# localhost during the build.
+if not os.getenv("DATABASE_PROFILE", "").strip():
+    os.environ["DATABASE_PROFILE"] = "local"
 os.environ["MEDIA_STORAGE_BACKEND"] = "filesystem"
 # Render still injects runtime env vars into the build container. Populate the
 # minimal cache/mail values that production guards expect so static collection
