@@ -1,5 +1,6 @@
 import csv
 import io
+import random
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -221,6 +222,24 @@ def _choice_value(value, choices, field, location, errors, default=""):
             return choice_value
     errors.append(f"{location}: invalid {field} '{value}'.")
     return default
+
+
+def _balanced_dormitory(dormitories, occupancy, limits):
+    available = [
+        dormitory
+        for dormitory in dormitories
+        if occupancy.get(dormitory.pk, 0) < limits[dormitory.pk]
+    ]
+    candidates = available or dormitories
+    if not candidates:
+        return None
+    least_occupied = min(occupancy.get(dormitory.pk, 0) for dormitory in candidates)
+    tied = [
+        dormitory
+        for dormitory in candidates
+        if occupancy.get(dormitory.pk, 0) == least_occupied
+    ]
+    return tied[0] if len(tied) == 1 else random.choice(tied)
 
 
 def validate_student_roster(uploaded_file, progress_callback=None):
@@ -497,23 +516,32 @@ def validate_student_roster(uploaded_file, progress_callback=None):
                     f"{location}: dormitory '{dormitory_value}' is ambiguous in {house.name}."
                 )
         elif residency == Student.ResidencyStatus.BOARDING and house:
-            possible_dormitories = boarding_dormitories.get(
-                (
-                    house.pk,
-                    (
-                        Dormitory.GenderBlock.MALE
-                        if gender == Student.Gender.MALE
-                        else Dormitory.GenderBlock.FEMALE
-                    ),
-                ),
-                [],
+            gender_block = None
+            if gender == Student.Gender.MALE:
+                gender_block = Dormitory.GenderBlock.MALE
+            elif gender == Student.Gender.FEMALE:
+                gender_block = Dormitory.GenderBlock.FEMALE
+            possible_dormitories = (
+                boarding_dormitories.get((house.pk, gender_block), [])
+                if gender_block
+                else []
             )
-            if len(possible_dormitories) == 1:
-                dormitory = possible_dormitories[0]
-            elif len(possible_dormitories) > 1:
+            if possible_dormitories:
+                dormitory = _balanced_dormitory(
+                    possible_dormitories,
+                    dormitory_occupancy,
+                    dormitory_limits,
+                )
+                if dormitory is not None:
+                    row["dormitory"] = dormitory.name
+            else:
                 errors.append(
-                    f"{location}: specify a dormitory; {house.name} has multiple "
-                    "blocks for this student's gender."
+                    f"{location}: no {gender or 'gender-compatible'} dormitory "
+                    f"is configured in {house.name}."
+                )
+            if possible_dormitories and dormitory is None:
+                errors.append(
+                    f"{location}: no gender-compatible dormitory is available."
                 )
 
         room_value = row.get("room", "").strip()

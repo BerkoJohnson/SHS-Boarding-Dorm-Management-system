@@ -1822,7 +1822,11 @@ no-write review with `import_roster ... --dry-run`.
 
 - **Required:** Admission No, Index No, Full Name, Gender (`Male`/`Female`), Programme.
 - **Optional:** Date of Birth (`YYYY-MM-DD` or `DD/MM/YYYY`), Class, Residency (`Boarder`/`Day`),
-  House, Dormitory, Room, Status, Guardian Name, Guardian Phone, Guardian Alt Phone.
+  House, Dormitory, Room, Status, Guardian Name, Guardian Phone, Guardian Alt Phone. When a
+  boarding student's Dormitory is blank, the importer automatically selects a gender-compatible
+  dormitory in the chosen house. If multiple matching dormitories exist, it chooses from the
+  least-occupied blocks and randomizes ties; an explicitly provided dormitory is retained and
+  validated.
 - **Rules:** duplicate admission/index numbers reject the whole batch; boarders need a valid,
   gender-compatible house/dormitory; room capacity is enforced; existing students are never
   silently overwritten.

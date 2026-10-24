@@ -888,6 +888,10 @@ class StudentRegistryTests(TestCase):
             validation.sample_rows[0]["values"]["full_name"],
             "Preview Student",
         )
+        self.assertEqual(
+            validation.sample_rows[0]["values"]["dormitory"],
+            self.male_dorm.name,
+        )
         self.assertFalse(Student.objects.exists())
 
         imported, errors = commit_student_roster(validation)
@@ -958,6 +962,100 @@ class StudentRegistryTests(TestCase):
             validation.errors,
         )
 
+    def test_roster_auto_assigns_gender_blocks_and_balances_population(self):
+        second_boys_dorm = Dormitory.objects.create(
+            house=self.house,
+            name="Boys Annex",
+            gender=Dormitory.GenderBlock.MALE,
+            capacity=80,
+        )
+        self.create_boarding_student("EXISTING-BOYS-1", dormitory=self.male_dorm)
+        self.create_boarding_student("EXISTING-BOYS-2", dormitory=self.male_dorm)
+        self.create_boarding_student("EXISTING-BOYS-3", dormitory=second_boys_dorm)
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "AUTO-BOYS-1",
+                    "AUTO-BOYS-ID-1",
+                    "New Boy One",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                    "",
+                ],
+                [
+                    "AUTO-BOYS-2",
+                    "AUTO-BOYS-ID-2",
+                    "New Boy Two",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                    "",
+                ],
+                [
+                    "AUTO-BOYS-3",
+                    "AUTO-BOYS-ID-3",
+                    "New Boy Three",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                    "",
+                ],
+                [
+                    "AUTO-GIRL-1",
+                    "AUTO-GIRL-ID-1",
+                    "New Girl",
+                    "Female",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                    "",
+                ],
+            ],
+            headers=[
+                "Admission No.",
+                "Index Number",
+                "Full Name",
+                "Gender",
+                "Programme",
+                "House",
+                "Class",
+                "Dormitory",
+            ],
+        )
+
+        with patch(
+            "core.services.student_import.random.choice",
+            side_effect=lambda candidates: candidates[0],
+        ) as choose_random_tie:
+            validation = validate_student_roster(uploaded_file)
+
+        self.assertTrue(validation.is_valid, validation.errors)
+        assigned_dormitories = [item.student.dormitory for item in validation.staged]
+        self.assertEqual(
+            assigned_dormitories,
+            [
+                second_boys_dorm,
+                second_boys_dorm,
+                self.male_dorm,
+                self.female_dorm,
+            ],
+        )
+        self.assertEqual(
+            Student.objects.filter(dormitory=self.male_dorm).count()
+            + assigned_dormitories.count(self.male_dorm),
+            Student.objects.filter(dormitory=second_boys_dorm).count()
+            + assigned_dormitories.count(second_boys_dorm),
+        )
+        choose_random_tie.assert_called_once_with([second_boys_dorm, self.male_dorm])
+        self.assertEqual(
+            validation.sample_rows[0]["values"]["dormitory"],
+            second_boys_dorm.name,
+        )
+
     def test_web_preview_and_confirmation_share_the_service_validation(self):
         row = [
             "ADM-WEB-PREVIEW",
@@ -979,6 +1077,10 @@ class StudentRegistryTests(TestCase):
         preview = preview_response.json()
         self.assertTrue(preview["valid"])
         self.assertEqual(preview["row_count"], 1)
+        self.assertEqual(
+            preview["sample_rows"][0]["values"]["dormitory"],
+            self.male_dorm.name,
+        )
         self.assertFalse(Student.objects.exists())
 
         import_response = self.client.post(
@@ -1076,6 +1178,7 @@ class StudentRegistryTests(TestCase):
         self.assertIn("Roster validation passed", output.getvalue())
         self.assertIn("Rows validated: 1", output.getvalue())
         self.assertIn("Dry Run Student", output.getvalue())
+        self.assertIn("dormitory': 'Boys Block'", output.getvalue())
         self.assertFalse(Student.objects.exists())
 
     def test_xlsx_import_normalizes_house_and_treats_unallocated_class_as_blank(self):
