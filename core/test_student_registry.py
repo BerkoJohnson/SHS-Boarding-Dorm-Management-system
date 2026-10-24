@@ -895,6 +895,69 @@ class StudentRegistryTests(TestCase):
         self.assertEqual((imported, errors), (1, []))
         self.assertTrue(Student.objects.filter(admission_no="ADM-PREVIEW").exists())
 
+    def test_roster_validation_avoids_per_student_full_clean_queries(self):
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "ADM-NO-FULL-CLEAN",
+                    "IDX-NO-FULL-CLEAN",
+                    "Validation Student",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                ],
+            ]
+        )
+
+        with patch.object(
+            Student,
+            "full_clean",
+            side_effect=AssertionError("per-row full_clean must not run"),
+        ):
+            validation = validate_student_roster(uploaded_file)
+
+        self.assertTrue(validation.is_valid, validation.errors)
+
+    def test_roster_validation_checks_day_student_placement_without_full_clean(self):
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "ADM-DAY-DORM",
+                    "IDX-DAY-DORM",
+                    "Day Student",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                    "Day",
+                    "Boys Block",
+                ],
+            ],
+            headers=[
+                "Admission No.",
+                "Index Number",
+                "Full Name",
+                "Gender",
+                "Programme",
+                "House",
+                "Class",
+                "Residency",
+                "Dormitory",
+            ],
+        )
+
+        validation = validate_student_roster(uploaded_file)
+
+        self.assertFalse(validation.is_valid)
+        self.assertTrue(
+            any(
+                "day students cannot be assigned a dormitory" in error.lower()
+                for error in validation.errors
+            ),
+            validation.errors,
+        )
+
     def test_web_preview_and_confirmation_share_the_service_validation(self):
         row = [
             "ADM-WEB-PREVIEW",

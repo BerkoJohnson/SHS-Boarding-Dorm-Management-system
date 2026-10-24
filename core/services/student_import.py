@@ -631,12 +631,63 @@ def validate_student_roster(uploaded_file, progress_callback=None):
             status=status,
         )
         try:
-            student.full_clean()
+            # Uniqueness and placement checks are performed in batches above.
+            # Model.full_clean() would repeat database lookups for unique
+            # identifiers and capacity checks for every row, making large
+            # uploads exceed the web worker timeout.
+            student.clean_fields(
+                exclude=(
+                    "programme",
+                    "house",
+                    "dormitory",
+                    "room",
+                    "class_group",
+                    "guardian",
+                )
+            )
         except ValidationError as error:
             errors.extend(
                 f"{location}: {field}: {message}"
                 for field, messages in error.message_dict.items()
                 for message in messages
+            )
+        if status == Student.EnrollmentStatus.COMPLETED:
+            errors.append(
+                f"{location}: completed students must be processed through "
+                "the audited phase-out workflow."
+            )
+        if residency == Student.ResidencyStatus.DAY and dormitory:
+            errors.append(f"{location}: day students cannot be assigned a dormitory.")
+        if residency == Student.ResidencyStatus.DAY and room:
+            errors.append(f"{location}: day students cannot be assigned a room.")
+        if residency == Student.ResidencyStatus.BOARDING and not house:
+            errors.append(f"{location}: boarding students must be assigned a house.")
+        if residency == Student.ResidencyStatus.BOARDING and not dormitory:
+            errors.append(
+                f"{location}: boarding students must be assigned a dormitory."
+            )
+        if (
+            dormitory
+            and gender
+            and dormitory.gender
+            != (
+                Dormitory.GenderBlock.MALE
+                if gender == Student.Gender.MALE
+                else Dormitory.GenderBlock.FEMALE
+            )
+        ):
+            errors.append(
+                f"{location}: gender mismatch; {dormitory.name} is not compatible "
+                "with this student's gender."
+            )
+        if (
+            class_group
+            and class_group.programme_id
+            and programme
+            and programme.pk != class_group.programme_id
+        ):
+            errors.append(
+                f"{location}: class belongs to a different programme."
             )
         if (
             room
