@@ -34,8 +34,10 @@ os.environ.setdefault("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBack
 from .base import *  # noqa: E402,F401,F403
 
 # ``base`` intentionally leaves SECRET_KEY to the environment-specific modules;
-# static collection only needs a non-empty value to boot the settings.
-SECRET_KEY = "collectstatic-build-only-insecure-key-not-used-at-runtime"
+# use the configured key when present and keep static builds bootable otherwise.
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip() or (
+    "collectstatic-build-only-insecure-key-not-used-at-runtime"
+)
 
 DEBUG = False
 ALLOWED_HOSTS = ["*"]

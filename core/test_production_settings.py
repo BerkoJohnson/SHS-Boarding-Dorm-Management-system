@@ -614,3 +614,22 @@ class BuildSettingsTests(SimpleTestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_build_settings_preserve_explicit_secret_key(self):
+        environment = os.environ.copy()
+        environment["DJANGO_SECRET_KEY"] = "configured-build-secret-key"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import schoolsystem.settings.build as settings; "
+                "assert settings.SECRET_KEY == 'configured-build-secret-key'",
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
