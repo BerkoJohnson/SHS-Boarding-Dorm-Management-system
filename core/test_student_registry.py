@@ -923,6 +923,43 @@ class StudentRegistryTests(TestCase):
 
         self.assertTrue(validation.is_valid, validation.errors)
 
+    def test_roster_validation_avoids_guardian_full_clean_queries(self):
+        uploaded_file = self._csv_upload(
+            [
+                [
+                    "ADM-GUARDIAN-NO-FULL-CLEAN",
+                    "IDX-GUARDIAN-CLEAN",
+                    "Guardian Validation Student",
+                    "Male",
+                    "GSCI",
+                    "Red House",
+                    "1A1",
+                    "Guardian One",
+                    "+233240000099",
+                ],
+            ],
+            headers=[
+                "Admission No.",
+                "Index Number",
+                "Full Name",
+                "Gender",
+                "Programme",
+                "House",
+                "Class",
+                "Guardian Name",
+                "Guardian Phone",
+            ],
+        )
+
+        with patch.object(
+            Guardian,
+            "full_clean",
+            side_effect=AssertionError("per-row guardian full_clean must not run"),
+        ):
+            validation = validate_student_roster(uploaded_file)
+
+        self.assertTrue(validation.is_valid, validation.errors)
+
     def test_roster_validation_checks_day_student_placement_without_full_clean(self):
         uploaded_file = self._csv_upload(
             [

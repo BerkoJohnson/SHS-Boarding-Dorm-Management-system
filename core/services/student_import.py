@@ -611,7 +611,7 @@ def validate_student_roster(uploaded_file, progress_callback=None):
                     phone_number=guardian_phone,
                     alt_phone_number=guardian_alt_phone or None,
                 )
-                candidate.full_clean()
+                candidate.clean_fields()
             except ValidationError as error:
                 errors.extend(
                     f"{location}: guardian {field}: {message}"
