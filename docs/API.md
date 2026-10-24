@@ -309,6 +309,12 @@ the current token stays valid.
   A/S/H/T.
 - `notifications` — unread counts and the five newest items.
 
+`/reference/` limits houses, dormitories, rooms, staff, and student counts to
+the assigned house for house-scoped staff. School-wide administrators and
+senior housemasters receive school-wide structure. Other roles without a house
+assignment receive no house structure; academic terms and class/programme
+choices remain school-wide reference data.
+
 Notification IDs are namespaced: `staff:<uuid>` and `roll_call:<uuid>`. A bare
 UUID is also accepted for convenience. Each item has `source`, `kind`,
 `kind_display`, `title`, `message`, `url`, `read_at`, `is_read`, `created_at`.

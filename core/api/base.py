@@ -21,6 +21,7 @@ from django.core.exceptions import (
 )
 from django.http import Http404, HttpResponse, JsonResponse
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 
 
 class APIError(Exception):
@@ -283,7 +284,7 @@ def api_endpoint(
                     fields=fields,
                 )
 
-        return wrapper
+        return csrf_exempt(wrapper)
 
     return decorator
 

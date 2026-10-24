@@ -1,7 +1,7 @@
 import json
 
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 from datetime import timedelta
 
@@ -55,6 +55,16 @@ class LoginTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("username", response.json()["error"]["fields"])
+
+    def test_login_api_is_not_blocked_by_browser_csrf_checks(self):
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(
+            "/api/v1/auth/login/",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "validation_error")
 
     def test_malformed_json_returns_400(self):
         response = self.client.post(
