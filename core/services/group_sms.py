@@ -7,6 +7,7 @@ from django.utils import timezone
 from django_pgschemas.schema import get_current_schema
 
 from core.models import (
+    AuditEvent,
     GroupSMSCampaign,
     SMSConfiguration,
     SMSDelivery,
@@ -64,16 +65,35 @@ def get_group_sms_recipients(scope, house=None):
     return recipients
 
 
+@transaction.atomic
 def create_group_sms_campaign(*, actor, scope, house, message):
     _require_sms_administrator(actor)
     recipients = get_group_sms_recipients(scope, house)
-    return GroupSMSCampaign.objects.create(
+    campaign = GroupSMSCampaign.objects.create(
         scope=scope,
         house=house,
         message=message,
         recipient_count=len(recipients),
         created_by=actor,
     )
+    AuditEvent.record(
+        actor=actor,
+        action=AuditEvent.Action.ADMIN_EDIT,
+        summary=(
+            f"Created guardian SMS campaign for {scope} "
+            f"({campaign.recipient_count} recipients)."
+        ),
+        target_type="GroupSMSCampaign",
+        target_id=campaign.pk,
+        after={
+            "status": campaign.status,
+            "scope": campaign.scope,
+            "recipient_count": campaign.recipient_count,
+            "house_id": str(campaign.house_id) if campaign.house_id else None,
+        },
+        metadata={"source": "group_sms_campaign"},
+    )
+    return campaign
 
 
 @transaction.atomic
@@ -100,6 +120,16 @@ def decide_group_sms_campaign(*, campaign_id, actor, approve, decision_note=""):
                 "decision_note",
                 "updated_at",
             )
+        )
+        AuditEvent.record(
+            actor=actor,
+            action=AuditEvent.Action.ADMIN_EDIT,
+            summary="Rejected a guardian SMS campaign.",
+            target_type="GroupSMSCampaign",
+            target_id=campaign.pk,
+            before={"status": GroupSMSCampaign.Status.PENDING},
+            after={"status": campaign.status},
+            metadata={"source": "group_sms_campaign"},
         )
         return campaign
 
@@ -141,6 +171,19 @@ def decide_group_sms_campaign(*, campaign_id, actor, approve, decision_note=""):
                 "decision_note",
                 "updated_at",
             )
+        )
+        AuditEvent.record(
+            actor=actor,
+            action=AuditEvent.Action.ADMIN_EDIT,
+            summary="Approved a guardian SMS campaign for dispatch.",
+            target_type="GroupSMSCampaign",
+            target_id=campaign.pk,
+            before={"status": GroupSMSCampaign.Status.PENDING},
+            after={
+                "status": campaign.status,
+                "recipient_count": campaign.recipient_count,
+            },
+            metadata={"source": "group_sms_campaign"},
         )
 
     from core.services.sms_alerts import notify_sms_quota_low

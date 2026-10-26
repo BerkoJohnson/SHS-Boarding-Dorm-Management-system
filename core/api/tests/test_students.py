@@ -1,3 +1,4 @@
+import json
 import tempfile
 from datetime import timedelta
 from io import BytesIO
@@ -20,6 +21,7 @@ from core.api.tests.factories import (
     token_from,
 )
 from core.models import (
+    AuditEvent,
     ClassGroup,
     Dormitory,
     DormitoryRoom,
@@ -124,6 +126,124 @@ class StudentAccessTests(TestCase):
         self.assertEqual(data["house"]["name"], "House A")
         self.assertIn("recent_exeats", data)
         self.assertTrue(data["photo_url"] is None)
+
+    def test_admin_can_reassign_boarding_student_to_an_available_room(self):
+        next_room = DormitoryRoom.objects.create(
+            dormitory=self.dormitory, name="A2", capacity=2
+        )
+        path = f"/api/v1/students/{self.student_a1.pk}/allocation/"
+        payload = json.dumps(
+            {
+                "dormitory_id": str(self.dormitory.pk),
+                "room_id": str(next_room.pk),
+            }
+        )
+        headers = {
+            **auth(self._token("admin")),
+            "HTTP_IDEMPOTENCY_KEY": "reassign-student-a1-room",
+        }
+        response = self.client.post(
+            path,
+            data=payload,
+            content_type="application/json",
+            **headers,
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        replay = self.client.post(
+            path,
+            data=payload,
+            content_type="application/json",
+            **headers,
+        )
+        self.assertEqual(replay.status_code, 200, replay.content)
+        self.assertEqual(replay["Idempotent-Replayed"], "true")
+        self.student_a1.refresh_from_db()
+        self.assertEqual(self.student_a1.dormitory_id, self.dormitory.pk)
+        self.assertEqual(self.student_a1.room_id, next_room.pk)
+        self.assertEqual(
+            AuditEvent.objects.filter(
+                target_type="Student",
+                target_id=str(self.student_a1.pk),
+                metadata__source="mobile_student_allocation",
+            ).count(),
+            1,
+        )
+
+    def test_allocation_options_exclude_guardian_data_and_are_admin_only(self):
+        response = self.client.get(
+            "/api/v1/students/allocation-options/",
+            **auth(self._token("admin")),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        data = response.json()["data"]
+        self.assertEqual(
+            data["rooms"],
+            [
+                {
+                    "id": str(self.room.pk),
+                    "dormitory_id": str(self.dormitory.pk),
+                    "name": "A1",
+                    "capacity": 20,
+                }
+            ],
+        )
+        self.assertNotIn("guardians", data)
+        forbidden = self.client.get(
+            "/api/v1/students/allocation-options/",
+            **auth(self._token("hm-a")),
+        )
+        self.assertEqual(forbidden.status_code, 403)
+
+    def test_allocation_rejects_a_room_from_another_dormitory(self):
+        other_dormitory = Dormitory.objects.create(
+            house=self.house_a,
+            name="Another Block",
+            gender=Dormitory.GenderBlock.MALE,
+        )
+        other_room = DormitoryRoom.objects.create(
+            dormitory=other_dormitory, name="B1", capacity=2
+        )
+        response = self.client.post(
+            f"/api/v1/students/{self.student_a1.pk}/allocation/",
+            data=json.dumps(
+                {
+                    "dormitory_id": str(self.dormitory.pk),
+                    "room_id": str(other_room.pk),
+                }
+            ),
+            content_type="application/json",
+            **auth(self._token("admin")),
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.student_a1.refresh_from_db()
+        self.assertEqual(self.student_a1.room_id, self.room.pk)
+
+    def test_allocation_rejects_a_full_room_with_validation_details(self):
+        full_room = DormitoryRoom.objects.create(
+            dormitory=self.dormitory, name="Full", capacity=1
+        )
+        create_student(
+            "ADM-004",
+            house=self.house_a,
+            dormitory=self.dormitory,
+            room=full_room,
+        )
+        response = self.client.post(
+            f"/api/v1/students/{self.student_a1.pk}/allocation/",
+            data=json.dumps(
+                {
+                    "dormitory_id": str(self.dormitory.pk),
+                    "room_id": str(full_room.pk),
+                }
+            ),
+            content_type="application/json",
+            **auth(self._token("admin")),
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertEqual(response.json()["error"]["code"], "invalid_allocation")
+        self.assertIn("room", response.json()["error"]["fields"])
+        self.student_a1.refresh_from_db()
+        self.assertEqual(self.student_a1.room_id, self.room.pk)
 
     def test_gate_officer_cannot_browse_the_registry(self):
         token = self._token("gate")

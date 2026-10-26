@@ -5,6 +5,8 @@ import mimetypes
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
 from django.http import FileResponse
 from django.utils import timezone
@@ -14,6 +16,7 @@ from core.api.base import (
     NotFound,
     api_endpoint,
     apply_ordering,
+    idempotent,
     paginate,
     parse_json,
     success,
@@ -30,6 +33,7 @@ from core.api.serializers import (
     student_summary,
 )
 from core.models import (
+    AuditEvent,
     ClassGroup,
     Dormitory,
     DormitoryRoom,
@@ -155,6 +159,96 @@ def student_detail_view(request, student_id):
     data = student_detail(request, student)
     data["recent_exeats"] = [exeat_summary(exeat) for exeat in recent]
     return success(request, data)
+
+
+@api_endpoint(["POST"], roles=STUDENT_MANAGEMENT_ROLES)
+@idempotent
+def update_allocation(request, student_id):
+    """Move a boarding student to a room without changing their house."""
+    payload = parse_json(request)
+    if "dormitory_id" not in payload or "room_id" not in payload:
+        raise APIError(
+            "validation_error",
+            "Both dormitory_id and room_id are required.",
+            fields={
+                key: ["This field is required."]
+                for key in ("dormitory_id", "room_id")
+                if key not in payload
+            },
+        )
+    try:
+        dormitory_id = uuid.UUID(str(payload["dormitory_id"]))
+        room_id = uuid.UUID(str(payload["room_id"]))
+    except (TypeError, ValueError, AttributeError):
+        raise APIError(
+            "validation_error",
+            "dormitory_id and room_id must be valid UUIDs.",
+            fields={
+                "dormitory_id": ["Use a valid UUID."],
+                "room_id": ["Use a valid UUID."],
+            },
+        )
+
+    with transaction.atomic():
+        student = (
+            _scoped_students(request.api_user)
+            .select_for_update(of=("self",))
+            .filter(pk=student_id)
+            .first()
+        )
+        if student is None:
+            raise NotFound("That student was not found.")
+        if student.residency != Student.ResidencyStatus.BOARDING:
+            raise APIError(
+                "invalid_allocation",
+                "Only boarding students can be assigned to a dormitory room.",
+                status=409,
+            )
+        dormitory = Dormitory.objects.filter(pk=dormitory_id).first()
+        room = (
+            DormitoryRoom.objects.select_related("dormitory")
+            .filter(pk=room_id)
+            .first()
+        )
+        if dormitory is None or room is None:
+            raise NotFound("The selected dormitory or room was not found.")
+        if room.dormitory_id != dormitory.pk:
+            raise APIError(
+                "invalid_allocation",
+                "The selected room does not belong to the selected dormitory.",
+                fields={"room_id": ["Choose a room in the selected dormitory."]},
+            )
+
+        before = {
+            "dormitory_id": str(student.dormitory_id) if student.dormitory_id else None,
+            "room_id": str(student.room_id) if student.room_id else None,
+        }
+        student.dormitory = dormitory
+        student.room = room
+        try:
+            student.save(update_fields=("dormitory", "room", "updated_at"))
+        except ValidationError as error:
+            raise APIError(
+                "invalid_allocation",
+                "The selected room cannot be assigned to this student.",
+                fields=getattr(
+                    error,
+                    "message_dict",
+                    {"placement": error.messages},
+                ),
+            )
+        AuditEvent.record(
+            actor=request.api_user,
+            action=AuditEvent.Action.ADMIN_EDIT,
+            summary=f"Changed dormitory room for {student.full_name}.",
+            target_type="Student",
+            target_id=student.pk,
+            before=before,
+            after={"dormitory_id": str(dormitory.pk), "room_id": str(room.pk)},
+            metadata={"source": "mobile_student_allocation"},
+        )
+        updated = _student_queryset().filter(pk=student.pk).first()
+    return success(request, student_detail(request, updated))
 
 
 @api_endpoint(["GET"], roles=STUDENT_RECORD_ROLES)
@@ -360,3 +454,12 @@ def student_options(request):
             ],
         },
     )
+
+
+@api_endpoint(["GET"], roles=STUDENT_MANAGEMENT_ROLES)
+def allocation_options(request):
+    """Return only dormitory rooms needed by the mobile allocation workflow."""
+    rooms = DormitoryRoom.objects.select_related("dormitory").order_by(
+        "dormitory__name", "name"
+    )
+    return success(request, {"rooms": [room_payload(room) for room in rooms]})

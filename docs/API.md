@@ -145,7 +145,8 @@ concurrent duplicate gets `409 request_in_progress`. The key is scoped to the
 token, path and key value, so reusing a key on a different endpoint is safe.
 
 Idempotent endpoints include: exeat create/approve/reject/override/cancel/
-reschedule/reconcile/review, gate depart/return, and roll-call actions.
+reschedule/reconcile/review, gate depart/return, roll-call actions, student room
+allocation, and SMS campaign creation/decisions.
 
 ### Feature gates
 
@@ -324,6 +325,26 @@ Feed filters: `?unread=true`, `?kind=late_return|exeat_review|roll_call|…`,
 `POST /notifications/read-all/` accepts an optional body
 `{"kind": "late_return"}` to mark only one kind.
 
+Detailed reports are available at `GET /reports/` to administrators, senior
+housemasters, and housemasters; housemasters receive only their assigned
+house's data. Use the same `report`, `date_from`, `date_to`, and `term` filters
+as the web dashboard, plus `page` and `page_size` (maximum 100). The response
+contains report headers, the current rows, and the total `record_count`.
+`GET /reports/export/?format=csv|xlsx|pdf` generates the same scope-limited
+report and records the export in the server audit trail.
+
+`GET /audit/events/` is restricted to administrators and senior housemasters.
+It returns paginated event summaries and deliberately omits raw before/after
+payloads and metadata.
+
+Only administrators can use the guardian SMS campaign endpoints. Submit to
+`POST /sms/campaigns/` with `{"scope":"all_boarders","message":"…"}` or
+`{"scope":"house","house_id":"…","message":"…"}`. A different administrator
+must approve a pending campaign through
+`POST /sms/campaigns/<id>/decision/`; the existing server SMS configuration,
+quota checks, durable delivery queue, and audit trail remain authoritative.
+The mobile API never returns guardian phone numbers.
+
 ### 4.3 Students
 
 | Method | Path | Roles | Purpose |
@@ -332,7 +353,9 @@ Feed filters: `?unread=true`, `?kind=late_return|exeat_review|roll_call|…`,
 | `GET` | `/students/search/?q=` | A/S/H | Fast search (name/admission/index, max 20) |
 | `GET` | `/students/lookup/?q=` | A/S/H | Resolve scanned QR/URL or admission/index number |
 | `GET` | `/students/options/` | A/S | Filter choices: houses, dormitories, rooms, programmes, classes |
+| `GET` | `/students/allocation-options/` | A/S | Dormitory rooms only for mobile placement |
 | `GET` | `/students/<id>/` | A/S/H | Detail plus five recent exeats |
+| `POST` | `/students/<id>/allocation/` | A/S | Assign a boarding student to a validated dormitory room |
 | `GET` | `/students/<id>/photo/` | A/S/H | Private photo stream (`FileResponse`) |
 | `GET` | `/students/<id>/id-card/` | A/S | ID-card metadata and QR URL |
 | `POST` | `/students/<id>/rotate-public-token/` | A/S | Reissue the QR token |
@@ -341,6 +364,11 @@ List filters: `q`, `house_id`, `dormitory_id`, `class_group_id`,
 `programme_id`, `status`, `residency`, `gender`,
 `has_active_exeat=true|false`. Ordering: `full_name`, `admission_no`,
 `created_at`, `updated_at`, `house__name`.
+
+Room allocation accepts both `dormitory_id` and `room_id`. The server validates
+that the room belongs to that dormitory and that house, gender, dormitory
+capacity, and room capacity constraints hold. Successful moves are recorded in
+the append-only audit trail.
 
 **QR and barcode handling.** The QR on a student ID card encodes an opaque
 student `public_token` UUID, normally inside a public verification URL. The app

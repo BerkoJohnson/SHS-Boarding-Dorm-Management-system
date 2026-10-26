@@ -9,7 +9,9 @@ from core.api.views import (
     gate,
     meta,
     notifications,
+    reports,
     roll_call,
+    sms,
     students,
 )
 
@@ -43,9 +45,19 @@ urlpatterns = [
     path("reference/", meta.reference, name="reference"),
     # Students
     path("students/", students.students, name="students"),
+    path(
+        "students/<uuid:student_id>/allocation/",
+        students.update_allocation,
+        name="student_allocation",
+    ),
     path("students/search/", students.student_search, name="student_search"),
     path("students/lookup/", students.student_lookup, name="student_lookup"),
     path("students/options/", students.student_options, name="student_options"),
+    path(
+        "students/allocation-options/",
+        students.allocation_options,
+        name="student_allocation_options",
+    ),
     path(
         "students/<uuid:student_id>/",
         students.student_detail_view,
@@ -148,6 +160,16 @@ urlpatterns = [
         "notifications/<str:notification_id>/read/",
         notifications.mark_read,
         name="notification_read",
+    ),
+    # Reporting, audit history, and guardian SMS campaigns
+    path("reports/", reports.reports, name="reports"),
+    path("reports/export/", reports.export_report, name="report_export"),
+    path("audit/events/", reports.audit_events, name="audit_events"),
+    path("sms/campaigns/", sms.campaigns, name="sms_campaigns"),
+    path(
+        "sms/campaigns/<uuid:campaign_id>/decision/",
+        sms.decide_campaign,
+        name="sms_campaign_decision",
     ),
     # Home summary
     path("dashboard/", dashboard.dashboard, name="dashboard"),

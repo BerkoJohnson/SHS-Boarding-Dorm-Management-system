@@ -156,6 +156,7 @@ def student_summary(request, student):
             if student.dormitory
             else None
         ),
+        "room": room_payload(student.room) if student.room else None,
         "class_group": (
             {"id": str(student.class_group.pk), "name": student.class_group.name}
             if student.class_group
