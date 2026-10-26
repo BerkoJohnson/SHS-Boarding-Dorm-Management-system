@@ -532,6 +532,13 @@ Rules of thumb:
 
 `DATABASE_PROFILE` decides which block is read. It must be `local` or `neon`.
 
+When you explicitly run with `--settings=schoolsystem.settings.production`, Django
+automatically selects the Neon `PG*` database settings even if your `.env` keeps
+`DATABASE_PROFILE=local` for development. That means production-settings management commands
+connect to the configured Neon database; use `schoolsystem.settings.development` for local work.
+Set the Neon connection details and a shared Redis cache in `.env` once, or provide them through
+the process environment. Production does not fall back to a local database or process-local cache.
+
 | Variable | Required? | Controls | Safe example |
 | :--- | :--- | :--- | :--- |
 | `DATABASE_PROFILE` | Yes (defaults to `local`) | `local` = use the `DB_*` block; `neon` = use the `PG*` block. | `local` (dev) / `neon` (prod) |
@@ -589,6 +596,16 @@ in code and are always served by WhiteNoise; they have no environment variables.
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | Celery broker connection. |
 | `CACHE_BACKEND` | `django.core.cache.backends.locmem.LocMemCache` locally; required shared backend in production | Cache used for rate limits. LocMem is per-process. |
 | `CACHE_LOCATION` | `schoolsystem-cache` locally; required in production | Cache location/URL for the chosen backend. |
+
+For production commands run from a workstation, configure these once in the project `.env` (or
+export them in the shell). Use the Redis URL supplied by your hosting provider; do not use the
+local `LocMemCache` backend or a localhost Redis URL for a multi-worker production deployment:
+
+```dotenv
+CACHE_BACKEND=django.core.cache.backends.redis.RedisCache
+CACHE_LOCATION=redis://<your-shared-redis-host>:6379/1
+```
+
 | `TRUSTED_PROXY_COUNT` | `1` | Number of proxy hops used to read the client IP from `X-Forwarded-For`. Render adds one hop, so `1` is correct. |
 | `LOGIN_RATE_LIMIT` / `LOGIN_RATE_WINDOW` | `10` / `300` | Max login attempts per IP per window (seconds). |
 | `PUBLIC_REPORT_RATE_LIMIT` / `PUBLIC_REPORT_RATE_WINDOW` | `5` / `3600` | Max public "report a concern" submissions per IP per window. |

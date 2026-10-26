@@ -3,13 +3,16 @@ from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
 
+# Production always uses the PG* database configuration. The project .env can
+# keep DATABASE_PROFILE=local for development without changing this behavior.
+os.environ["DATABASE_PROFILE"] = "neon"
+
 from .base import *
 
 database_profile = os.getenv("DATABASE_PROFILE", "").strip().lower()
 if database_profile != "neon":
     raise ImproperlyConfigured(
-        "Production requires DATABASE_PROFILE=neon and explicit PGHOST, "
-        "PGDATABASE, PGUSER, PGPASSWORD, and PGSSLMODE settings."
+        "Production database profile must be Neon."
     )
 
 ssl_mode = os.getenv("PGSSLMODE", "").strip().lower()
