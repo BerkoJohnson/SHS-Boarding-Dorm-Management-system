@@ -30,6 +30,7 @@ from django.utils import timezone
 
 from core.storage import PrivateStudentIDExportStorage, PrivateStudentPhotoStorage
 from tenancy.models import PlatformAuditLog, Tenant
+from ._guided import launch_guided
 
 
 class Command(BaseCommand):
@@ -42,7 +43,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         """Register CLI options for tenant backup."""
-        group = parser.add_mutually_exclusive_group(required=True)
+        group = parser.add_mutually_exclusive_group()
         group.add_argument(
             "--schema",
             type=str,
@@ -106,6 +107,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Execute tenant backup process."""
+        if not options.get("schema") and not options.get("all"):
+            launch_guided(self, "backups", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true before using platform management commands."

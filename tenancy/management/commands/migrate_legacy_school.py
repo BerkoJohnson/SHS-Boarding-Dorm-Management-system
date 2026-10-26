@@ -16,6 +16,7 @@ from core.services.student_id_images import (
     student_id_export_storage,
 )
 from tenancy.models import Domain, Tenant, normalize_domain
+from ._guided import launch_guided
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,9 @@ class Command(BaseCommand):
     )
 
     def add_arguments(self, parser):
-        parser.add_argument("--name", required=True)
-        parser.add_argument("--schema", required=True)
-        parser.add_argument("--domain", required=True)
+        parser.add_argument("--name")
+        parser.add_argument("--schema")
+        parser.add_argument("--domain")
         parser.add_argument(
             "--confirm-domain-verified",
             action="store_true",
@@ -53,6 +54,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if not all(options.get(key) for key in ("name", "schema", "domain")):
+            launch_guided(self, "legacy", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true and apply public-schema migrations first."

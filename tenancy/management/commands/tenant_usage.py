@@ -24,6 +24,7 @@ from django.db import connection
 from django.utils import timezone
 
 from tenancy.models import PlanTier, PlatformAuditLog, Tenant, TenantSubscription
+from ._guided import launch_guided
 
 
 class Command(BaseCommand):
@@ -36,7 +37,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         """Register CLI options and filters for usage metrics."""
-        group = parser.add_mutually_exclusive_group(required=True)
+        group = parser.add_mutually_exclusive_group()
         group.add_argument(
             "--schema",
             type=str,
@@ -71,6 +72,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Execute tenant usage reporting."""
+        if not options.get("schema") and not options.get("all"):
+            launch_guided(self, "usage", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true before using platform management commands."

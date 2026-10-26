@@ -43,6 +43,7 @@ from django.utils import timezone
 
 from core.storage import PrivateStudentIDExportStorage, PrivateStudentPhotoStorage
 from tenancy.models import PlatformAuditLog, Tenant
+from ._guided import launch_guided
 
 #: Schemas that must never be the target of a restore.
 RESERVED_SCHEMAS = {
@@ -74,7 +75,6 @@ class Command(BaseCommand):
         parser.add_argument(
             "--schema",
             type=str,
-            required=True,
             help="Target tenant schema name to restore into.",
         )
         parser.add_argument(
@@ -129,6 +129,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Validate and execute a safe tenant restore."""
+        if not options.get("schema"):
+            launch_guided(self, "restore", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true before using platform management commands."

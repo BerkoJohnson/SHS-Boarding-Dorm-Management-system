@@ -42,6 +42,7 @@ from tenancy.models import (
     TenantInvoiceLineItem,
     TenantSubscription,
 )
+from ._guided import launch_guided
 
 
 class Command(BaseCommand):
@@ -57,7 +58,6 @@ class Command(BaseCommand):
         parser.add_argument(
             "--schema",
             type=str,
-            required=True,
             help="Target tenant schema name.",
         )
         parser.add_argument(
@@ -121,6 +121,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Route and execute requested invoice action."""
+        if not options.get("schema"):
+            launch_guided(self, "invoices", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true before using platform management commands."

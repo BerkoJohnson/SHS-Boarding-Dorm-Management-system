@@ -496,8 +496,8 @@ When installation works, this is what you should see.
    - Create houses, dormitories, rooms, programmes and class groups.
    - Add an academic term and mark it active (`/configuration/`).
    - Set up SMS only when you are ready (keep `SMS_ENABLED=false` until then).
-   - Create staff accounts and assign each a role (see section 12.1). Roles are assigned through
-     the Django admin (User profiles).
+   - Create staff accounts and assign each a role (see sections 7.7 and 12.1). Use the
+     tenant-aware `create_school_user` command or manage profiles in Django admin.
 
 > The system deliberately ships **no default administrator account**. The first user is always the
 > one you create with `createsuperuser`. Never create a production superuser with a weak or shared
@@ -710,6 +710,11 @@ examples use `.\.venv\Scripts\python.exe .\manage.py`; on Linux/macOS use `pytho
 ### 7.1 Discovering commands
 
 ```powershell
+# Use the guided numbered menu instead of memorizing command options.
+.\.venv\Scripts\python.exe .\manage.py tenant_wizard `
+  --settings=schoolsystem.settings.production
+
+# List every registered management command.
 .\.venv\Scripts\python.exe .\manage.py help
 ```
 
@@ -724,9 +729,10 @@ command is meant to be used — the per-command sections below do that. For a si
 The commands in this repository, as reported by `manage.py help`, are:
 
 - **core:** `import_roster`, `seed_synthetic_pilot`
-- **tenancy:** `add_school_domain`, `migrate_legacy_school`, `provision_school`,
-  `set_school_status`, `support_access`, `tenant_backup`, `tenant_features`, `tenant_invoice`,
-  `tenant_list`, `tenant_restore`, `tenant_subscription`, `tenant_usage`
+- **tenancy:** `add_school_domain`, `create_school_user`, `migrate_legacy_school`,
+  `provision_school`, `set_school_status`, `support_access`, `tenant_backup`, `tenant_features`,
+  `tenant_invoice`, `tenant_list`, `tenant_restore`, `tenant_subscription`, `tenant_usage`,
+  `tenant_wizard`
 - **website:** `build_brand_assets`, `demo_requests`
 - **django_pgschemas** (third-party): `runschema`, `migrate` (extended), `migrateschema`,
   `whowill`, `cloneschema`, `createrefschema`
@@ -970,12 +976,170 @@ In multi-school mode, `django-pgschemas` adds schema-aware versions of some comm
 `--schema` accepts more than one name. `runschema` is the recommended way to query a school's data
 from the shell in multi-school mode.
 
-### 7.7 Custom commands: school provisioning and status (tenancy)
+### 7.7 User provisioning and school setup commands
 
-These four commands create and manage schools. All require `TENANCY_ENABLED=True` (they raise a
-`CommandError` otherwise). They **change the database and create PostgreSQL schemas.**
+#### Guided mode for each tenant command
 
-#### `provision_school` — create a brand-new school
+The guided menu is available as `tenant_wizard`, and each tenant command that needs a school or
+an operation can also start its matching guided workflow when launched without its required
+options. You do not need to memorize the option list:
+
+```powershell
+# These commands open the matching guided prompts when run without required options.
+.\.venv\Scripts\python.exe .\manage.py create_school_user --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py provision_school --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py add_school_domain --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py set_school_status --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py tenant_usage --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py tenant_subscription --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py tenant_features --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py tenant_invoice --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py tenant_backup --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py tenant_restore --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py support_access --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py migrate_legacy_school --settings=schoolsystem.settings.production
+```
+
+In the guided workflow, choose a school from its numbered list, then select or enter the
+requested action and confirm any consequential changes. `tenant_list` already lists schools when
+run without options, so its normal no-argument behavior remains the quick inventory view.
+Guided commands require an interactive terminal. If you omit required values in a non-interactive
+run, the command explains that you must supply the options. Passing all required options continues
+to run the command directly without opening the guide, preserving existing scripts and deployment
+procedures. If you provide only some options, the command names them and asks you to either rerun
+without options to enter the guide or provide the complete scripted command:
+
+| Command with missing required options | Guided workflow |
+| :--- | :--- |
+| `create_school_user` | Choose school, role, and account details. |
+| `provision_school` | Enter the new school's name, schema, and verified hostname. |
+| `add_school_domain` | Choose a school, enter its hostname, and confirm verification. |
+| `set_school_status` | Choose a school, then activate or deactivate it. |
+| `migrate_legacy_school` | Enter new tenant details and confirm the migration. |
+| `tenant_usage` | Choose one school or all active schools, then date range. |
+| `tenant_subscription` | Choose a school, then inspect plan or edit subscription values. |
+| `tenant_features` | Choose a school, then list or change features/limits. |
+| `tenant_invoice` | Choose a school, then list/generate/show/pay/cancel invoices. |
+| `tenant_backup` | Choose one or all active schools and backup options. |
+| `tenant_restore` | Validate a backup as a dry run; actual restore remains an explicit command. |
+| `support_access` | Choose a school, then inspect, generate, verify, or revoke access. |
+| `tenant_list` | Lists all schools immediately; use filters when needed. |
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py tenant_usage `
+  --schema atebubu_shs --settings=schoolsystem.settings.production
+```
+
+#### `tenant_wizard` — guided platform administration
+
+If you do not want to memorize command names or options, start the interactive menu:
+
+```powershell
+# Open the numbered menu; use 0 to cancel a selection or Exit to leave the menu.
+.\.venv\Scripts\python.exe .\manage.py tenant_wizard `
+  --settings=schoolsystem.settings.production
+```
+
+The menu walks through choosing a school and asks for only the details needed for each task.
+It covers staff account creation, school setup (provisioning, hostname, status, and legacy
+migration), school inventory, usage, plans, features/limits, invoices, verified backups, restore
+dry-runs, and time-limited support access. It uses colored headings, numbered choices, warnings,
+and confirmation prompts where an action changes data. The menu returns to its task list after
+each operation. It requires `TENANCY_ENABLED=True` and an interactive terminal.
+
+Restore is deliberately limited to a guided **dry run**; review the validation output before
+running `tenant_restore` directly for an actual restore. Existing command-line forms remain
+available for scripts and experienced operators; automation should keep using explicit flags
+instead of the interactive menu.
+
+#### `create_school_user` — create a staff account in the correct school
+
+Creates a login account, sets its school role, and creates the linked `HouseMaster` record for
+senior housemasters and housemasters. **In multi-school mode, select the target `--schema`**:
+the guided flow lets you choose from the school list; for scripted use pass `--schema` explicitly.
+The command performs all school-data writes inside that tenant's schema. In single-school mode,
+omit `--schema`. The command does not create platform-operator accounts.
+If you run `create_school_user` without required details in a terminal, it starts a guided flow:
+in multi-school mode it lists schools and lets you choose one; in single-school mode it uses the
+configured school database. It then asks for the role and account-specific details. The password
+is entered securely at the end.
+
+| Argument | Required | Meaning |
+| :--- | :--- | :--- |
+| `--username` | Required for non-interactive use | Login username; must be unique within the selected school. |
+| `--role` | Required for non-interactive use | `superadmin`, `admin`, `senior-housemaster`, `housemaster`, `house-tutor`, `gate-officer`, or `medical`. |
+| `--schema` | Required for non-interactive tenant use | School schema name. Rejected if tenancy is disabled. |
+| `--email` | No | Email address. |
+| `--first-name`, `--last-name` | No | User name fields. |
+| `--house` | For `housemaster` | Existing house name. Senior housemasters may omit it for school-wide oversight. |
+| `--staff-id`, `--phone-number` | For housemaster roles | Staff identifier and contact phone for the linked housemaster record. |
+| `--full-name` | No | Housemaster display name; defaults to first/last name, then username. |
+| `--unusable-password` | No | Skip interactive password entry and create an account that cannot sign in until a password is set separately. |
+
+For interactive use, the command prompts for the password twice without echoing it and applies
+Django's configured password validators. It never accepts a password on the command line, where
+it could be retained in shell history or process listings. Every created account is active and
+`is_staff=True`; only the `superadmin` role receives Django `is_superuser=True`. A school
+superuser has elevated privileges **only inside that school's schema**; it is not a platform
+operator and does not grant access to other tenants.
+
+Examples (PowerShell):
+
+```powershell
+# Create the first school superuser in the selected tenant; enter a strong password at the prompts.
+.\.venv\Scripts\python.exe .\manage.py create_school_user `
+  --schema atebubu_shs --username school-admin --role superadmin `
+  --email admin@example.org --settings=schoolsystem.settings.production
+
+# Add the school-wide senior housemaster. This creates the linked HouseMaster record.
+.\.venv\Scripts\python.exe .\manage.py create_school_user `
+  --schema atebubu_shs --username senior-hm --role senior-housemaster `
+  --staff-id SHM-001 --phone-number +233240000001 `
+  --first-name Ama --last-name Mensah `
+  --settings=schoolsystem.settings.production
+
+# Add a housemaster assigned to an existing house.
+.\.venv\Scripts\python.exe .\manage.py create_school_user `
+  --schema atebubu_shs --username north-hm --role housemaster `
+  --house "North House" --staff-id HM-001 --phone-number +233240000002 `
+  --first-name Kojo --last-name Mensah `
+  --settings=schoolsystem.settings.production
+
+# Add a gate officer in the same tenant.
+.\.venv\Scripts\python.exe .\manage.py create_school_user `
+  --schema atebubu_shs --username gate-officer --role gate-officer `
+  --settings=schoolsystem.settings.production
+
+# Single-school mode: omit --schema.
+.\.venv\Scripts\python.exe .\manage.py create_school_user `
+  --username gate-officer --role gate-officer `
+  --settings=schoolsystem.settings.production
+
+# Guided mode: choose the school and role from numbered lists, then answer the prompts.
+.\.venv\Scripts\python.exe .\manage.py create_school_user `
+  --settings=schoolsystem.settings.production
+```
+
+In an automated/non-interactive environment, pass `--unusable-password`; set the user's password
+separately before allowing sign-in. For a tenant account, run Django's schema-aware password
+command, for example:
+
+```powershell
+.\.venv\Scripts\python.exe .\manage.py runschema changepassword gate-officer `
+  --schema atebubu_shs --settings=schoolsystem.settings.production
+```
+
+The command refuses a missing or unknown tenant schema, mismatched passwords, invalid passwords,
+duplicate usernames/staff IDs, invalid role-specific options, and house assignments that cannot
+be resolved unambiguously. Housemaster account creation and its linked record are one transaction;
+if either fails, neither record is kept.
+
+#### School provisioning and status commands
+
+The following four commands require `TENANCY_ENABLED=True` and manage school tenants. They change
+the platform database and/or create PostgreSQL school schemas.
+
+##### `provision_school` — create a brand-new school
 
 Creates the tenant record, attaches a verified hostname, creates the PostgreSQL schema, runs tenant
 migrations, seeds the school's `SchoolConfiguration`, and leaves the school **inactive**.
@@ -999,7 +1163,7 @@ migrations, seeds the school's `SchoolConfiguration`, and leaves the school **in
 If migrations fail after the schema is created, the command tells you to retry with
 `migrate --schema=<schema>`.
 
-#### `add_school_domain` — attach extra hostnames
+###### `add_school_domain` — attach extra hostnames
 
 Adds another verified hostname/alias to an existing school. There are **no wildcards**: every
 hostname needs its own row.
@@ -1016,7 +1180,7 @@ hostname needs its own row.
   --schema achimota_shs --domain portal.achimota.edu.gh --confirm-domain-verified
 ```
 
-#### `set_school_status` — activate or suspend a school
+###### `set_school_status` — activate or suspend a school
 
 Refuses to activate unless a verified domain exists, the PostgreSQL schema exists, the
 `core_schoolconfiguration` table exists and no tenant migrations are pending.
@@ -1031,7 +1195,7 @@ Refuses to activate unless a verified domain exists, the PostgreSQL schema exist
 .\.venv\Scripts\python.exe .\manage.py set_school_status --schema achimota_shs --deactivate
 ```
 
-#### `migrate_legacy_school` — adopt an existing single-school database
+###### `migrate_legacy_school` — adopt an existing single-school database
 
 Copies an existing `public`-schema school's rows and uploaded files into a **new, inactive** tenant
 schema without destroying the source. It applies tenant migrations to the new schema first, then

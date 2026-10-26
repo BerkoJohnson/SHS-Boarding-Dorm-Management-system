@@ -6,15 +6,16 @@ from django.db import transaction
 from django_pgschemas.utils import check_schema_name_not_reserved
 
 from tenancy.models import Domain, Tenant, normalize_domain
+from ._guided import launch_guided
 
 
 class Command(BaseCommand):
     help = "Create a school schema and attach a manually verified hostname."
 
     def add_arguments(self, parser):
-        parser.add_argument("--name", required=True)
-        parser.add_argument("--schema", required=True)
-        parser.add_argument("--domain", required=True)
+        parser.add_argument("--name")
+        parser.add_argument("--schema")
+        parser.add_argument("--domain")
         parser.add_argument(
             "--confirm-domain-verified",
             action="store_true",
@@ -22,6 +23,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if not all(options.get(key) for key in ("name", "schema", "domain")):
+            launch_guided(self, "provision", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true before provisioning a tenant schema."

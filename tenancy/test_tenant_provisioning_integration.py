@@ -1,15 +1,18 @@
 """PostgreSQL integration coverage for tenant provisioning and migrations."""
 
 from datetime import date
+from io import StringIO
 import uuid
+from unittest.mock import patch
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connection
 from django.test import TransactionTestCase
 from django_pgschemas.schema import activate_public
 
-from core.models import AcademicYear
+from core.models import AcademicYear, StaffRole
 from tenancy.models import Tenant
 
 
@@ -56,6 +59,49 @@ class TenantProvisioningMigrationTests(TransactionTestCase):
             self.assertTrue(
                 AcademicYear.objects.filter(pk=academic_year.pk).exists()
             )
+
+        call_command(
+            "create_school_user",
+            f"--schema={self.schema_name}",
+            "--username=tenant-gate-officer",
+            "--role=gate-officer",
+            "--unusable-password",
+            verbosity=0,
+        )
+        with tenant:
+            user = get_user_model().objects.get(username="tenant-gate-officer")
+            self.assertEqual(user.profile.role, StaffRole.GATE_OFFICER)
+            self.assertFalse(user.has_usable_password())
+
+        with (
+            patch("tenancy.management.commands.tenant_wizard.sys.stdin") as stdin,
+            patch(
+                "builtins.input",
+                side_effect=[
+                    "1",
+                    "1",
+                    "6",
+                    "guided-tenant-gate",
+                    "",
+                    "",
+                    "",
+                    "11",
+                ],
+            ),
+            patch(
+                "tenancy.management.commands.create_school_user.getpass",
+                side_effect=["StrongPassw0rd!2026", "StrongPassw0rd!2026"],
+            ),
+        ):
+            stdin.isatty.return_value = True
+            output = StringIO()
+            call_command("tenant_wizard", stdout=output, verbosity=0)
+
+        with tenant:
+            guided_user = get_user_model().objects.get(username="guided-tenant-gate")
+            self.assertEqual(guided_user.profile.role, StaffRole.GATE_OFFICER)
+            self.assertTrue(guided_user.check_password("StrongPassw0rd!2026"))
+        self.assertIn(tenant.name, output.getvalue())
 
     def tearDown(self):
         if self.schema_name is not None:

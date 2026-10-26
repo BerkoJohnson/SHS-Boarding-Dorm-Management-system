@@ -24,6 +24,7 @@ from django.utils import timezone
 
 from tenancy.feature_defaults import PLAN_DEFAULTS
 from tenancy.models import PlanTier, PlatformAuditLog, Tenant, TenantSubscription
+from ._guided import launch_guided
 
 # SMSOnlineGH packages: package_price -> (credits, unit_cost_basis)
 SMS_PACKAGES = {
@@ -105,7 +106,6 @@ class Command(BaseCommand):
         parser.add_argument(
             "--schema",
             type=str,
-            required=True,
             help="Target tenant schema name.",
         )
         parser.add_argument(
@@ -194,6 +194,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Process subscription inspection or updates."""
+        if not options.get("schema"):
+            launch_guided(self, "plans", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true before using platform management commands."

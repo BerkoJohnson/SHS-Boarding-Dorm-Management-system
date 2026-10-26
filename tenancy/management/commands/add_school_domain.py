@@ -4,14 +4,15 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from tenancy.models import Domain, Tenant, normalize_domain
+from ._guided import launch_guided
 
 
 class Command(BaseCommand):
     help = "Attach a manually verified hostname or alias to a school tenant."
 
     def add_arguments(self, parser):
-        parser.add_argument("--schema", required=True)
-        parser.add_argument("--domain", required=True)
+        parser.add_argument("--schema")
+        parser.add_argument("--domain")
         parser.add_argument("--primary", action="store_true")
         parser.add_argument(
             "--confirm-domain-verified",
@@ -20,6 +21,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        if not options.get("schema") or not options.get("domain"):
+            launch_guided(self, "domain", options=options)
+            return
         if not settings.TENANCY_ENABLED:
             raise CommandError(
                 "Set TENANCY_ENABLED=true before adding tenant domains."
