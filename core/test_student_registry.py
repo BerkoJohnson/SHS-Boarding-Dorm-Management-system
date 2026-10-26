@@ -1,6 +1,7 @@
 import csv
 import io
 import tempfile
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +22,7 @@ from PIL import Image
 
 from core.forms import StudentRegistrationForm
 from core.models import (
+    AcademicYear,
     ClassGroup,
     Dormitory,
     DormitoryRoom,
@@ -923,6 +925,150 @@ class StudentRegistryTests(TestCase):
 
         self.assertTrue(validation.is_valid, validation.errors)
 
+    def test_maximum_roster_import_uses_batched_database_queries(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.male_dorm.capacity = 2000
+        self.male_dorm.save(update_fields=["capacity"])
+        rows = [
+            [
+                f"ADM-BATCH-{index}",
+                f"IDX-BATCH-{index}",
+                f"Batch Student {index}",
+                "Male",
+                "GSCI",
+                "Red House",
+                "1A1",
+            ]
+            for index in range(2000)
+        ]
+        uploaded_file = self._csv_upload(rows)
+        with CaptureQueriesContext(connection) as queries:
+            imported, errors = import_student_roster(uploaded_file)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(imported, len(rows))
+        self.assertLess(len(queries), 100)
+        self.assertEqual(Student.objects.count(), 2000)
+
+    def test_roster_commit_rechecks_capacity_after_preview(self):
+        self.male_dorm.capacity = 1
+        self.male_dorm.save(update_fields=["capacity"])
+        validation = validate_student_roster(
+            self._csv_upload(
+                [
+                    [
+                        "ADM-CAPACITY-RACE",
+                        "IDX-CAPACITY-RACE",
+                        "Capacity Race Student",
+                        "Male",
+                        "GSCI",
+                        "Red House",
+                        "1A1",
+                    ]
+                ]
+            )
+        )
+        self.assertTrue(validation.is_valid, validation.errors)
+        Student.objects.create(
+            admission_no="ADM-CAPACITY-EXISTING",
+            index_number="IDX-CAP-EXISTING",
+            full_name="Existing Boarder",
+            gender=Student.Gender.MALE,
+            programme=self.programme,
+            house=self.house,
+            dormitory=self.male_dorm,
+            class_group=self.class_group,
+        )
+
+        imported, errors = commit_student_roster(validation)
+
+        self.assertEqual(imported, 0)
+        self.assertTrue(any("at its capacity" in error for error in errors), errors)
+        self.assertEqual(Student.objects.count(), 1)
+
+    def test_bulk_roster_import_assigns_current_completion_year(self):
+        current_year = AcademicYear.objects.create(
+            start_date=date(2026, 9, 1),
+            end_date=date(2027, 8, 31),
+            is_current=True,
+        )
+        class_group = ClassGroup.objects.create(
+            name="3A1",
+            programme=self.programme,
+        )
+        imported, errors = import_student_roster(
+            self._csv_upload(
+                [
+                    [
+                        "ADM-SHS3-IMPORT",
+                        "IDX-SHS3-IMPORT",
+                        "SHS 3 Import Student",
+                        "Male",
+                        "GSCI",
+                        "Red House",
+                        class_group.name,
+                    ]
+                ]
+            )
+        )
+
+        self.assertEqual((imported, errors), (1, []))
+        student = Student.objects.get(admission_no="ADM-SHS3-IMPORT")
+        self.assertEqual(student.expected_completion_year, current_year)
+
+    def test_bulk_roster_import_reuses_new_guardian_rows(self):
+        guardian_phone = "+233240000098"
+        imported, errors = import_student_roster(
+            self._csv_upload(
+                [
+                    [
+                        "ADM-GUARDIAN-BULK-1",
+                        "IDX-GUARDIAN-BULK-1",
+                        "Guardian Student One",
+                        "Male",
+                        "GSCI",
+                        "Red House",
+                        "1A1",
+                        "Shared Guardian",
+                        guardian_phone,
+                    ],
+                    [
+                        "ADM-GUARDIAN-BULK-2",
+                        "IDX-GUARDIAN-BULK-2",
+                        "Guardian Student Two",
+                        "Male",
+                        "GSCI",
+                        "Red House",
+                        "1A1",
+                        "Shared Guardian",
+                        guardian_phone,
+                    ],
+                ],
+                headers=[
+                    "Admission No.",
+                    "Index Number",
+                    "Full Name",
+                    "Gender",
+                    "Programme",
+                    "House",
+                    "Class",
+                    "Guardian Name",
+                    "Guardian Phone",
+                ],
+            )
+        )
+
+        self.assertEqual((imported, errors), (2, []))
+        students = list(
+            Student.objects.filter(admission_no__startswith="ADM-GUARDIAN-BULK")
+        )
+        self.assertEqual(len(students), 2)
+        self.assertIsNotNone(students[0].guardian_id)
+        self.assertEqual(students[0].guardian_id, students[1].guardian_id)
+        self.assertEqual(Guardian.objects.filter(phone_number=guardian_phone).count(), 1)
+
     def test_roster_validation_avoids_guardian_full_clean_queries(self):
         uploaded_file = self._csv_upload(
             [
@@ -1155,6 +1301,18 @@ class StudentRegistryTests(TestCase):
         self.assertContains(response, "HTML Preview Student")
         self.assertContains(response, "Confirm and import")
         self.assertFalse(Student.objects.exists())
+
+    def test_import_page_distinguishes_server_failures_from_network_failures(self):
+        response = self.client.get(reverse("core:student_import"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "The server could not complete the roster request (HTTP")
+        self.assertContains(
+            response,
+            "We couldn't confirm whether the import completed because the server could not be reached.",
+        )
+        self.assertContains(response, "if (!response.ok &&")
+        self.assertContains(response, 'container.setAttribute("role", "alert")')
 
     def test_web_preview_reports_missing_programme_and_house_before_import(self):
         response = self.client.post(

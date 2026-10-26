@@ -198,6 +198,7 @@
       container.replaceChildren();
       container.hidden = false;
       container.className = "overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs";
+      container.removeAttribute("role");
       container.setAttribute("aria-live", "polite");
       const heading = document.createElement("div");
       heading.className = "border-b border-slate-200 bg-slate-50/60 px-4 py-3";
@@ -320,6 +321,27 @@
         confirmButton.textContent = `Confirm and import ${report.row_count} students`;
       }
     };
+    const showRequestError = (message) => {
+      previewReady = false;
+      confirmButton.hidden = true;
+      const container = document.getElementById("roster-ajax-report");
+      if (!container) return;
+      container.replaceChildren();
+      container.hidden = false;
+      container.className = "rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800";
+      container.removeAttribute("aria-live");
+      container.setAttribute("role", "alert");
+      addText(container, "p", message);
+    };
+    const isRosterReport = (report) =>
+      report !== null &&
+      typeof report === "object" &&
+      report.success === false &&
+      typeof report.valid === "boolean" &&
+      Number.isInteger(report.row_count) &&
+      Array.isArray(report.headers) &&
+      Array.isArray(report.sample_rows) &&
+      Array.isArray(report.errors);
 
     fileInput.addEventListener("change", () => {
       previewReady = false;
@@ -336,10 +358,11 @@
       const intent = event.submitter?.value || "preview";
       if (intent === "import" && !previewReady) return;
       showProgress(intent === "import" ? "Importing validated students…" : "Checking columns, references, duplicates, and boarding capacity…");
+      let response;
       try {
         const body = new FormData(form);
         body.set("intent", intent);
-        const response = await fetch(form.action, {
+        response = await fetch(form.action, {
           method: "POST",
           body,
           headers: {
@@ -347,20 +370,48 @@
             "X-Requested-With": "XMLHttpRequest"
           }
         });
-        const report = await response.json();
-        if (report.success && report.redirect_url) {
-          progressMessage.textContent = `Imported ${report.imported_count} student record(s).`;
-          window.location.assign(report.redirect_url);
-          return;
-        }
-        renderReport(report);
-        if (!response.ok) progressMessage.textContent = "Please correct the reported issue(s) and review the file again.";
-        else progressMessage.textContent = "";
       } catch (error) {
-        progressMessage.textContent = "The roster request could not be completed. Check your connection and try again.";
-      } finally {
+        const message = intent === "import"
+          ? "We couldn't confirm whether the import completed because the server could not be reached. Check the student registry before retrying, then review the roster again."
+          : "The roster preview could not be completed because the server could not be reached. Check your connection and try again.";
+        showRequestError(message);
         hideProgress();
+        return;
       }
+
+      let report;
+      try {
+        report = await response.json();
+      } catch {
+        const message = intent === "import"
+          ? `The server could not complete the roster request (HTTP ${response.status}). The import result is unknown. Check the student registry before retrying, then review the roster again.`
+          : `The server could not complete the roster preview (HTTP ${response.status}). Try again, and contact support if the problem continues.`;
+        showRequestError(message);
+        hideProgress();
+        return;
+      }
+
+      if (!response.ok && (!isRosterReport(report) || report.valid || report.errors.length === 0)) {
+        const message = intent === "import"
+          ? `The server could not complete the roster request (HTTP ${response.status}). The import result is unknown. Check the student registry before retrying, then review the roster again.`
+          : `The server could not complete the roster preview (HTTP ${response.status}). Try again, and contact support if the problem continues.`;
+        showRequestError(message);
+      } else if (response.ok && report && report.success === true && Number.isInteger(report.imported_count) && typeof report.redirect_url === "string") {
+        progressMessage.textContent = `Imported ${report.imported_count} student record(s).`;
+        window.location.assign(report.redirect_url);
+        hideProgress();
+        return;
+      } else if (!isRosterReport(report)) {
+        const message = intent === "import"
+          ? `The server could not complete the roster request (HTTP ${response.status}). The import result is unknown. Check the student registry before retrying, then review the roster again.`
+          : `The server returned an unexpected response (HTTP ${response.status}). Try reviewing the roster again, and contact support if the problem continues.`;
+        showRequestError(message);
+      } else if (!report.valid && report.errors.length === 0) {
+        showRequestError("The roster could not be validated. Review the file and try again.");
+      } else {
+        renderReport(report);
+      }
+      hideProgress();
     });
   })();
 </script>

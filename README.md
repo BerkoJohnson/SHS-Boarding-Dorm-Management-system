@@ -779,7 +779,9 @@ These are Django's own commands. They are always available.
 ### 7.3 Custom command: `import_roster` (core)
 
 Imports a student roster from `.csv` or `.xlsx` with the same validation as the web importer.
-**Changes the database.**
+**Changes the database.** Always pass the intended settings module: on a normal local machine
+`manage.py` defaults to development settings, which may point to a different database than the
+live service.
 
 | Argument | Required | Meaning |
 | :--- | :--- | :--- |
@@ -788,13 +790,27 @@ Imports a student roster from `.csv` or `.xlsx` with the same validation as the 
 | `--dry-run` | No | Validate and preview headers/sample rows without writing student records. |
 
 ```powershell
-# Single-school
-.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx
-# Multi-school
-.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx --schema achimota_shs
-# Validate first; this command makes no database changes
-.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx --dry-run
+# Production, single-school
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx `
+  --settings=schoolsystem.settings.production
+# Production, multi-school
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx `
+  --schema achimota_shs --settings=schoolsystem.settings.production
+# Validate against production first; no student records are imported
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx `
+  --schema achimota_shs --dry-run --settings=schoolsystem.settings.production
+# Local development only
+.\.venv\Scripts\python.exe .\manage.py import_roster roster.xlsx `
+  --settings=schoolsystem.settings.development
 ```
+
+For a live import, run from an environment securely configured for the production service. The
+production settings require `DATABASE_PROFILE=neon`, `PGHOST`, `PGDATABASE`, `PGUSER`,
+`PGPASSWORD`, an accepted `PGSSLMODE`, `DJANGO_SECRET_KEY`, `CACHE_BACKEND`, `CACHE_LOCATION`,
+and a real `EMAIL_BACKEND`. Single-school mode also requires `ALLOWED_HOSTS`; multi-school mode
+requires `TENANCY_ENABLED=true` and the matching `--schema`. A dry run still connects to the live
+database and requires the same settings. Do not use `schoolsystem.settings.build` for imports or
+copy production credentials into source control.
 
 Success prints `Roster import completed successfully: N student record(s) imported.` Validation
 errors abort the **entire** batch and print the reasons (duplicate admission/index numbers, invalid

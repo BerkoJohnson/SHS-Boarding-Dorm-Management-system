@@ -15,6 +15,8 @@ from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from core.models import (
+    AcademicTerm,
+    AcademicYear,
     ClassGroup,
     Dormitory,
     DormitoryCapacityException,
@@ -78,6 +80,7 @@ class StagedStudent:
     guardian_name: str
     guardian_phone: str
     guardian_alt_phone: str
+    location: str
 
 
 @dataclass
@@ -738,6 +741,7 @@ def validate_student_roster(uploaded_file, progress_callback=None):
                 guardian_name=guardian_name,
                 guardian_phone=guardian_phone,
                 guardian_alt_phone=guardian_alt_phone,
+                location=location,
             )
         )
 
@@ -752,6 +756,223 @@ def validate_student_roster(uploaded_file, progress_callback=None):
         staged=staged,
         guardians_by_phone=guardians_by_phone,
     )
+
+
+def _validate_staged_placements(staged):
+    room_ids = {item.student.room_id for item in staged if item.student.room_id}
+    dormitory_ids = {
+        item.student.dormitory_id
+        for item in staged
+        if item.student.dormitory_id
+    }
+    rooms = {
+        room.pk: room
+        for room in DormitoryRoom.objects
+        .select_related("dormitory")
+        .select_for_update(of=("self",))
+        .filter(pk__in=room_ids)
+        .order_by("pk")
+    }
+    dormitories = {
+        dormitory.pk: dormitory
+        for dormitory in Dormitory.objects
+        .select_related("house")
+        .select_for_update(of=("self",))
+        .filter(pk__in=dormitory_ids)
+        .order_by("pk")
+    }
+    programmes = Programme.objects.in_bulk(
+        {item.student.programme_id for item in staged if item.student.programme_id}
+    )
+    houses = House.objects.in_bulk(
+        {item.student.house_id for item in staged if item.student.house_id}
+    )
+    class_groups = ClassGroup.objects.select_related("programme").in_bulk(
+        {
+            item.student.class_group_id
+            for item in staged
+            if item.student.class_group_id
+        }
+    )
+
+    placement_errors = []
+    for item in staged:
+        student = item.student
+        if student.programme_id not in programmes:
+            placement_errors.append(
+                f"{item.location}: the selected programme changed or no longer exists."
+            )
+            continue
+        student.programme = programmes[student.programme_id]
+        if student.house_id:
+            house = houses.get(student.house_id)
+            if house is None:
+                placement_errors.append(
+                    f"{item.location}: the selected house changed or no longer exists."
+                )
+                continue
+            student.house = house
+        if student.dormitory_id:
+            dormitory = dormitories.get(student.dormitory_id)
+            if dormitory is None:
+                placement_errors.append(
+                    f"{item.location}: the selected dormitory changed or no longer exists."
+                )
+                continue
+            student.dormitory = dormitory
+        if student.room_id:
+            room = rooms.get(student.room_id)
+            if room is None:
+                placement_errors.append(
+                    f"{item.location}: the selected room changed or no longer exists."
+                )
+                continue
+            student.room = room
+        if student.class_group_id:
+            class_group = class_groups.get(student.class_group_id)
+            if class_group is None:
+                placement_errors.append(
+                    f"{item.location}: the selected class changed or no longer exists."
+                )
+                continue
+            student.class_group = class_group
+
+        if student.status == Student.EnrollmentStatus.COMPLETED:
+            placement_errors.append(
+                f"{item.location}: completed students must be processed through "
+                "the audited phase-out workflow."
+            )
+        if student.residency == Student.ResidencyStatus.DAY:
+            if student.dormitory_id:
+                placement_errors.append(
+                    f"{item.location}: day students cannot be assigned a dormitory."
+                )
+            if student.room_id:
+                placement_errors.append(
+                    f"{item.location}: day students cannot be assigned a room."
+                )
+        if (
+            student.residency == Student.ResidencyStatus.BOARDING
+            and not student.house_id
+        ):
+            placement_errors.append(
+                f"{item.location}: boarding students must be assigned a house."
+            )
+        if (
+            student.residency == Student.ResidencyStatus.BOARDING
+            and not student.dormitory_id
+        ):
+            placement_errors.append(
+                f"{item.location}: boarding students must be assigned a dormitory."
+            )
+        if (
+            student.house_id
+            and student.dormitory_id
+            and student.dormitory.house.pk != student.house_id
+        ):
+            placement_errors.append(
+                f"{item.location}: the selected dormitory is no longer in the "
+                "selected house."
+            )
+        expected_gender = {
+            Student.Gender.MALE: Dormitory.GenderBlock.MALE,
+            Student.Gender.FEMALE: Dormitory.GenderBlock.FEMALE,
+        }.get(student.gender)
+        if (
+            student.dormitory_id
+            and student.dormitory.gender != expected_gender
+        ):
+            placement_errors.append(
+                f"{item.location}: gender mismatch; {student.dormitory.name} is "
+                "not compatible with this student's gender."
+            )
+        if (
+            student.room_id
+            and student.room.dormitory.pk != student.dormitory_id
+        ):
+            placement_errors.append(
+                f"{item.location}: the selected room is no longer in the "
+                "selected dormitory."
+            )
+        class_programme = (
+            student.class_group.programme
+            if student.class_group_id
+            else None
+        )
+        if class_programme and student.programme_id != class_programme.pk:
+            placement_errors.append(
+                f"{item.location}: the selected class now belongs to a different "
+                "programme."
+            )
+
+    if placement_errors:
+        return placement_errors
+
+    now = timezone.now()
+    capacity_exceptions = (
+        DormitoryCapacityException.objects.select_for_update()
+        .filter(
+            dormitory_id__in=dormitory_ids,
+            cancelled_at__isnull=True,
+            starts_at__lte=now,
+            ends_at__gte=now,
+        )
+        .values_list("dormitory_id", "additional_capacity")
+        .order_by("pk")
+    )
+    extra_capacity = {}
+    for dormitory_id, additional_capacity in capacity_exceptions:
+        extra_capacity[dormitory_id] = (
+            extra_capacity.get(dormitory_id, 0) + additional_capacity
+        )
+    dormitory_limits = {
+        dormitory_id: dormitories[dormitory_id].capacity
+        + extra_capacity.get(dormitory_id, 0)
+        for dormitory_id in dormitory_ids
+    }
+    room_occupancy = dict(
+        Student.objects.filter(room_id__in=room_ids)
+        .exclude(status=Student.EnrollmentStatus.COMPLETED)
+        .filter(residency=Student.ResidencyStatus.BOARDING)
+        .values("room_id")
+        .annotate(occupied=Count("pk"))
+        .values_list("room_id", "occupied")
+    )
+    dormitory_occupancy = dict(
+        Student.objects.filter(dormitory_id__in=dormitory_ids)
+        .exclude(status=Student.EnrollmentStatus.COMPLETED)
+        .filter(residency=Student.ResidencyStatus.BOARDING)
+        .values("dormitory_id")
+        .annotate(occupied=Count("pk"))
+        .values_list("dormitory_id", "occupied")
+    )
+    capacity_errors = []
+    for item in staged:
+        student = item.student
+        if (
+            student.residency != Student.ResidencyStatus.BOARDING
+            or student.status == Student.EnrollmentStatus.COMPLETED
+        ):
+            continue
+        if student.room_id:
+            room = rooms[student.room_id]
+            room_occupancy[room.pk] = room_occupancy.get(room.pk, 0) + 1
+            if room_occupancy[room.pk] > room.capacity:
+                capacity_errors.append(
+                    f"{item.location}: room '{room.name}' is at its capacity of "
+                    f"{room.capacity}."
+                )
+        if student.dormitory_id:
+            dormitory = dormitories[student.dormitory_id]
+            dormitory_occupancy[dormitory.pk] = (
+                dormitory_occupancy.get(dormitory.pk, 0) + 1
+            )
+            if dormitory_occupancy[dormitory.pk] > dormitory_limits[dormitory.pk]:
+                capacity_errors.append(
+                    f"{item.location}: dormitory '{dormitory.name}' is at its "
+                    f"capacity of {dormitory_limits[dormitory.pk]}."
+                )
+    return capacity_errors
 
 
 def commit_student_roster(validation, progress_callback=None):
@@ -773,8 +994,16 @@ def commit_student_roster(validation, progress_callback=None):
                 quota_guard,
             )
 
-            # Hold the tenant quota lock across the cap check and the inserts so
-            # two concurrent imports cannot both pass the check and overshoot.
+            placement_errors = _validate_staged_placements(staged)
+            if placement_errors:
+                return 0, [
+                    "The roster could not be imported because placements changed "
+                    "or reached capacity during validation. No students were "
+                    f"imported:\n{chr(10).join(placement_errors)}"
+                ]
+
+            # Match Student.save's placement-before-quota lock order, and hold
+            # the tenant quota lock across the cap check and the bulk insert.
             with quota_guard("max_students"):
                 if enrolled_to_import:
                     try:
@@ -788,40 +1017,70 @@ def commit_student_roster(validation, progress_callback=None):
                     except ValidationError as error:
                         return 0, error.messages
 
+                known_guardians = {
+                    (
+                        phone,
+                        guardian.full_name.casefold(),
+                    ): guardian
+                    for phone, matching_guardians in guardians_by_phone.items()
+                    for guardian in matching_guardians
+                }
                 created_guardians = {}
-                for row_index, item in enumerate(staged, 1):
+                for item in staged:
                     if item.guardian_phone:
-                        guardian = next(
-                            (
-                                guardian
-                                for guardian in guardians_by_phone.get(
-                                    item.guardian_phone, []
-                                )
-                                if guardian.full_name.casefold()
-                                == item.guardian_name.casefold()
-                            ),
-                            None,
+                        guardian_key = (
+                            item.guardian_phone,
+                            item.guardian_name.casefold(),
                         )
+                        guardian = known_guardians.get(guardian_key)
                         if guardian is None:
                             guardian = created_guardians.get(item.guardian_phone)
                         if guardian is None:
-                            guardian = Guardian.objects.create(
+                            guardian = Guardian(
                                 full_name=item.guardian_name,
                                 phone_number=item.guardian_phone,
                                 alt_phone_number=item.guardian_alt_phone or None,
                             )
                             created_guardians[item.guardian_phone] = guardian
                         item.student.guardian = guardian
-                    item.student.save()
+
+                new_guardians = list(created_guardians.values())
+                if new_guardians:
+                    Guardian.objects.bulk_create(new_guardians, batch_size=500)
+
+                students = [item.student for item in staged]
+                students_needing_completion_year = [
+                    student
+                    for student in students
+                    if (
+                        not student.expected_completion_year_id
+                        and student.status == Student.EnrollmentStatus.ENROLLED
+                        and student.level == AcademicTerm.LevelChoice.SHS_3
+                    )
+                ]
+                if students_needing_completion_year:
+                    current_year = AcademicYear.objects.filter(
+                        is_current=True
+                    ).first()
+                    if current_year:
+                        for student in students_needing_completion_year:
+                            student.expected_completion_year = current_year
+
+                # The shared validation and locked batch checks replace the
+                # per-row full_clean, quota, and capacity queries in Student.save.
+                for offset in range(0, len(students), 500):
+                    batch = students[offset : offset + 500]
+                    Student.objects.bulk_create(batch, batch_size=500)
                     if progress_callback:
-                        progress_callback(
-                            "Importing students", row_index, len(staged)
-                        )
+                        for row_index in range(offset + 1, offset + len(batch) + 1):
+                            progress_callback(
+                                "Importing students", row_index, len(staged)
+                            )
     except IntegrityError:
         return 0, [
-            "The roster could not be imported because a student identifier was "
-            "added or changed during validation. No students were imported; "
-            "please upload the file again."
+            "The roster could not be imported because a record conflicted with "
+            "database data that changed during validation. No students were "
+            "imported; please review the roster and try again."
         ]
     except ValidationError as error:
         return 0, [
