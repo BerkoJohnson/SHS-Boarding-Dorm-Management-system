@@ -26,6 +26,15 @@ SENSITIVE_STATUSES = {
 }
 
 
+class RollCallCorrectionError(ValueError):
+    """A correction workflow error with a stable API code and field errors."""
+
+    def __init__(self, message, *, code="correction_error", fields=None):
+        super().__init__(message)
+        self.code = code
+        self.fields = fields or {}
+
+
 def _requires_evidence(entry, requested_status):
     return bool(
         entry.status in SENSITIVE_STATUSES
@@ -73,10 +82,18 @@ def request_roll_call_correction(
 ):
     """Create a pending correction for a completed or expired session."""
     if requested_status not in RollCallEntry.Status.values:
-        raise ValueError("Choose a valid attendance status.")
+        raise RollCallCorrectionError(
+            "Choose a valid attendance status.",
+            code="validation_error",
+            fields={"requested_status": ["Choose a valid attendance status."]},
+        )
     reason = (reason or "").strip()
     if not reason:
-        raise ValueError("Record the reason for the correction.")
+        raise RollCallCorrectionError(
+            "Record the reason for the correction.",
+            code="validation_error",
+            fields={"reason": ["This field is required."]},
+        )
     locked_entry = (
         RollCallEntry.objects.select_for_update()
         .select_related("session", "student")
@@ -89,22 +106,32 @@ def request_roll_call_correction(
         RollCallSession.Status.COMPLETED,
         RollCallSession.Status.EXPIRED,
     ):
-        raise ValueError(
-            "Use the normal attendance controls while the roll call is still in progress."
+        raise RollCallCorrectionError(
+            "Use the normal attendance controls while the roll call is still in progress.",
+            code="roll_call_state_error",
         )
     if requested_status == locked_entry.status:
-        raise ValueError("The requested status is already recorded.")
+        raise RollCallCorrectionError(
+            "The requested status is already recorded.",
+            code="validation_error",
+            fields={"requested_status": ["The requested status is already recorded."]},
+        )
     if RollCallCorrection.objects.filter(
         entry=locked_entry,
         status=RollCallCorrection.Status.PENDING,
     ).exists():
-        raise ValueError("This entry already has a pending correction request.")
+        raise RollCallCorrectionError(
+            "This entry already has a pending correction request.",
+            code="correction_pending",
+        )
 
     sensitive = _requires_evidence(locked_entry, requested_status)
     evidence = (evidence or "").strip()
     if sensitive and not evidence:
-        raise ValueError(
-            "A sensitive correction (Present/Absent or conduct-linked) requires evidence."
+        raise RollCallCorrectionError(
+            "A sensitive correction (Present/Absent or conduct-linked) requires evidence.",
+            code="validation_error",
+            fields={"evidence": ["Supporting evidence is required for this correction."]},
         )
     correction = RollCallCorrection(
         entry=locked_entry,
@@ -144,12 +171,21 @@ def review_roll_call_correction(correction, *, reviewer, approve, review_note=""
         .get(pk=correction.pk)
     )
     if locked.status != RollCallCorrection.Status.PENDING:
-        raise ValueError("This correction has already been decided.")
+        raise RollCallCorrectionError(
+            "This correction has already been decided.",
+            code="correction_decided",
+        )
     profile = get_user_profile(reviewer)
     if profile is None or not (profile.is_admin or profile.is_senior_housemaster):
-        raise ValueError("Only an administrator or Senior Housemaster can decide corrections.")
+        raise RollCallCorrectionError(
+            "Only an administrator or Senior Housemaster can decide corrections.",
+            code="approval_forbidden",
+        )
     if locked.requested_by_id == reviewer.pk:
-        raise ValueError("A correction cannot be approved by the person who requested it.")
+        raise RollCallCorrectionError(
+            "A correction cannot be approved by the person who requested it.",
+            code="approval_forbidden",
+        )
 
     if not approve:
         locked.status = RollCallCorrection.Status.REJECTED
@@ -175,15 +211,23 @@ def review_roll_call_correction(correction, *, reviewer, approve, review_note=""
         RollCallSession.Status.COMPLETED,
         RollCallSession.Status.EXPIRED,
     ):
-        raise ValueError("The session is no longer closed; use normal attendance controls.")
+        raise RollCallCorrectionError(
+            "The session is no longer closed; use normal attendance controls.",
+            code="roll_call_state_error",
+        )
     entry = RollCallEntry.objects.select_for_update().get(pk=locked.entry_id)
     if entry.status != locked.previous_status:
-        raise ValueError(
+        raise RollCallCorrectionError(
             "The original entry changed after this request was created. "
-            "Reject this request and create a fresh correction."
+            "Reject this request and create a fresh correction.",
+            code="correction_stale",
         )
     if locked.requires_second_approval and not (locked.evidence or "").strip():
-        raise ValueError("This sensitive correction is missing supporting evidence.")
+        raise RollCallCorrectionError(
+            "This sensitive correction is missing supporting evidence.",
+            code="validation_error",
+            fields={"evidence": ["Supporting evidence is required for this correction."]},
+        )
 
     now = timezone.now()
     RollCallEntry.objects.filter(pk=entry.pk).update(

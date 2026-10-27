@@ -149,6 +149,26 @@ urlpatterns = [
         roll_call.complete_session,
         name="roll_call_complete",
     ),
+    path(
+        "roll-call/sessions/<uuid:session_id>/entries/<uuid:entry_id>/corrections/",
+        roll_call.request_correction,
+        name="roll_call_correction_request",
+    ),
+    path(
+        "roll-call/corrections/",
+        roll_call.corrections,
+        name="roll_call_corrections",
+    ),
+    path(
+        "roll-call/corrections/<uuid:correction_id>/",
+        roll_call.correction_detail,
+        name="roll_call_correction",
+    ),
+    path(
+        "roll-call/corrections/<uuid:correction_id>/decision/",
+        roll_call.decide_correction,
+        name="roll_call_correction_decision",
+    ),
     # Notifications
     path("notifications/", notifications.notifications, name="notifications"),
     path(

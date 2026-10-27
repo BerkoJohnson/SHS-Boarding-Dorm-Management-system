@@ -538,13 +538,46 @@ guess at unmarked entries. `complete` refuses while any entry is `Unmarked` or
 has an unreviewed gate conflict (`409`). House tutors can run their house's
 muster but cannot approve exeats or use gate controls.
 
-**Post-closure corrections.** The server has a correction model and
-request/review services used by the web UI
-(`RollCallCorrection`, `core/services/roll_call_corrections.py`). The v1 API
-does not expose correction request, list, detail, or decision routes. Ordinary
-entry updates on a completed or expired session return `409
-roll_call_state_error`. The model contains a `cancelled` status, but no service
-or route currently applies it.
+**Post-closure corrections.** The API exposes the existing correction workflow
+(`RollCallCorrection`, `core/services/roll_call_corrections.py`):
+
+| Method | Path | Roles | Purpose |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/roll-call/corrections/` | A/S/H | List corrections; house-scoped for H; filters `status`, `session_id`, `student_id` |
+| `GET` | `/roll-call/corrections/<id>/` | A/S/H | Detail, including evidence, remarks, entry, and session |
+| `POST` | `/roll-call/sessions/<session_id>/entries/<entry_id>/corrections/` | A/S/H/T | Request a correction for a completed/expired entry |
+| `POST` | `/roll-call/corrections/<id>/decision/` | A/S | Approve or reject a pending correction |
+
+Request body:
+
+```json
+{
+  "requested_status": "Present",
+  "requested_remarks": "Seen at the dormitory.",
+  "reason": "The student was present during the muster.",
+  "evidence": "Dormitory register signed by the tutor."
+}
+```
+
+Only completed or expired sessions accept corrections; an open session returns
+`409 roll_call_state_error`. Direct entry updates on a completed or expired
+session remain blocked with the same code. Present/Absent and conduct-linked
+changes require evidence (`400 validation_error` with an `evidence` field
+error). A second pending request for the same entry returns
+`409 correction_pending`. The requester comes from the bearer token.
+
+Decision body:
+
+```json
+{"decision": "approve", "review_note": "Evidence checked."}
+```
+
+`decision` must be `approve` or `reject`. The reviewer comes from the token and
+cannot be the requester; self-review returns `403 approval_forbidden`. A stale
+entry returns `409 correction_stale`; a correction that is already decided
+returns `409 correction_decided`. Both request and decision accept an
+`Idempotency-Key`. Cancellation is not in v1: the model's `cancelled` status
+remains unused.
 
 ### 4.7 Push devices
 
@@ -641,8 +674,8 @@ it only as a prompt to refresh, never as the only copy of an alert.
 - Student photos are private. Use the authenticated photo endpoint; do not
   cache or share the URL outside the app's secure storage.
 - Successful student scans, invite actions, token revocations, correction
-  decisions, exports, and gate-duty assignment changes are recorded in
-  `AuditEvent`. Gate movement timestamps are stored on `ExeatMovement` and
+  requests and decisions, exports, and gate-duty assignment changes are recorded
+  in `AuditEvent`. Gate movement timestamps are stored on `ExeatMovement` and
   `ExeatReconciliation`, not as separate `AuditEvent` rows. Exeat-number,
   ambiguous, no-match, and expired-QR scan outcomes are not currently audited.
 

@@ -41,6 +41,14 @@ ROLL_CALL_ROLES = (
     StaffRole.HOUSE_TUTOR,
 )
 
+# Roll-call corrections: house staff request; Housemasters, Senior Housemasters,
+# and administrators can review the queue. Only ADMIN_ROLES may decide.
+ROLL_CALL_CORRECTION_ROLES = (
+    StaffRole.ADMIN,
+    StaffRole.SENIOR_HOUSEMASTER,
+    StaffRole.HOUSEMASTER,
+)
+
 # Gate Operations: School-wide departure/return logging at the main checkpoint
 GATE_ROLES = (
     StaffRole.ADMIN,

@@ -1,6 +1,6 @@
 # Mobile API contract gap analysis
 
-- **Status:** analysis and contract correction, not an implementation sign-off
+- **Status:** analysis, contract correction, and Phase 2 implementation note
 - **Date:** 2026-10-27
 - **Branch inspected:** `staging/render-preview`
 - **Primary contract:** `docs/API.md`
@@ -25,7 +25,7 @@ actually needs, renders, or retries is an assumption unless it is written in
 
 | Area | Verified position | Gap or correction |
 | :--- | :--- | :--- |
-| Roll-call corrections | Model, request/review services, evidence rule, reviewer separation, in-app notifications, audit events, and closed-session rejection exist. | No v1 correction routes. The `cancelled` status has no service or route. The service itself trusts the caller for role/house scope; the web view supplies that scope. |
+| Roll-call corrections | Model, request/review services, evidence rule, reviewer separation, in-app notifications, audit events, and closed-session rejection exist. List, detail, request, and decision routes are now exposed through the API. | Cancellation remains unimplemented. The `cancelled` status has no service or route. The service itself trusts the caller for role/house scope; the API applies that scope before calling it. |
 | Report export | CSV, XLSX, and PDF are produced synchronously; `DataExportLog` and `AuditEvent` are written; house scope is applied. | No report-template metadata and no API asynchronous or signed download flow. Scheduled report email exists outside the mobile API. |
 | Report and audit filters | Reports support `report`, `date_from`, `date_to`, and `term`; audit supports `action`, `date_from`, and `date_to`. Housemasters are scoped to their house. | No caller-selected house, form/class, or status report filters. No house/form/status audit filters. Point-in-time reports accept date/term filters but ignore them through the API. |
 | Gate verification and pass tokens | Verify/depart/return exist; movements are idempotent and server-recorded. The QR identifier is a rotatable UUID `public_token` with optional expiry. | The token is not signed or short-lived; expiry defaults to never. Gate-duty enforcement is bypassed by the API. Two documented gate claims do not match current behavior. |
@@ -58,19 +58,22 @@ actually needs, renders, or retries is an assumption unless it is written in
 
 **Gaps**
 
-- `core/api/urls.py` has no correction request, list, detail, or decision route.
+- The API now exposes list, detail, request, and decision routes. They apply
+  house scope before calling the shared services and map domain errors to stable
+  codes. Cancellation is still absent.
 - The model exposes `RollCallCorrection.Status.CANCELLED`, but no service or web
   route transitions a request to cancelled. Do not describe cancellation as
   implemented.
 - The request service does not enforce the caller’s role or house scope; the
-  review service checks the reviewer role but not the reviewer’s house. The web
-  views filter on `entry__session__house_id` before calling either service. An
-  API must do the same, or the services must be hardened for API use.
-- A duplicate pending request is protected by the database constraint, but the
-  service does not translate `IntegrityError` into a domain error. The API must
-  map it to a stable conflict response.
-- The reviewer identity must come from the bearer token, never from the request
-  body.
+  review service checks the reviewer role but not the reviewer’s house. The API
+  endpoints apply house scope before calling either service.
+- A duplicate pending request is protected by the database constraint. The API
+  maps the service’s `correction_pending` error, and also catches `IntegrityError`
+  and the constraint `ValidationError`, to `409 correction_pending`.
+- The reviewer identity comes from the bearer token, never from the request body.
+- API tests cover the workflow, including evidence, duplicate pending, house
+  boundaries, idempotent replay, self-review, stale entries, notifications, and
+  audit events (`core/api/tests/test_roll_call_corrections.py`).
 
 **Assumptions**
 
@@ -317,22 +320,23 @@ contract or an ADR, not inferred from the current code.
 
 | ID | Decision | Why it blocks |
 | :--- | :--- | :--- |
-| D1 | Confirm the Android client’s remaining requirements and acceptance criteria, including exact payloads and roles. | The client repository is not available; endpoint shape and error codes cannot be validated against it. |
+| D1 | **Resolved 2026-10-27:** the v1 correction surface is defined from the existing web workflow as list, detail, request, and decision. The Android repository is still unavailable, so client acceptance is a Phase 7 gate. | Backend shape is unblocked. Exact client rendering and retry behavior remain unverified until the client is available. |
 | D2 | Define report filter semantics: caller-selected house, form/class meaning, status filter, and whether point-in-time reports must reject or ignore period filters. | Adding filters changes authorization and report-service behavior. |
 | D3 | Decide whether the gate token remains a revocable UUID with optional expiry or becomes a signed, short-lived token. | This is a token-model and printed-card migration, not a serializer change. |
 | D4 | Define push provider(s), credentials, event payloads, retry budget, and delivery SLA. | No provider or outbox exists; reliable delivery needs infrastructure. |
 | D5 | Define card number, issue date, card expiry, ownership, and reissue semantics. | A schema change without ownership rules creates duplicate identifiers and printing problems. |
 | D6 | Decide whether audit immutability must be enforced at the database layer and what retention applies. | The current model methods do not stop queryset updates or direct SQL. |
-| D7 | Decide whether correction cancellation is required and who may cancel. | The status exists but no service or route does. |
+| D7 | **Resolved 2026-10-27:** cancellation is not in v1. The `cancelled` status remains unused; callers must request a new correction instead. | The decision removes cancellation from the Phase 2 scope. A future cancellation feature needs a service transition, audit event, and permission rule. |
 | D8 | Decide whether gate-duty enforcement applies to verification as well as departure/return. | The current API applies neither. |
 
 ## 6. Backend-first plan and dependencies
 
 ### Phase 0 - Freeze the contract (blocking)
 
-Resolve D1-D8. Produce a short contract addendum with endpoint lists, roles,
-payloads, status codes, scope rules, and explicit “not in v1” items. Do not start
-schema or client work before D2-D6 are decided.
+D1 and D7 are resolved. Resolve the remaining decisions (D2-D6 and D8) and
+produce a short contract addendum with endpoint lists, roles, payloads, status
+codes, scope rules, and explicit “not in v1” items. Do not start schema or client
+work before D2-D6 are decided.
 
 **Exit criteria:** signed-off contract addendum; the Android client confirms the
 same behaviors.
@@ -348,43 +352,48 @@ same behaviors.
 **Dependencies:** none, but final wording for D2-D5 waits on those decisions.
 **Exit criteria:** no documented claim contradicts a test or a code path.
 
-### Phase 2 - Expose roll-call corrections through the API
+### Phase 2 - Roll-call corrections API (implemented 2026-10-27)
 
-Reuse `RollCallCorrection` and `core/services/roll_call_corrections.py`; do not
-create a parallel workflow.
+Reuses `RollCallCorrection` and `core/services/roll_call_corrections.py`; no
+parallel workflow and no migration were introduced.
 
-Suggested surface:
+Implemented surface:
 
 | Method | Path | Roles | Purpose |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/roll-call/corrections/` | A/S/H | List corrections, house-scoped for H; filters `status`, `session_id`, `student_id`. |
-| `GET` | `/roll-call/corrections/<id>/` | A/S/H | Detail, including evidence for authorized reviewers. |
-| `POST` | `/roll-call/sessions/<session_id>/entries/<entry_id>/corrections/` | A/S/H/T | Request a correction for a closed/expired entry. |
+| `GET` | `/roll-call/corrections/` | A/S/H | List corrections, house-scoped for H; filters `status`, `session_id`, `student_id`; paginated. |
+| `GET` | `/roll-call/corrections/<id>/` | A/S/H | Detail, including evidence, remarks, entry, and session. |
+| `POST` | `/roll-call/sessions/<session_id>/entries/<entry_id>/corrections/` | A/S/H/T | Request a correction for a completed/expired entry. |
 | `POST` | `/roll-call/corrections/<id>/decision/` | A/S | Approve or reject; reviewer from the token. |
-| `POST` | `/roll-call/corrections/<id>/cancel/` | Requester or A/S | Only if D7 requires it; add a service transition and audit event first. |
 
-Implementation requirements:
+Implementation notes:
 
-- Scope every lookup with `filter_queryset_by_house(..., "entry__session__house_id")`.
-- Reject a request on an open session with `409 roll_call_state_error`.
-- Reject a duplicate pending request with `409 correction_pending`; also catch
-  the database `IntegrityError` for the concurrent case.
-- Reject self-review in the service and map it to `403 approval_forbidden`.
-- Require evidence for Present/Absent and conduct-linked changes; return field
-  errors for missing evidence.
-- Re-check that the entry still matches `previous_status` at decision time.
-- Apply `@idempotent` to create and decision; the idempotency key is scoped to the
-  token and path.
-- Record the requester and reviewer from `request.api_user`, never from JSON.
-- Return `AuditEvent`-backed history or at least the correction status/timestamps;
-  do not expose unrelated audit metadata.
+- Every lookup is scoped with
+  `filter_queryset_by_house(..., "entry__session__house_id")` before the service
+  is called.
+- The service now raises `RollCallCorrectionError`, a `ValueError` subclass with
+  a stable code and optional field errors. Existing web views still catch
+  `ValueError`, so their behavior is unchanged.
+- Open sessions return `409 roll_call_state_error`.
+- Duplicate pending requests return `409 correction_pending`; the view also maps
+  `IntegrityError` and the unique-constraint `ValidationError` for the
+  concurrent case.
+- Self-review returns `403 approval_forbidden`; a stale entry returns
+  `409 correction_stale`; a decided correction returns `409 correction_decided`.
+- Evidence is required for Present/Absent and conduct-linked changes and is
+  returned as an `evidence` field error.
+- Create and decision use `@idempotent`; the key is scoped to the token and path.
+- The requester and reviewer always come from `request.api_user`.
+- Responses expose the correction status, timestamps, requester/reviewer, and
+  audit-backed state, but no unrelated audit metadata.
+- Cancellation is intentionally absent (D7).
 
-**Dependencies:** D1, D7. No migration is needed unless cancellation or new
-fields are added.
-**Acceptance:** closed-session rules, open-session rejection, evidence,
-self-review, duplicate pending, concurrent duplicate, stale-entry rejection,
-house boundary, tenant boundary, idempotent replay, notifications, and audit
-events are covered by API tests.
+**Dependencies:** D1 and D7, both resolved. No migration.
+**Acceptance:** `core/api/tests/test_roll_call_corrections.py` covers closed and
+open sessions, evidence, duplicate pending, self-review, stale entries, house
+scope, idempotent replay, notifications, and audit events. The concurrent
+duplicate path is mapped in code but is not stress-tested. Tenant isolation
+relies on the existing tenant-bound token tests.
 
 ### Phase 3 - Complete the reporting contract
 
@@ -485,11 +494,11 @@ pass on a tenant test environment.
 ## 7. Recommended sequence
 
 ```text
-D1-D8 decisions
+D1 and D7 resolved; D2-D6 and D8 remain
     |
-    +--> Phase 1 contract correction (can start with current wording)
+    +--> Phase 1 contract correction (done)
     |
-    +--> Phase 2 corrections API (backend-ready; highest confidence)
+    +--> Phase 2 corrections API (done; see the implementation note above)
     |
     +--> Phase 3 reporting contract (after D2)
     |

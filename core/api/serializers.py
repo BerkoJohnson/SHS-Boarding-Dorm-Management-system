@@ -392,6 +392,63 @@ def staff_notification_payload(notification):
     }
 
 
+def roll_call_correction_summary(correction):
+    entry = correction.entry
+    return {
+        "id": str(correction.pk),
+        "status": correction.status,
+        "status_display": correction.get_status_display(),
+        "session_id": str(entry.session_id),
+        "entry_id": str(entry.pk),
+        "student": {
+            "id": str(entry.student_id),
+            "admission_no": entry.student.admission_no,
+            "full_name": entry.student.full_name,
+            "house_id": (
+                str(entry.student.house_id) if entry.student.house_id else None
+            ),
+            "house_name": (
+                entry.student.house.name if entry.student.house_id else None
+            ),
+        },
+        "previous_status": correction.previous_status,
+        "previous_status_display": correction.get_previous_status_display(),
+        "requested_status": correction.requested_status,
+        "requested_status_display": correction.get_requested_status_display(),
+        "requires_second_approval": correction.requires_second_approval,
+        "requested_by": (
+            staff_payload(correction.requested_by)
+            if correction.requested_by_id
+            else None
+        ),
+        "reviewed_by": (
+            staff_payload(correction.reviewed_by)
+            if correction.reviewed_by_id
+            else None
+        ),
+        "reviewed_at": iso(correction.reviewed_at),
+        "review_note": correction.review_note or "",
+        "applied_at": iso(correction.applied_at),
+        "created_at": iso(correction.created_at),
+        "updated_at": iso(correction.updated_at),
+    }
+
+
+def roll_call_correction_detail(request, correction):
+    payload = roll_call_correction_summary(correction)
+    payload.update(
+        {
+            "reason": correction.reason,
+            "evidence": correction.evidence or "",
+            "previous_remarks": correction.previous_remarks or "",
+            "requested_remarks": correction.requested_remarks or "",
+            "entry": roll_call_entry_payload(request, correction.entry),
+            "session": roll_call_session_payload(correction.entry.session),
+        }
+    )
+    return payload
+
+
 def roll_call_notification_payload(notification):
     return {
         "id": f"roll_call:{notification.pk}",
