@@ -327,15 +327,27 @@ Feed filters: `?unread=true`, `?kind=late_return|exeat_review|roll_call|…`,
 
 Detailed reports are available at `GET /reports/` to administrators, senior
 housemasters, and housemasters; housemasters receive only their assigned
-house's data. Use the same `report`, `date_from`, `date_to`, and `term` filters
-as the web dashboard, plus `page` and `page_size` (maximum 100). The response
-contains report headers, the current rows, and the total `record_count`.
-`GET /reports/export/?format=csv|xlsx|pdf` generates the same scope-limited
-report and records the export in the server audit trail.
+house's data. Supported filters are `report` (default `housing`), `date_from`,
+`date_to`, and `term`, plus `page` and `page_size` (maximum 100). There is no
+caller-selected `house`, `class_group`/form, or `status` filter in v1. The
+response contains report headers, the current rows, and the total
+`record_count`.
+
+The point-in-time reports `housing`, `placement_exceptions`, `room_register`,
+and `data_completeness` do not consume `date_from`, `date_to`, or `term`. The
+API currently accepts those parameters but they have no effect; the web
+dashboard disables the controls. Invalid dates or an inverted range return
+`400 validation_error`.
+
+`GET /reports/export/?format=csv|xlsx|pdf` returns the file directly and records
+both a `DataExportLog` row and an `export` `AuditEvent`. There is no
+report-template metadata, asynchronous export job, or signed download URL in
+v1.
 
 `GET /audit/events/` is restricted to administrators and senior housemasters.
-It returns paginated event summaries and deliberately omits raw before/after
-payloads and metadata.
+It supports `action`, `date_from`, and `date_to` filters only; it has no
+house/form/status filter. It returns paginated event summaries and deliberately
+omits raw before/after payloads and metadata.
 
 Only administrators can use the guardian SMS campaign endpoints. Submit to
 `POST /sms/campaigns/` with `{"scope":"all_boarders","message":"…"}` or
@@ -360,6 +372,12 @@ The mobile API never returns guardian phone numbers.
 | `GET` | `/students/<id>/id-card/` | A/S | ID-card metadata and QR URL |
 | `POST` | `/students/<id>/rotate-public-token/` | A/S | Reissue the QR token |
 
+`GET /students/<id>/id-card/` returns the nested student summary (including
+`admission_no` and `index_number`), `public_token`, `public_token_expires_at`,
+`public_qr_url`, and `layouts`. It does not return a separate card number or
+issue date, and the student model stores neither. Card issuance and reissue
+metadata beyond QR rotation are not implemented.
+
 List filters: `q`, `house_id`, `dormitory_id`, `class_group_id`,
 `programme_id`, `status`, `residency`, `gender`,
 `has_active_exeat=true|false`. Ordering: `full_name`, `admission_no`,
@@ -368,7 +386,7 @@ List filters: `q`, `house_id`, `dormitory_id`, `class_group_id`,
 Room allocation accepts both `dormitory_id` and `room_id`. The server validates
 that the room belongs to that dormitory and that house, gender, dormitory
 capacity, and room capacity constraints hold. Successful moves are recorded in
-the append-only audit trail.
+the audit trail.
 
 **QR and barcode handling.** The QR on a student ID card encodes an opaque
 student `public_token` UUID, normally inside a public verification URL. The app
@@ -399,16 +417,35 @@ QR code.
 ```
 
 It tries, in order: student QR UUID, exeat number, admission number, index
-number. Ambiguous admission/index matches return `409 ambiguous_code` with
-candidates rather than guessing. A successful response includes `match`,
-`student`, `exeat`, `movement_state`, `can_depart`, `can_return` and
-`warnings`. Every scan is audited.
+number. A partial pass number can return `match: "ambiguous"` with
+`candidates` (HTTP `200`). Admission and index numbers are exact-match lookups;
+if legacy data contains duplicates, the current implementation returns the
+first match rather than `409 ambiguous_code`. This is a known contract
+mismatch. A successful response includes `match`, `student`, `exeat`,
+`movement_state`, `can_depart`, `can_return` and `warnings`.
+
+`STUDENT_SCAN` is written only after a successful student QR or admission/index
+resolution. Exeat-number matches, ambiguous lists, no-match results, and
+expired QR scans do not currently write an audit event. Treat audit coverage as
+scoped to successful student scans until this is corrected.
 
 **Depart / return** accept `{"exeat_id": "<uuid>"}`. Departure requires an
 approved pass whose scheduled departure has arrived. Return requires a recorded
 departure (missed departures must go through reconciliation). Both are
 idempotent and return the updated exeat plus movement timestamps. A second
 attempt without an `Idempotency-Key` returns `409 movement_recorded`.
+
+The student QR payload is an opaque UUID `public_token`, not a signed or
+short-lived pass token. It can be rotated, and its expiry is optional:
+`STUDENT_ID_PUBLIC_TOKEN_TTL_DAYS` defaults to `0` (never expires). The pass
+itself is the approved `Exeat` record; depart/return use `exeat_id`.
+
+When `OperationalSettings.gate_duty_enforcement_enabled` is on, the web gate
+workflow requires an active `GateDutyAssignment` through
+`can_log_gate_check()`. The v1 API gate endpoints currently check only the
+`A/G` role and do not call that helper, so a Gate Officer without an active
+assignment can still use `/gate/depart/` and `/gate/return/` through the API.
+This is a known authorization gap, not a client assumption.
 
 ### 4.5 Exeats
 
@@ -501,6 +538,14 @@ guess at unmarked entries. `complete` refuses while any entry is `Unmarked` or
 has an unreviewed gate conflict (`409`). House tutors can run their house's
 muster but cannot approve exeats or use gate controls.
 
+**Post-closure corrections.** The server has a correction model and
+request/review services used by the web UI
+(`RollCallCorrection`, `core/services/roll_call_corrections.py`). The v1 API
+does not expose correction request, list, detail, or decision routes. Ordinary
+entry updates on a completed or expired session return `409
+roll_call_state_error`. The model contains a `cancelled` status, but no service
+or route currently applies it.
+
 ### 4.7 Push devices
 
 | Method | Path | Roles | Purpose |
@@ -524,6 +569,12 @@ Register:
 Registering a new token for the same `device_id` deactivates the old token.
 Logout deactivates the push device associated with the current API token;
 logout-all deactivates all of the user's push devices.
+
+Registration and logout cleanup are implemented. This checkout contains no
+FCM/APNs sender, provider credentials, push outbox, retry task, or delivery
+audit. A registered token does not cause a push to be delivered. Until the
+send side is implemented, clients must poll `/notifications/` and `/dashboard/`;
+push is a planned backend workstream, not a delivery guarantee.
 
 ### 4.8 Public onboarding endpoints
 
@@ -553,8 +604,8 @@ entry.
 
 ## 5. Background tracking and push
 
-The app should treat the API as the source of truth and use push as a prompt to
-refresh, never as the only copy of an alert.
+The app should treat the API as the source of truth. When push is available, use
+it only as a prompt to refresh, never as the only copy of an alert.
 
 - Poll `/dashboard/` when the app returns to the foreground and after a push.
 - Poll `/notifications/?unread=true` for the review queue and roll-call expiry
@@ -565,9 +616,11 @@ refresh, never as the only copy of an alert.
   offline: retry with the same `Idempotency-Key` once connectivity returns.
 - Exeat and roll-call state transitions are idempotent where documented, so a
   timed-out request can be retried safely with the same key.
-- Push payloads should carry an opaque notification id (`staff:<uuid>` or
-  `roll_call:<uuid>`) and a type; the app resolves details through the API on
-  the pinned origin.
+- The server does not yet send push notifications. Polling `/notifications/`
+  and `/dashboard/` is the only guaranteed delivery path in v1.
+- When push delivery is implemented, payloads should carry an opaque
+  notification id (`staff:<uuid>` or `roll_call:<uuid>`) and a type; the app
+  resolves details through the API on the pinned origin.
 
 ---
 
@@ -587,8 +640,11 @@ refresh, never as the only copy of an alert.
   failures on `/api/` paths, so clients never have to parse HTML error pages.
 - Student photos are private. Use the authenticated photo endpoint; do not
   cache or share the URL outside the app's secure storage.
-- Every scan, invite action, token revocation and gate movement is recorded in
-  `AuditEvent` for the school's audit trail.
+- Successful student scans, invite actions, token revocations, correction
+  decisions, exports, and gate-duty assignment changes are recorded in
+  `AuditEvent`. Gate movement timestamps are stored on `ExeatMovement` and
+  `ExeatReconciliation`, not as separate `AuditEvent` rows. Exeat-number,
+  ambiguous, no-match, and expired-QR scan outcomes are not currently audited.
 
 ---
 
