@@ -1099,3 +1099,77 @@ def import_student_roster(uploaded_file, progress_callback=None):
     if validation.errors:
         return 0, validation.errors
     return commit_student_roster(validation, progress_callback=progress_callback)
+
+
+_ROW_ERROR_LOCATION = re.compile(r"^(?P<location>.+?, row \d+): (?P<message>.*)$")
+_CONFLICT_MARKERS = (
+    "unknown",
+    "ambiguous",
+    "not compatible",
+    "mismatch",
+    "at its capacity",
+    "different programme",
+    "must be assigned",
+    "cannot be assigned",
+    "no longer exists",
+    "changed",
+    "already linked",
+    "different names",
+    "no gender-compatible dormitory",
+    "select a house",
+    "select a dormitory",
+    "data exists beyond",
+)
+
+
+def summarize_roster_validation(validation):
+    """Return review counts for a roster validation report.
+
+    The importer validates the whole file before writing, so these counts
+    describe what would be imported and why a batch is blocked.  They are
+    derived from the existing error messages to keep validation and preview
+    using exactly the same rules.
+    """
+
+    row_errors = {}
+    global_errors = []
+    for error in validation.errors:
+        match = _ROW_ERROR_LOCATION.match(error)
+        if match is None:
+            global_errors.append(error)
+            continue
+        row_errors.setdefault(match.group("location"), []).append(
+            match.group("message").casefold()
+        )
+
+    invalid_rows = len(row_errors)
+    duplicate_rows = sum(
+        any(
+            "duplicate admission number" in message
+            or "duplicate index number" in message
+            for message in messages
+        )
+        for messages in row_errors.values()
+    )
+    conflict_rows = sum(
+        any(
+            any(marker in message for marker in _CONFLICT_MARKERS)
+            for message in messages
+        )
+        for messages in row_errors.values()
+    )
+    if global_errors:
+        valid_rows = 0
+        invalid_rows = max(invalid_rows, validation.row_count)
+    else:
+        valid_rows = max(validation.row_count - invalid_rows, 0)
+
+    return {
+        "total_rows": validation.row_count,
+        "valid_rows": valid_rows,
+        "invalid_rows": invalid_rows,
+        "duplicate_rows": duplicate_rows,
+        "conflict_rows": conflict_rows,
+        "global_errors": len(global_errors),
+        "errors": len(validation.errors),
+    }

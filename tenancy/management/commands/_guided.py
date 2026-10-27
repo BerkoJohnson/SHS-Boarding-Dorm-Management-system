@@ -16,6 +16,10 @@ def launch_guided(command, task, *, options=None):
         "no_color",
         "force_color",
         "skip_checks",
+        # call_command() injects these when a caller captures output; they are
+        # not user-supplied command options and must not look like partial input.
+        "stdout",
+        "stderr",
     }
     default_values = {"format": "custom", "ttl_hours": 4}
     supplied = [

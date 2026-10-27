@@ -74,6 +74,33 @@ class TenantWizardTests(SimpleTestCase):
         command.assert_called_once()
         self.assertEqual(command.call_args.args[:2], ("tenant_list", "--all"))
 
+    @override_settings(TENANCY_ENABLED=True)
+    @patch("tenancy.management.commands.tenant_wizard.Command._school_schema")
+    @patch("tenancy.management.commands.tenant_wizard.call_command")
+    @patch("tenancy.management.commands.tenant_wizard.sys.stdin")
+    @patch(
+        "builtins.input",
+        side_effect=["2", "5", "Red House", "1", "", "y", "11"],
+    )
+    def test_menu_routes_guided_house_creation(
+        self,
+        _input,
+        stdin,
+        command,
+        school_schema,
+    ):
+        stdin.isatty.return_value = True
+        school_schema.return_value = "school_one"
+
+        call_command("tenant_wizard", stdout=StringIO())
+
+        command.assert_called_once()
+        args = command.call_args.args
+        self.assertEqual(args[0], "create_house")
+        self.assertIn("--schema=school_one", args)
+        self.assertIn("--name=Red House", args)
+        self.assertIn("--display-order=1", args)
+
     @override_settings(TENANCY_ENABLED=False)
     def test_menu_is_not_available_in_single_school_mode(self):
         with self.assertRaisesMessage(CommandError, "TENANCY_ENABLED=True"):

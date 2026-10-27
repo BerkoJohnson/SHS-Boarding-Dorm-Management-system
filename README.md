@@ -842,6 +842,39 @@ overwrites existing students. The CLI and web app share validation and provide r
 the CLI reports progress when connected to an interactive terminal. See section 12.2 for the
 expected columns.
 
+#### Tenant-aware roster import: `tenant_roster_import`
+
+`tenant_roster_import` (alias: `import_tenant_roster`) is the recommended roster command for
+multi-school installations and for the guided school setup menu. It runs the same validation as
+the web importer and `import_roster`, but always prints a preview before writing: mapped columns,
+total/valid/invalid/duplicate/conflict row counts, sample rows, and every validation error. The
+command writes nothing until you explicitly confirm the import.
+
+| Argument | Required | Meaning |
+| :--- | :--- | :--- |
+| `file_path` (positional) | Yes | Path to the roster file. |
+| `--schema` | Only when `TENANCY_ENABLED=True` | Target school schema. Rejected when tenancy is off. |
+| `--dry-run` (or `--preview`) | No | Validate and print the preview without writing student records. |
+| `--yes` | For non-interactive imports | Confirm the import without prompting. Required after reviewing a dry run. |
+
+```powershell
+# Review the preview without writing anything.
+.\.venv\Scripts\python.exe .\manage.py tenant_roster_import roster.xlsx `
+  --schema achimota_shs --dry-run --settings=schoolsystem.settings.production
+# Import after the preview is clean.
+.\.venv\Scripts\python.exe .\manage.py tenant_roster_import roster.xlsx `
+  --schema achimota_shs --yes --settings=schoolsystem.settings.production
+# Interactive terminal: omit --yes to confirm at the prompt.
+.\.venv\Scripts\python.exe .\manage.py tenant_roster_import roster.xlsx `
+  --schema achimota_shs --settings=schoolsystem.settings.production
+```
+
+The tenant is resolved before the file is opened, all validation and writes happen inside that
+school's schema, and duplicate admission/index numbers are rejected before any record is created.
+A non-interactive run without `--yes` refuses to import, so automation must review the preview and
+pass `--yes` deliberately. `import_roster` remains available for single-school installations and
+existing scripts; the two commands share the same validation service.
+
 ### 7.4 Custom command: `seed_synthetic_pilot` (core)
 
 Creates a fictional dataset (100 students, 4 houses, 8 dormitories, 16 rooms, 3 programmes, 6 class
@@ -1015,6 +1048,14 @@ options. You do not need to memorize the option list:
 .\.venv\Scripts\python.exe .\manage.py tenant_restore --settings=schoolsystem.settings.production
 .\.venv\Scripts\python.exe .\manage.py support_access --settings=schoolsystem.settings.production
 .\.venv\Scripts\python.exe .\manage.py migrate_legacy_school --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_house --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_dormitory --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_room --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_classroom --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_programme --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_academic_year --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_academic_term --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py tenant_roster_import --settings=schoolsystem.settings.production
 ```
 
 In the guided workflow, choose a school from its numbered list, then select or enter the
@@ -1040,6 +1081,14 @@ without options to enter the guide or provide the complete scripted command:
 | `tenant_backup` | Choose one or all active schools and backup options. |
 | `tenant_restore` | Validate a backup as a dry run; actual restore remains an explicit command. |
 | `support_access` | Choose a school, then inspect, generate, verify, or revoke access. |
+| `create_house` | Choose a school, then enter the house name, display order, and motto. |
+| `create_dormitory` | Choose a school and house, then enter the block name, gender, and capacity. |
+| `create_room` | Choose a school, house, and dormitory, then enter the room name and capacity. |
+| `create_classroom` | Choose a school, enter the class name, and optionally choose a programme. |
+| `create_programme` | Choose a school, then enter the programme name and optional code. |
+| `create_academic_year` | Choose a school, enter the start/end dates, and confirm the current year. |
+| `create_academic_term` | Choose a school, academic year, term, level, and dates. |
+| `tenant_roster_import` | Choose a school, enter the roster path, review the preview, and confirm. |
 | `tenant_list` | Lists all schools immediately; use filters when needed. |
 
 ```powershell
@@ -1058,11 +1107,12 @@ If you do not want to memorize command names or options, start the interactive m
 ```
 
 The menu walks through choosing a school and asks for only the details needed for each task.
-It covers staff account creation, school setup (provisioning, hostname, status, and legacy
-migration), school inventory, usage, plans, features/limits, invoices, verified backups, restore
-dry-runs, and time-limited support access. It uses colored headings, numbered choices, warnings,
-and confirmation prompts where an action changes data. The menu returns to its task list after
-each operation. It requires `TENANCY_ENABLED=True` and an interactive terminal.
+It covers staff account creation, school setup (provisioning, hostname, status, legacy migration,
+houses, dormitories, rooms, classrooms, programmes, academic years/terms, and roster import),
+school inventory, usage, plans, features/limits, invoices, verified backups, restore dry-runs, and
+time-limited support access. It uses colored headings, numbered choices, warnings, and confirmation
+prompts where an action changes data. The menu returns to its task list after each operation. It
+requires `TENANCY_ENABLED=True` and an interactive terminal.
 
 Restore is deliberately limited to a guided **dry run**; review the validation output before
 running `tenant_restore` directly for an actual restore. Existing command-line forms remain
@@ -1150,6 +1200,62 @@ The command refuses a missing or unknown tenant schema, mismatched passwords, in
 duplicate usernames/staff IDs, invalid role-specific options, and house assignments that cannot
 be resolved unambiguously. Housemaster account creation and its linked record are one transaction;
 if either fails, neither record is kept.
+
+#### School structure setup commands
+
+These commands create the house, dormitory, room, classroom, programme, academic year, and academic
+term records that a school needs before importing students. Each data command works in single-school
+mode and, when `TENANCY_ENABLED=True`, inside the school selected with `--schema`. Commands reject
+unknown relationships, duplicate names (case-insensitively), invalid dates, invalid genders/terms,
+and invalid capacities; each record is validated and written in one transaction.
+
+All commands support `--list` to print the records already configured in the selected school. In
+multi-school mode, run a command without its required options in an interactive terminal to open
+the same guided prompts used by `tenant_wizard`. In single-school mode, pass the required options
+explicitly.
+
+| Command | Required options | Optional options | Notes |
+| :--- | :--- | :--- | :--- |
+| `create_house` | `--name` | `--display-order`, `--motto` | Houses group dormitories and student boarding assignments. |
+| `create_dormitory` | `--house`, `--name`, `--gender` | `--capacity` | `--house` accepts a house name or ID; `--gender` accepts `male`/`boys` or `female`/`girls`. Capacity defaults to 100. |
+| `create_room` | `--dormitory`, `--name`, `--capacity` | `--house` | `--dormitory` accepts a dormitory name or ID; pass `--house` when dormitory names are not unique. |
+| `create_classroom` | `--name` | `--programme` | “Classroom” maps to the existing class-group model; `--programme` accepts a name, code, or ID. |
+| `create_programme` | `--name` | `--code` | Programme names and codes must be unique. |
+| `create_academic_year` | `--start-date`, `--end-date` | `--current` | Dates use `YYYY-MM-DD`; the name is generated from the year range. |
+| `create_academic_term` | `--academic-year`, `--term`, `--start-date`, `--end-date` | `--level`, `--current` | `--term` accepts `1`, `2`, `3`, `SEM1`, or `SEM2`; `--level` defaults to `ALL` and also accepts `SHS1`, `SHS2`, or `SHS3`. |
+
+```powershell
+# Multi-school setup: create the structure before importing a roster.
+.\.venv\Scripts\python.exe .\manage.py create_house `
+  --schema achimota_shs --name "Red House" --display-order 1 --motto "Courage" `
+  --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_dormitory `
+  --schema achimota_shs --house "Red House" --name "Block A" --gender boys --capacity 80 `
+  --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_room `
+  --schema achimota_shs --house "Red House" --dormitory "Block A" --name "Room 1" --capacity 4 `
+  --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_programme `
+  --schema achimota_shs --name "General Science" --code GSCI `
+  --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_classroom `
+  --schema achimota_shs --name "1A1" --programme GSCI `
+  --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_academic_year `
+  --schema achimota_shs --start-date 2025-09-01 --end-date 2026-07-01 --current `
+  --settings=schoolsystem.settings.production
+.\.venv\Scripts\python.exe .\manage.py create_academic_term `
+  --schema achimota_shs --academic-year "2025/2026 Academic Year" --term 1 `
+  --level ALL --start-date 2025-09-01 --end-date 2025-12-20 --current `
+  --settings=schoolsystem.settings.production
+# Inspect what is already configured.
+.\.venv\Scripts\python.exe .\manage.py create_dormitory `
+  --schema achimota_shs --list --settings=schoolsystem.settings.production
+```
+
+In single-school mode, omit `--schema`. A command that is given only some required options stops
+and explains how to open guided setup or supply the complete command; it does not create a partial
+record.
 
 #### School provisioning and status commands
 
@@ -2009,13 +2115,17 @@ Roles are assigned via user profiles (Django admin). Some pages are also gated b
 
 ### 12.2 Student roster import
 
-Via the web (`/students/import/`) or `import_roster`. Excel `.xlsx` or UTF-8 CSV, up to 10 MB and
-2,000 rows. Header names are matched case-insensitively with common aliases.
+Via the web (`/students/import/`), the tenant-aware CLI `tenant_roster_import` (alias
+`import_tenant_roster`), or the single-school `import_roster` command. Excel `.xlsx` or UTF-8 CSV,
+up to 10 MB and 2,000 rows. Header names are matched case-insensitively with common aliases.
 
 The web importer first previews mapped headers, sample rows, and all validation errors. Confirming
 the import revalidates the same selected file before writing, so changes to student identifiers,
-configuration, or capacity since the preview are caught. The CLI supports the equivalent
-no-write review with `import_roster ... --dry-run`.
+configuration, or capacity since the preview are caught. `tenant_roster_import` provides the
+equivalent command-line preview and asks for confirmation before writing; use
+`tenant_roster_import ... --dry-run` for a no-write review and add `--yes` only when a
+non-interactive import should proceed. `import_roster ... --dry-run` remains available for
+single-school installations.
 
 - **Required:** Admission No, Index No, Full Name, Gender (`Male`/`Female`), Programme.
 - **Optional:** Date of Birth (`YYYY-MM-DD` or `DD/MM/YYYY`), Class, Residency (`Boarder`/`Day`),
