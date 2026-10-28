@@ -1084,7 +1084,7 @@ without options to enter the guide or provide the complete scripted command:
 | `create_house` | Choose a school, then enter the house name, display order, and motto. |
 | `create_dormitory` | Choose a school and house, then enter the block name, gender, and capacity. |
 | `create_room` | Choose a school, house, and dormitory, then enter the room name and capacity. |
-| `create_classroom` | Choose a school, enter the class name, and optionally choose a programme. |
+| `create_classroom` | Choose a school, then create one classroom or a batch of class groups by form, programme, and number range. |
 | `create_programme` | Choose a school, then enter the programme name and optional code. |
 | `create_academic_year` | Choose a school, enter the start/end dates, and confirm the current year. |
 | `create_academic_term` | Choose a school, academic year, term, level, and dates. |
@@ -1107,12 +1107,13 @@ If you do not want to memorize command names or options, start the interactive m
 ```
 
 The menu walks through choosing a school and asks for only the details needed for each task.
-It covers staff account creation, school setup (provisioning, hostname, status, legacy migration,
-houses, dormitories, rooms, classrooms, programmes, academic years/terms, and roster import),
-school inventory, usage, plans, features/limits, invoices, verified backups, restore dry-runs, and
-time-limited support access. It uses colored headings, numbered choices, warnings, and confirmation
-prompts where an action changes data. The menu returns to its task list after each operation. It
-requires `TENANCY_ENABLED=True` and an interactive terminal.
+It covers staff account creation, school setup (provisioning, hostname, status, and legacy
+migration), a separate school facilities and roster menu (houses, dormitories, rooms, classrooms,
+programmes, academic years/terms, and roster import), school inventory, usage, plans,
+features/limits, invoices, verified backups, restore dry-runs, and time-limited support access. It
+uses colored headings, numbered choices, warnings, and confirmation prompts where an action
+changes data. The menu returns to its task list after each operation. It requires
+`TENANCY_ENABLED=True` and an interactive terminal.
 
 Restore is deliberately limited to a guided **dry run**; review the validation output before
 running `tenant_restore` directly for an actual restore. Existing command-line forms remain
@@ -1219,8 +1220,8 @@ explicitly.
 | `create_house` | `--name` | `--display-order`, `--motto` | Houses group dormitories and student boarding assignments. |
 | `create_dormitory` | `--house`, `--name`, `--gender` | `--capacity` | `--house` accepts a house name or ID; `--gender` accepts `male`/`boys` or `female`/`girls`. Capacity defaults to 100. |
 | `create_room` | `--dormitory`, `--name`, `--capacity` | `--house` | `--dormitory` accepts a dormitory name or ID; pass `--house` when dormitory names are not unique. |
-| `create_classroom` | `--name` | `--programme` | “Classroom” maps to the existing class-group model; `--programme` accepts a name, code, or ID. |
-| `create_programme` | `--name` | `--code` | Programme names and codes must be unique. |
+| `create_classroom` | `--name`, or `--form`, `--programme`, `--start`, `--end` | `--programme` for a single classroom | “Classroom” maps to the existing class-group model. Batch names combine the form, programme code, and number, so form 1 + code `A` + numbers 1–10 creates `1A1` through `1A10`. |
+| `create_programme` | `--name` | `--code` | Programme names and codes must be unique. The code is used in batch class names. |
 | `create_academic_year` | `--start-date`, `--end-date` | `--current` | Dates use `YYYY-MM-DD`; the name is generated from the year range. |
 | `create_academic_term` | `--academic-year`, `--term`, `--start-date`, `--end-date` | `--level`, `--current` | `--term` accepts `1`, `2`, `3`, `SEM1`, or `SEM2`; `--level` defaults to `ALL` and also accepts `SHS1`, `SHS2`, or `SHS3`. |
 
@@ -1240,6 +1241,10 @@ explicitly.
   --settings=schoolsystem.settings.production
 .\.venv\Scripts\python.exe .\manage.py create_classroom `
   --schema achimota_shs --name "1A1" --programme GSCI `
+  --settings=schoolsystem.settings.production
+# Batch: General Arts (code A) Form 1 classes 1A1 through 1A10.
+.\.venv\Scripts\python.exe .\manage.py create_classroom `
+  --schema achimota_shs --form 1 --programme "General Arts" --start 1 --end 10 `
   --settings=schoolsystem.settings.production
 .\.venv\Scripts\python.exe .\manage.py create_academic_year `
   --schema achimota_shs --start-date 2025-09-01 --end-date 2026-07-01 --current `

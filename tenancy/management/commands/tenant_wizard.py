@@ -72,7 +72,12 @@ class Command(BaseCommand):
         )
         tasks = [
             ("users", "Create a staff or administrator account"),
-            ("schools", "School setup menu: provision, facilities, roster, hostname, status, or migration"),
+            ("schools", "School setup menu: provision, hostname, status, or migration"),
+            (
+                "facilities",
+                "School facilities and roster menu: houses, dormitories, rooms, "
+                "classrooms, programmes, years/terms, or roster import",
+            ),
             ("list", "List registered schools"),
             ("usage", "View school usage report"),
             ("plans", "View or change a subscription plan"),
@@ -188,7 +193,7 @@ class Command(BaseCommand):
             ("house", "Create a house"),
             ("dormitory", "Create a dormitory in a house"),
             ("room", "Create a room in a dormitory"),
-            ("classroom", "Create a classroom / class group"),
+            ("classroom", "Create a classroom or a batch of class groups"),
             ("programme", "Create an academic programme"),
             ("academic-year", "Create an academic year"),
             ("academic-term", "Create an academic term"),
@@ -202,14 +207,13 @@ class Command(BaseCommand):
                     ("domain", "Add a hostname to a school"),
                     ("status", "Activate or deactivate a school"),
                     ("legacy", "Copy a single-school installation into a new tenant"),
-                    *facility_choices,
                 ],
                 stdout=self.stdout,
                 style=self.style,
             )
         elif operation == "facilities":
             operation = choose(
-                "school setup operation",
+                "school facilities and roster operation",
                 facility_choices,
                 stdout=self.stdout,
                 style=self.style,
@@ -386,18 +390,84 @@ class Command(BaseCommand):
                 "create_room", *args, stdout=self.stdout, stderr=self.stderr
             )
         elif operation == "classroom":
-            name = ask("Classroom / class group name", style=self.style)
-            if not name:
-                raise CommandError("Classroom name is required.")
-            programme_id = self._choose_programme(schema, allow_none=True)
-            if not confirm(
-                f"Create classroom '{name}' in school '{schema}'?",
+            mode = choose(
+                "classroom setup",
+                [
+                    ("single", "Create a single classroom"),
+                    (
+                        "multiple",
+                        "Create multiple class groups, e.g. 1A1 to 1A10",
+                    ),
+                ],
+                stdout=self.stdout,
                 style=self.style,
-            ):
-                raise CommandError("Classroom creation cancelled.")
-            args.append(f"--name={name}")
-            if programme_id:
-                args.append(f"--programme={programme_id}")
+            )
+            if mode == "single":
+                name = ask("Classroom / class group name", style=self.style)
+                if not name:
+                    raise CommandError("Classroom name is required.")
+                programme = self._choose_programme(schema, allow_none=True)
+                if not confirm(
+                    f"Create classroom '{name}' in school '{schema}'?",
+                    style=self.style,
+                ):
+                    raise CommandError("Classroom creation cancelled.")
+                args.append(f"--name={name}")
+                if programme:
+                    args.append(f"--programme={programme.pk}")
+            else:
+                from ._school_setup import (
+                    build_class_group_names,
+                    parse_integer,
+                )
+
+                form = choose(
+                    "form",
+                    [
+                        ("1", "Form 1"),
+                        ("2", "Form 2"),
+                        ("3", "Form 3"),
+                    ],
+                    stdout=self.stdout,
+                    style=self.style,
+                )
+                programme = self._choose_programme(schema)
+                code = (programme.code or "").strip()
+                if not code:
+                    raise CommandError(
+                        f"Programme '{programme.name}' has no short code. Set "
+                        "one with create_programme before creating class "
+                        "groups in a batch."
+                    )
+                first = ask(
+                    "First class number", default="1", style=self.style
+                )
+                last = ask(
+                    "Last class number", default="10", style=self.style
+                )
+                first_number = parse_integer(
+                    first, "First class number", minimum=1
+                )
+                last_number = parse_integer(
+                    last, "Last class number", minimum=first_number
+                )
+                names = build_class_group_names(
+                    form, code, first_number, last_number
+                )
+                if not confirm(
+                    f"Create class groups {names[0]} to {names[-1]} in "
+                    f"school '{schema}'?",
+                    style=self.style,
+                ):
+                    raise CommandError("Class group creation cancelled.")
+                args.extend(
+                    (
+                        f"--form={form}",
+                        f"--programme={programme.pk}",
+                        f"--start={first_number}",
+                        f"--end={last_number}",
+                    )
+                )
             call_command(
                 "create_classroom",
                 *args,
@@ -408,7 +478,11 @@ class Command(BaseCommand):
             name = ask("Programme name", style=self.style)
             if not name:
                 raise CommandError("Programme name is required.")
-            code = ask("Short code (optional)", default="", style=self.style)
+            code = ask(
+                "Short code used in class names (optional, e.g. A)",
+                default="",
+                style=self.style,
+            )
             if not confirm(
                 f"Create programme '{name}' in school '{schema}'?",
                 style=self.style,
@@ -583,15 +657,30 @@ class Command(BaseCommand):
                 "No programmes are configured. Create a programme first."
             )
         choices = [
-            (str(programme.pk), programme.name) for programme in programmes
+            (
+                str(programme.pk),
+                (
+                    f"{programme.name} [{programme.code}]"
+                    if programme.code
+                    else f"{programme.name} [no code]"
+                ),
+            )
+            for programme in programmes
         ]
         if allow_none:
             choices.insert(0, ("", "No programme"))
-        return choose(
+        selected = choose(
             "programme",
             choices,
             stdout=self.stdout,
             style=self.style,
+        )
+        if not selected:
+            return None
+        return next(
+            programme
+            for programme in programmes
+            if str(programme.pk) == selected
         )
 
     def _choose_academic_year(self, schema):

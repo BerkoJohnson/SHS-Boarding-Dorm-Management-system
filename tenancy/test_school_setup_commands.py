@@ -269,6 +269,71 @@ class SchoolSetupCommandTests(TestCase):
                 stdout=StringIO(),
             )
 
+    def test_create_classroom_batch_uses_form_programme_code_and_numbers(self):
+        programme = Programme.objects.create(name="General Arts", code="A")
+        output = StringIO()
+
+        call_command(
+            "create_classroom",
+            form=1,
+            programme="General Arts",
+            start=1,
+            end=10,
+            stdout=output,
+        )
+
+        names = set(ClassGroup.objects.values_list("name", flat=True))
+        self.assertEqual(names, {f"1A{number}" for number in range(1, 11)})
+        self.assertEqual(
+            ClassGroup.objects.filter(programme=programme).count(),
+            10,
+        )
+        self.assertIn(
+            "Created 10 class groups: 1A1 to 1A10.",
+            output.getvalue(),
+        )
+
+    def test_create_classroom_batch_rejects_duplicates_without_partial_writes(self):
+        programme = Programme.objects.create(name="General Arts", code="A")
+        ClassGroup.objects.create(name="1A3", programme=programme)
+
+        with self.assertRaisesMessage(CommandError, "already exist: 1A3"):
+            call_command(
+                "create_classroom",
+                form=1,
+                programme="General Arts",
+                start=1,
+                end=10,
+                stdout=StringIO(),
+            )
+
+        self.assertEqual(ClassGroup.objects.count(), 1)
+
+    def test_create_classroom_batch_requires_a_programme_code(self):
+        Programme.objects.create(name="General Arts")
+
+        with self.assertRaisesMessage(CommandError, "no short code"):
+            call_command(
+                "create_classroom",
+                form=1,
+                programme="General Arts",
+                start=1,
+                end=10,
+                stdout=StringIO(),
+            )
+
+        self.assertFalse(ClassGroup.objects.exists())
+
+    def test_create_classroom_batch_requires_all_range_options(self):
+        with self.assertRaisesMessage(CommandError, "requires --programme"):
+            call_command(
+                "create_classroom",
+                form=1,
+                stdout=StringIO(),
+            )
+
+        self.assertFalse(ClassGroup.objects.exists())
+
     def test_create_programme_rejects_duplicate_name_and_code(self):
         output = StringIO()
 

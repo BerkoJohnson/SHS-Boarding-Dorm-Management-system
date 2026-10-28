@@ -14,7 +14,11 @@ class Command(TenantSetupCommand):
 
     def add_entity_arguments(self, parser):
         parser.add_argument("--name", help="Programme name.")
-        parser.add_argument("--code", default="", help="Optional short code.")
+        parser.add_argument(
+            "--code",
+            default="",
+            help="Optional short code used in batch class names (e.g. A).",
+        )
 
     def perform_create(self, options):
         name = require_text(options["name"], "Programme name")

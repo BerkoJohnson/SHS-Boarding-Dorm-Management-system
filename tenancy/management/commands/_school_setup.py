@@ -260,6 +260,36 @@ def normalize_level(value):
     return level
 
 
+MAX_CLASS_GROUP_BATCH = 100
+
+
+def build_class_group_names(form, programme_code, first, last):
+    """Return class-group names such as ``1A1`` through ``1A10``.
+
+    The form comes first, followed by the programme's short code and the
+    class number.  The whole batch is rejected when it is empty, reversed, or
+    large enough to look like an accidental range.
+    """
+
+    code = str(programme_code or "").strip().upper()
+    if not code:
+        raise CommandError(
+            "The programme has no short code; set one before creating class "
+            "groups in a batch."
+        )
+    if first < 1 or last < first:
+        raise CommandError(
+            "Class numbers must be positive and the last number must not be "
+            "less than the first."
+        )
+    count = last - first + 1
+    if count > MAX_CLASS_GROUP_BATCH:
+        raise CommandError(
+            f"Create at most {MAX_CLASS_GROUP_BATCH} class groups at a time."
+        )
+    return [f"{form}{code}{number}" for number in range(first, last + 1)]
+
+
 class TenantSetupCommand(BaseCommand):
     """Base command for creating one school-setup entity in a tenant."""
 
