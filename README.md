@@ -1115,6 +1115,10 @@ uses colored headings, numbered choices, warnings, and confirmation prompts wher
 changes data. The menu returns to its task list after each operation. It requires
 `TENANCY_ENABLED=True` and an interactive terminal.
 
+Classroom setup asks whether you are creating one class group or several. Both paths ask for the
+form and programme; single creation then asks for one division, while multiple creation asks for
+the first and last division and creates names such as `1A1` through `1A10`.
+
 Restore is deliberately limited to a guided **dry run**; review the validation output before
 running `tenant_restore` directly for an actual restore. Existing command-line forms remain
 available for scripts and experienced operators; automation should keep using explicit flags
@@ -1214,6 +1218,18 @@ All commands support `--list` to print the records already configured in the sel
 multi-school mode, run a command without its required options in an interactive terminal to open
 the same guided prompts used by `tenant_wizard`. In single-school mode, pass the required options
 explicitly.
+
+Class-group names are generated from the form (`1`–`3`), the programme's short `code`, and the
+division number, with no separators: form 1 + code `A` + division 10 produces `1A10`. In
+`tenant_wizard`, both the single and multiple classroom options ask for the form and programme
+first. Single creation then asks for one division; multiple creation asks for the first and last
+division and creates the whole range. Batch creation validates the full range before writing
+anything and stops if any generated name already exists, so a duplicate never produces a partial
+batch. Use `--name` when you need a free-form single classroom name instead.
+
+Batch creation requires the selected programme to have a short code. Set it with
+`create_programme --code ...` or in the guided programme flow; class-group creation does not invent
+a code.
 
 | Command | Required options | Optional options | Notes |
 | :--- | :--- | :--- | :--- |
