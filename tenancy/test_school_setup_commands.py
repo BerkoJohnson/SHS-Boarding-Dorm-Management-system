@@ -293,6 +293,37 @@ class SchoolSetupCommandTests(TestCase):
             output.getvalue(),
         )
 
+    def test_create_classroom_single_uses_form_programme_code_and_division(self):
+        programme = Programme.objects.create(name="General Science", code="SCI")
+        output = StringIO()
+
+        call_command(
+            "create_classroom",
+            form=2,
+            programme="General Science",
+            start=3,
+            end=3,
+            stdout=output,
+        )
+
+        classroom = ClassGroup.objects.get(name="2SCI3")
+        self.assertEqual(classroom.programme, programme)
+        self.assertIn("Created classroom '2SCI3'.", output.getvalue())
+
+    def test_create_classroom_rejects_name_and_form_together(self):
+        with self.assertRaisesMessage(CommandError, "not both"):
+            call_command(
+                "create_classroom",
+                name="1A1",
+                form=1,
+                programme="General Arts",
+                start=1,
+                end=1,
+                stdout=StringIO(),
+            )
+
+        self.assertFalse(ClassGroup.objects.exists())
+
     def test_create_classroom_batch_rejects_duplicates_without_partial_writes(self):
         programme = Programme.objects.create(name="General Arts", code="A")
         ClassGroup.objects.create(name="1A3", programme=programme)

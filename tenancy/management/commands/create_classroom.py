@@ -28,27 +28,33 @@ class Command(TenantSetupCommand):
             "--programme",
             default=None,
             help=(
-                "Programme name, code, or ID. Required for batch creation and "
-                "optional for a single classroom."
+                "Programme name, code, or ID. Required when --form is used; "
+                "optional with --name."
             ),
         )
         parser.add_argument(
             "--form",
             type=int,
             default=None,
-            help="Form for batch creation: 1, 2, or 3.",
+            help="Form for generated class groups: 1, 2, or 3.",
         )
         parser.add_argument(
             "--start",
             type=int,
             default=None,
-            help="First class number for batch creation.",
+            help=(
+                "First class number when --form is used. For a single class "
+                "group, set --end to the same value."
+            ),
         )
         parser.add_argument(
             "--end",
             type=int,
             default=None,
-            help="Last class number for batch creation.",
+            help=(
+                "Last class number when --form is used. For a single class "
+                "group, set --start to the same value."
+            ),
         )
 
     def handle(self, *args, **options):
@@ -59,8 +65,9 @@ class Command(TenantSetupCommand):
         form = options.get("form")
         if name and form is not None:
             raise CommandError(
-                "Use --name for one classroom or --form with --programme, "
-                "--start, and --end for multiple class groups, not both."
+                "Use --name for a free-form classroom name or --form with "
+                "--programme, --start, and --end for generated class-group "
+                "names, not both."
             )
         if not name and form is None:
             launch_guided(self, self.guided_task, options=options)
@@ -77,7 +84,7 @@ class Command(TenantSetupCommand):
             ]
             if missing:
                 raise CommandError(
-                    "Creating multiple class groups requires "
+                    "Creating class groups from a form requires "
                     f"{', '.join(missing)}."
                 )
         return super().handle(*args, **options)

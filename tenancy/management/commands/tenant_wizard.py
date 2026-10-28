@@ -390,10 +390,12 @@ class Command(BaseCommand):
                 "create_room", *args, stdout=self.stdout, stderr=self.stderr
             )
         elif operation == "classroom":
+            from ._school_setup import build_class_group_names, parse_integer
+
             mode = choose(
                 "classroom setup",
                 [
-                    ("single", "Create a single classroom"),
+                    ("single", "Create a single class group"),
                     (
                         "multiple",
                         "Create multiple class groups, e.g. 1A1 to 1A10",
@@ -402,43 +404,37 @@ class Command(BaseCommand):
                 stdout=self.stdout,
                 style=self.style,
             )
+            form = choose(
+                "form",
+                [
+                    ("1", "Form 1"),
+                    ("2", "Form 2"),
+                    ("3", "Form 3"),
+                ],
+                stdout=self.stdout,
+                style=self.style,
+            )
+            programme = self._choose_programme(schema)
+            code = (programme.code or "").strip()
+            if not code:
+                raise CommandError(
+                    f"Programme '{programme.name}' has no short code. Set one "
+                    "with create_programme before creating class groups."
+                )
             if mode == "single":
-                name = ask("Classroom / class group name", style=self.style)
-                if not name:
-                    raise CommandError("Classroom name is required.")
-                programme = self._choose_programme(schema, allow_none=True)
-                if not confirm(
-                    f"Create classroom '{name}' in school '{schema}'?",
-                    style=self.style,
-                ):
-                    raise CommandError("Classroom creation cancelled.")
-                args.append(f"--name={name}")
-                if programme:
-                    args.append(f"--programme={programme.pk}")
+                division = ask(
+                    "Class division / number", default="1", style=self.style
+                )
+                first_number = last_number = parse_integer(
+                    division, "Class division", minimum=1
+                )
+                names = build_class_group_names(
+                    form, code, first_number, last_number
+                )
+                prompt = (
+                    f"Create class group '{names[0]}' in school '{schema}'?"
+                )
             else:
-                from ._school_setup import (
-                    build_class_group_names,
-                    parse_integer,
-                )
-
-                form = choose(
-                    "form",
-                    [
-                        ("1", "Form 1"),
-                        ("2", "Form 2"),
-                        ("3", "Form 3"),
-                    ],
-                    stdout=self.stdout,
-                    style=self.style,
-                )
-                programme = self._choose_programme(schema)
-                code = (programme.code or "").strip()
-                if not code:
-                    raise CommandError(
-                        f"Programme '{programme.name}' has no short code. Set "
-                        "one with create_programme before creating class "
-                        "groups in a batch."
-                    )
                 first = ask(
                     "First class number", default="1", style=self.style
                 )
@@ -454,20 +450,20 @@ class Command(BaseCommand):
                 names = build_class_group_names(
                     form, code, first_number, last_number
                 )
-                if not confirm(
+                prompt = (
                     f"Create class groups {names[0]} to {names[-1]} in "
-                    f"school '{schema}'?",
-                    style=self.style,
-                ):
-                    raise CommandError("Class group creation cancelled.")
-                args.extend(
-                    (
-                        f"--form={form}",
-                        f"--programme={programme.pk}",
-                        f"--start={first_number}",
-                        f"--end={last_number}",
-                    )
+                    f"school '{schema}'?"
                 )
+            if not confirm(prompt, style=self.style):
+                raise CommandError("Class group creation cancelled.")
+            args.extend(
+                (
+                    f"--form={form}",
+                    f"--programme={programme.pk}",
+                    f"--start={first_number}",
+                    f"--end={last_number}",
+                )
+            )
             call_command(
                 "create_classroom",
                 *args,

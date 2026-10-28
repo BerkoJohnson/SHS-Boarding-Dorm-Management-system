@@ -144,6 +144,48 @@ class TenantWizardTests(SimpleTestCase):
             ),
         )
 
+    @override_settings(TENANCY_ENABLED=True)
+    @patch(
+        "tenancy.management.commands.tenant_wizard.Command._choose_programme"
+    )
+    @patch("tenancy.management.commands.tenant_wizard.Command._school_schema")
+    @patch("tenancy.management.commands.tenant_wizard.call_command")
+    @patch("tenancy.management.commands.tenant_wizard.sys.stdin")
+    @patch(
+        "builtins.input",
+        side_effect=["3", "4", "1", "1", "1", "y", "12"],
+    )
+    def test_menu_routes_single_class_group_creation(
+        self,
+        _input,
+        stdin,
+        command,
+        school_schema,
+        choose_programme,
+    ):
+        stdin.isatty.return_value = True
+        school_schema.return_value = "school_one"
+        choose_programme.return_value = MagicMock(
+            pk=42,
+            name="General Arts",
+            code="A",
+        )
+
+        call_command("tenant_wizard", stdout=StringIO())
+
+        command.assert_called_once()
+        self.assertEqual(
+            command.call_args.args,
+            (
+                "create_classroom",
+                "--schema=school_one",
+                "--form=1",
+                "--programme=42",
+                "--start=1",
+                "--end=1",
+            ),
+        )
+
     @override_settings(TENANCY_ENABLED=False)
     def test_menu_is_not_available_in_single_school_mode(self):
         with self.assertRaisesMessage(CommandError, "TENANCY_ENABLED=True"):
